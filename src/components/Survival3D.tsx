@@ -14,6 +14,64 @@ const SCREEN_SHAKE_INTENSITY = 0.1;
 // Drone types
 type DroneType = 'salvager' | 'saboteur' | 'hunter';
 
+// Leviathan type
+type LeviathanType = 'juvenile' | 'adult' | 'ancient';
+
+// Leviathan stage stats
+interface LeviathanStage {
+  health: number;
+  speed: number;
+  damage: number;
+  size: number;
+  attackCooldown: number;
+}
+
+const LEVIATHAN_STAGES: Record<LeviathanType, LeviathanStage> = {
+  juvenile: {
+    health: 200,
+    speed: 2,
+    damage: 15,
+    size: 6,
+    attackCooldown: 2000,
+  },
+  adult: {
+    health: 500,
+    speed: 3,
+    damage: 30,
+    size: 12,
+    attackCooldown: 3000,
+  },
+  ancient: {
+    health: 1200,
+    speed: 4,
+    damage: 50,
+    size: 18,
+    attackCooldown: 4000,
+  },
+};
+
+// Leviathan AI state
+enum LeviathanState {
+  IDLE = 'idle',
+  ALERT = 'alert',
+  CHASE = 'chase',
+  LUNGE = 'lunge',
+  RETREAT = 'retreat',
+}
+
+interface Leviathan {
+  mesh: THREE.Group;
+  type: LeviathanType;
+  stage: number; // 0=juvenile, 1=adult, 2=ancient
+  health: number;
+  state: LeviathanState;
+  stateTimer: number;
+  attackCooldown: number;
+  segments: THREE.Group[]; // Body segments for serpentine movement
+  scareTimer: number; // For fear-based retreat
+  isDead: boolean;
+}
+
 interface Drone {
   mesh: THREE.Group;
   type: DroneType;
@@ -33,6 +91,9 @@ interface GameState {
   score: number;
   wave: number;
   droneType: DroneType;
+  leviathanStage: number; // 0=juvenile, 1=adult, 2=ancient
+  leviathanHealth: number;
+  leviathanState: LeviathanState;
   isPaused: boolean;
   gameOver: boolean;
 }
@@ -43,12 +104,17 @@ export function Survival3D() {
     score: 0,
     wave: 1,
     droneType: 'salvager',
+    leviathanStage: 0,
+    leviathanHealth: 200,
+    leviathanState: LeviathanState.IDLE,
     isPaused: false,
     gameOver: false,
   });
   const [uiHealth, setUiHealth] = useState(100);
   const [uiScore, setUiScore] = useState(0);
   const [uiWave, setUiWave] = useState(1);
+  const [uiLeviathanHealth, setUiLeviathanHealth] = useState(200);
+  const [uiLeviathanStage, setUiLeviathanStage] = useState(0);
 
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -58,6 +124,7 @@ export function Survival3D() {
   const bulletsRef = useRef<THREE.Mesh[]>([]);
   const dronesRef = useRef<Drone[]>([]);
   const particlesRef = useRef<Particle[]>([]);
+  const leviathanRef = useRef<Leviathan | null>(null);
   const miningLaserRef = useRef<THREE.Mesh | null>(null);
 
   // Input refs
@@ -194,6 +261,9 @@ export function Survival3D() {
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mousedown', handleClick);
 
+    // Create initial leviathan
+    createLeviathan(scene);
+
     // Start game loop
     startGameLoop();
 
@@ -290,6 +360,251 @@ export function Survival3D() {
     spawnDrone();
   }, [gameState.gameOver, gameState.isPaused]);
 
+  // Leviathan spawner (initial)
+  const createLeviathan = (scene: THREE.Scene) => {
+    if (leviathanRef.current) return;
+
+    const playerPos = playerRef.current?.position || new THREE.Vector3(0, PLAYER_HEIGHT, 0);
+    const spawnPosition = new THREE.Vector3(
+      playerPos.x + 30,
+      PLAYER_HEIGHT,
+      playerPos.z + 30
+    );
+
+    const leviathan = new THREE.Group();
+    leviathan.position.copy(spawnPosition);
+
+    // Get stage stats
+    const stage = LEVIATHAN_STAGES.juvenile;
+    const leviathanType: LeviathanType = 'juvenile';
+
+    // Main body (serpentine segments)
+    const segmentGeometry = new THREE.SphereGeometry(stage.size * 0.3, 8, 8);
+    const segmentMaterial = new THREE.MeshStandardMaterial({
+      color: leviathanType === 'juvenile' ? 0x00ff00 : leviathanType === 'adult' ? 0xff6600 : 0x6666ff,
+      metalness: 0.6,
+      roughness: 0.4,
+    });
+
+    const segments: THREE.Group[] = [];
+    const numSegments = Math.floor(stage.size * 1.5);
+
+    for (let i = 0; i < numSegments; i++) {
+      const segment = new THREE.Mesh(segmentGeometry.clone(), segmentMaterial.clone());
+      segment.scale.set(stage.size * 0.3, stage.size * 0.6, stage.size * 0.3);
+      segment.position.z = i * -0.8;
+      segment.userData.offset = i * 0.3;
+      leviathan.add(segment);
+      segments.push(segment);
+    }
+
+    // Head
+    const headGeometry = new THREE.SphereGeometry(stage.size * 0.25, 16, 16);
+    const head = new THREE.Mesh(headGeometry, segmentMaterial);
+    head.scale.set(stage.size * 0.3, stage.size * 0.6, stage.size * 0.4);
+    head.position.z = -(numSegments * 0.8);
+    head.userData.isHead = true;
+    leviathan.add(head);
+
+    // Glowing eyes
+    const eyeGeometry = new THREE.SphereGeometry(stage.size * 0.1, 8, 8);
+    const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+    const eye1 = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    eye1.position.set(stage.size * 0.1, stage.size * 0.3, -(numSegments * 0.8));
+    leviathan.add(eye1);
+    const eye2 = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    eye2.position.set(-stage.size * 0.1, stage.size * 0.3, -(numSegments * 0.8));
+    leviathan.add(eye2);
+
+    // Bioluminescent patterns on body
+    const patternGeometry = new THREE.SphereGeometry(stage.size * 0.4, 8, 8);
+    const patternMaterial = new THREE.MeshBasicMaterial({
+      color: leviathanType === 'juvenile' ? 0x00ffff : leviathanType === 'adult' ? 0xff00ff : 0x00ffff,
+      transparent: true,
+      opacity: 0.3,
+    });
+    const pattern = new THREE.Mesh(patternGeometry, patternMaterial);
+    pattern.position.z = -numSegments * 0.4;
+    leviathan.add(pattern);
+
+    scene.add(leviathan);
+
+    leviathanRef.current = {
+      mesh: leviathan,
+      type: leviathanType,
+      stage: 0,
+      health: stage.health,
+      state: LeviathanState.IDLE,
+      stateTimer: 0,
+      attackCooldown: 0,
+      segments,
+      scareTimer: 0,
+      isDead: false,
+    };
+  };
+
+  const updateLeviathan = (timestamp: number) => {
+    const leviathan = leviathanRef.current;
+    if (!leviathan || leviathan.isDead) return;
+
+    const player = playerRef.current;
+    if (!player) return;
+
+    // Decay scare timer
+    if (leviathan.scareTimer > 0) {
+      leviathan.scareTimer -= 0.016 * 1000;
+      if (leviathan.scareTimer < 0) leviathan.scareTimer = 0;
+    }
+
+    // Get stage stats
+    const stage = LEVIATHAN_STAGES[leviathan.type];
+    const stageIdx = leviathan.stage;
+
+    // Update attack cooldown
+    if (leviathan.attackCooldown > 0) {
+      leviathan.attackCooldown -= 16; // ms per frame
+      if (leviathan.attackCooldown < 0) leviathan.attackCooldown = 0;
+    }
+
+    // AI State Machine
+    const playerPos = player.position.clone();
+    playerPos.y = PLAYER_HEIGHT;
+    const distanceToPlayer = leviathan.mesh.position.distanceTo(playerPos);
+
+    leviathan.stateTimer += 0.016 * 1000;
+
+    switch (leviathan.state) {
+      case LeviathanState.IDLE:
+        leviathan.stateTimer = 0;
+        // Occasionally check if player is nearby
+        if (distanceToPlayer < 20) {
+          leviathan.state = LeviathanState.ALERT;
+        }
+        break;
+
+      case LeviathanState.ALERT:
+        // Face player
+        const lookDirection = new THREE.Vector3()
+          .subVectors(playerPos, leviathan.mesh.position)
+          .normalize();
+        leviathan.mesh.lookAt(playerPos.clone().add(lookDirection.multiplyScalar(10)));
+
+        if (distanceToPlayer < 15) {
+          leviathan.state = LeviathanState.CHASE;
+        } else if (leviathan.stateTimer > 3000) {
+          leviathan.state = LeviathanState.IDLE;
+        }
+        break;
+
+      case LeviathanState.CHASE:
+        leviathan.stateTimer = 0;
+        const chaseDirection = new THREE.Vector3()
+          .subVectors(playerPos, leviathan.mesh.position)
+          .normalize();
+
+        // Move towards player
+        const moveStep = chaseDirection.multiplyScalar(stage.speed * 0.016);
+        leviathan.mesh.position.add(moveStep);
+
+        // Rotate to face direction of movement
+        leviathan.mesh.rotation.y = Math.atan2(moveStep.x, moveStep.z);
+
+        // Check for attack opportunity
+        if (distanceToPlayer < stage.size * 0.5 && leviathan.attackCooldown === 0) {
+          leviathan.state = LeviathanState.LUNGE;
+        }
+
+        // Check if scared
+        if (leviathan.scareTimer > 0) {
+          leviathan.state = LeviathanState.RETREAT;
+        }
+        break;
+
+      case LeviathanState.LUNGE:
+        leviathan.stateTimer = 0;
+        // Quick dash at player
+        const lungeDirection = new THREE.Vector3()
+          .subVectors(playerPos, leviathan.mesh.position)
+          .normalize();
+        leviathan.mesh.position.add(lungeDirection.multiplyScalar(4));
+        leviathan.attackCooldown = stage.attackCooldown;
+        leviathan.state = LeviathanState.CHASE;
+        screenShakeRef.current = SCREEN_SHAKE_INTENSITY * 2;
+
+        // Create particles on lunge
+        createParticles(leviathan.mesh.position.clone(), 10, 0xff6600);
+        break;
+
+      case LeviathanState.RETREAT:
+        // Flee away from player
+        const retreatDirection = new THREE.Vector3()
+          .subVectors(leviathan.mesh.position, playerPos)
+          .normalize();
+        const retreatStep = retreatDirection.multiplyScalar(stage.speed * 0.5);
+        leviathan.mesh.position.add(retreatStep);
+
+        leviathan.mesh.lookAt(retreatDirection.multiplyScalar(100));
+        leviathan.stateTimer = 0;
+
+        if (leviathan.mesh.position.length() > 40) {
+          leviathan.state = LeviathanState.IDLE;
+        }
+        if (distanceToPlayer > 25) {
+          leviathan.state = LeviathanState.ALERT;
+        }
+
+        if (leviathan.scareTimer === 0) {
+          leviathan.state = LeviathanState.CHASE;
+        }
+        break;
+    }
+
+    // Update segments for serpentine movement
+    const segmentTime = timestamp * 0.001;
+    leviathan.segments.forEach((segment, i) => {
+      const segmentOffset = segment.userData.offset as number;
+      segment.rotation.z = Math.sin(segmentTime * 2 + segmentOffset) * 0.2;
+      segment.rotation.x = Math.cos(segmentTime * 1.5 + segmentOffset) * 0.15;
+    });
+
+    // Update health from state
+    setGameState(prev => ({
+      ...prev,
+      leviathanStage: stageIdx,
+      leviathanHealth: leviathan.health,
+      leviathanState: leviathan.state,
+    }));
+    setUiLeviathanHealth(leviathan.health);
+    setUiLeviathanStage(stageIdx);
+
+    // Check collision with player shield
+    if (distanceToPlayer < 1.5) {
+      // Check if shield is up (simplified: just check proximity)
+      if (uiHealth > 0) {
+        setUiHealth(prev => Math.max(0, prev - stage.damage / 2));
+        screenShakeRef.current = SCREEN_SHAKE_INTENSITY;
+        createParticles(player.position.clone(), 5, 0x00ffff);
+      }
+    }
+
+    // Check if player hit
+    if (distanceToPlayer < 1.2) {
+      if (uiHealth > 0) {
+        setUiHealth(prev => Math.max(0, prev - stage.damage));
+        screenShakeRef.current = SCREEN_SHAKE_INTENSITY * 2;
+        createParticles(player.position.clone(), 10, 0xffff00);
+
+        if (uiHealth <= 0) {
+          setGameState(prev => ({
+            ...prev,
+            gameOver: true,
+            isPaused: true,
+          }));
+        }
+      }
+    }
+  };
+
   // Game loop
   const startGameLoop = useCallback(() => {
     const loop = (timestamp: number) => {
@@ -339,23 +654,12 @@ export function Survival3D() {
       player.position.z = Math.round(player.position.z);
     }
 
-    // Rotation based on movement and mouse
+    // Rotation based on movement
     if (moveDirection.length() > 0) {
       player.rotation.y = Math.atan2(moveDirection.x, moveDirection.z);
-    } else if (keysRef.current['ArrowUp']) {
-      player.rotation.y -= 0.02;
-    } else if (keysRef.current['ArrowDown']) {
-      player.rotation.y += 0.02;
-    } else if (keysRef.current['ArrowLeft']) {
-      player.rotation.x += 0.02;
-    } else if (keysRef.current['ArrowRight']) {
-      player.rotation.x -= 0.02;
     }
 
-    // Clamp rotation
-    player.rotation.x = Math.max(-0.5, Math.min(0.5, player.rotation.x));
-
-    // Camera follows player with smooth lag
+    // Camera follows player
     const targetCameraPos = player.position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT, 5));
     camera.position.lerp(targetCameraPos, 0.1);
     camera.lookAt(player.position.clone().add(new THREE.Vector3(0, 0, -5)));
@@ -374,6 +678,9 @@ export function Survival3D() {
 
     // Update particles
     updateParticles();
+
+    // Update leviathan
+    updateLeviathan(timestamp);
 
     // Update UI
     setUiHealth(Math.max(0, uiHealth));
@@ -457,20 +764,68 @@ export function Survival3D() {
             const points = drone.type === 'hunter' ? 50 : drone.type === 'saboteur' ? 30 : 20;
             setUiScore(prev => prev + points);
 
-            // Increase wave on kill (simple wave system)
+            // Increase wave on kill
             if (uiScore > gameState.wave * 100) {
               setGameState(prev => ({ ...prev, wave: prev.wave + 1 }));
             }
+
+            // Remove from scene
+            scene.remove(drone.mesh);
+            drone.mesh.traverse(c => {
+              if (c instanceof THREE.Mesh) {
+                c.geometry.dispose();
+                (c.material as THREE.Material).dispose();
+              }
+            });
           }
 
           break;
         }
       }
 
+      // Check collision with leviathan
+      const leviathan = leviathanRef.current;
+      if (leviathan && !leviathan.isDead && !hit) {
+        const distance = bullet.position.distanceTo(leviathan.mesh.position);
+        if (distance < 3) {
+          // Hit leviathan
+          hit = true;
+          leviathan.health -= 15;
+          createParticles(leviathan.mesh.position.clone(), 10, 0x00ff00);
+
+          // Scare leviathan
+          leviathan.scareTimer = 5000;
+          setGameState(prev => ({ ...prev, leviathanState: LeviathanState.RETREAT }));
+
+          if (leviathan.health <= 0) {
+            leviathan.isDead = true;
+            createParticles(leviathan.mesh.position.clone(), 50, 0x6666ff);
+
+            // Update score
+            const points = (leviathan.stage + 1) * 100;
+            setUiScore(prev => prev + points);
+
+            // Respawn after delay
+            setTimeout(() => {
+              if (leviathanRef.current) {
+                scene.remove(leviathanRef.current.mesh);
+                leviathanRef.current.mesh.traverse(c => {
+                  if (c instanceof THREE.Mesh) {
+                    c.geometry.dispose();
+                    (c.material as THREE.Material).dispose();
+                  }
+                });
+                createLeviathan(scene);
+              }
+            }, 10000);
+          }
+        }
+      }
+
       // Remove bullet if too far or hit
       if (bullet.position.length() > 50 || hit) {
         scene.remove(bullet);
-        bulletGeometry.dispose(); // Note: reuse geometry instead
+        bulletGeometry.dispose();
         return false;
       }
 
@@ -593,12 +948,30 @@ export function Survival3D() {
         </div>
       </div>
 
-      {/* Score and wave */}
+      {/* Score, wave, and leviathan info */}
       <div style={styles.scorePanel}>
         <div>SCORE: {uiScore}</div>
         <div>WAVE: {uiWave}</div>
         <div>DRONES: {dronesRef.current.length}</div>
       </div>
+
+      {/* Leviathan health bar */}
+      {leviathanRef.current && !leviathanRef.current.isDead && (
+        <div style={styles.leviathanBarContainer}>
+          <div style={styles.leviathanBar}>
+            <div
+              style={{
+                ...styles.leviathanHealthFill,
+                width: `${(uiLeviathanHealth / LEVIATHAN_STAGES.juvenile.health) * 100}%`,
+                backgroundColor: leviathanRef.current.type === 'juvenile' ? '#00ff00' : 
+                                  leviathanRef.current.type === 'adult' ? '#ff6600' : '#6666ff',
+              }}
+            />
+          </div>
+          <div>VOID LEVIATHAN</div>
+          <div>STAGE {uiLeviathanStage + 1}: {(leviathanRef.current.type).toUpperCase()}</div>
+        </div>
+      )}
 
       {/* Game over overlay */}
       {gameState.gameOver && (
@@ -612,12 +985,17 @@ export function Survival3D() {
                 score: 0,
                 wave: 1,
                 droneType: 'salvager',
+                leviathanStage: 0,
+                leviathanHealth: 200,
+                leviathanState: LeviathanState.IDLE,
                 isPaused: false,
                 gameOver: false,
               });
               setUiHealth(100);
               setUiScore(0);
               setUiWave(1);
+              setUiLeviathanHealth(200);
+              setUiLeviathanStage(0);
             }}
             style={styles.restartButton}
           >
@@ -682,6 +1060,33 @@ const styles = {
     fontFamily: 'monospace',
     fontSize: 16,
     textAlign: 'right',
+  },
+  leviathanBarContainer: {
+    position: 'absolute',
+    top: 60,
+    left: 50,
+    transform: 'translateX(-50%)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    padding: 15,
+    borderRadius: 10,
+    border: '2px solid #6666ff',
+    color: '#6666ff',
+    fontFamily: 'monospace',
+    fontSize: 14,
+    textAlign: 'center',
+    minWidth: 250,
+  },
+  leviathanBar: {
+    width: '100%',
+    height: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 5,
+  },
+  leviathanHealthFill: {
+    height: '100%',
+    transition: 'width 0.1s ease',
   },
   gameOverOverlay: {
     position: 'absolute',
