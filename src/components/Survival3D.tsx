@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
+import { createAsteroid, updateAsteroid, explodeAsteroid, AsteroidType } from '../models/AsteroidModel';
+import { ExtendedGroup } from '../models/Types';
 
 // Game constants
 const PLAYER_HEIGHT = 1.6;
