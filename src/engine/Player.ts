@@ -10,6 +10,11 @@ export class Player {
   speed: number = 120; // pixels per second in EVA
   inStation: boolean = false;
 
+  // Tap-to-move target (tile coordinates). When set, player auto-walks toward it.
+  moveTarget: Vec2 | null = null;
+  // Pathfinding sub-step: we move axis-at-a-time toward the target tile.
+  private readonly ARRIVE_DIST = 10; // pixels — close enough to arrive
+
   constructor(x: number, y: number) {
     this.pos = { x, y };
     this.pixelPos = { x: x * 32, y: y * 32 };
@@ -35,11 +40,63 @@ export class Player {
     this.addItem('air_tank', 1);
   }
 
-  update(input: { moveX: number; moveY: number }, dt: number, walkable: (x: number, y: number) => boolean): void {
-    const dx = input.moveX;
-    const dy = input.moveY;
-    const len = Math.sqrt(dx * dx + dy * dy);
+  setMoveTarget(tx: number, ty: number): void {
+    this.moveTarget = { x: tx, y: ty };
+  }
 
+  clearMoveTarget(): void {
+    this.moveTarget = null;
+  }
+
+  update(input: { moveX: number; moveY: number }, dt: number, walkable: (x: number, y: number) => boolean): void {
+    let dx = input.moveX;
+    let dy = input.moveY;
+    const manualInput = Math.abs(dx) > 0.15 || Math.abs(dy) > 0.15;
+
+    // If the user provides manual joystick/keyboard input, cancel tap-to-move.
+    if (manualInput) {
+      this.moveTarget = null;
+    }
+
+    // Tap-to-move: auto-walk toward the target tile.
+    if (!manualInput && this.moveTarget) {
+      const targetPxX = this.moveTarget.x * 32 + 16;
+      const targetPxY = this.moveTarget.y * 32 + 16;
+      const ddx = targetPxX - this.pixelPos.x;
+      const ddy = targetPxY - this.pixelPos.y;
+      const distToTarget = Math.sqrt(ddx * ddx + ddy * ddy);
+
+      if (distToTarget <= this.ARRIVE_DIST) {
+        // Arrived
+        this.moveTarget = null;
+      } else {
+        // Greedy axis-separated movement: move in the larger axis first.
+        if (Math.abs(ddx) > Math.abs(ddy)) {
+          dx = Math.sign(ddx);
+          dy = 0;
+        } else {
+          dx = 0;
+          dy = Math.sign(ddy);
+        }
+        // If blocked on the chosen axis, try the other axis (simple obstacle avoidance).
+        const tryTx = Math.floor((this.pixelPos.x + dx * 16 + 16) / 32);
+        const tryTy = Math.floor((this.pixelPos.y + dy * 16 + 16) / 32);
+        if (!walkable(tryTx, tryTy)) {
+          // Try the perpendicular axis
+          if (dx !== 0) { dx = 0; dy = Math.sign(ddy) || 0; }
+          else { dy = 0; dx = Math.sign(ddx) || 0; }
+          const altTx = Math.floor((this.pixelPos.x + dx * 16 + 16) / 32);
+          const altTy = Math.floor((this.pixelPos.y + dy * 16 + 16) / 32);
+          if (!walkable(altTx, altTy)) {
+            // Fully blocked — stop.
+            this.moveTarget = null;
+            dx = 0; dy = 0;
+          }
+        }
+      }
+    }
+
+    const len = Math.sqrt(dx * dx + dy * dy);
     if (len > 0.15) {
       const speed = this.speed * dt;
       const nx = dx / len;

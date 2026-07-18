@@ -1,6 +1,7 @@
 import { useRef, useEffect } from 'react';
 import type { GameEngine } from '../engine/GameEngine';
 import { TILE_SIZE, WORLD_W, WORLD_H } from '../engine/World';
+import { MODULES } from '../engine/items';
 
 interface Props {
   engine: GameEngine;
@@ -18,6 +19,74 @@ export function GameCanvas({ engine }: Props) {
     if (!ctx) return;
 
     let rafId: number;
+
+    // ---- Tap-to-move touch handling ----
+    // We track a tap start/move/end on the canvas itself.
+    // A quick tap (no significant drag) sets the move target.
+    // A drag does nothing (the virtual joystick handles movement).
+    let tapStartX = 0;
+    let tapStartY = 0;
+    let tapStartTime = 0;
+    let isPotentialTap = false;
+
+    const screenToTile = (clientX: number, clientY: number) => {
+      const rect = canvas.getBoundingClientRect();
+      const sx = clientX - rect.left;
+      const sy = clientY - rect.top;
+      const eng = engineRef.current;
+      const camX = eng.player.pixelPos.x - canvas.width / 2 + TILE_SIZE / 2;
+      const camY = eng.player.pixelPos.y - canvas.height / 2 + TILE_SIZE / 2;
+      const tx = Math.floor((sx + camX) / TILE_SIZE);
+      const ty = Math.floor((sy + camY) / TILE_SIZE);
+      return { tx, ty };
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      // Only treat as tap-to-move if the pointer started on the canvas
+      // (not on a UI overlay). The canvas sits behind all UI.
+      if ((e.target as HTMLElement)?.tagName !== 'CANVAS') return;
+      tapStartX = e.clientX;
+      tapStartY = e.clientY;
+      tapStartTime = Date.now();
+      isPotentialTap = true;
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!isPotentialTap) return;
+      const dx = e.clientX - tapStartX;
+      const dy = e.clientY - tapStartY;
+      if (Math.sqrt(dx * dx + dy * dy) > 12) {
+        // It's a drag, not a tap — cancel tap-to-move.
+        isPotentialTap = false;
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (!isPotentialTap) return;
+      isPotentialTap = false;
+      const dt = Date.now() - tapStartTime;
+      if (dt > 500) return; // too long, not a tap
+      const { tx, ty } = screenToTile(e.clientX, e.clientY);
+      const eng = engineRef.current;
+      const tile = eng.world.getTile(tx, ty);
+      if (!tile) return;
+      // Only walk to walkable tiles
+      if (eng.world.isWalkable(tx, ty)) {
+        eng.player.setMoveTarget(tx, ty);
+        // Also face toward the tapped direction
+        const pdx = tx - eng.player.pos.x;
+        const pdy = ty - eng.player.pos.y;
+        const plen = Math.sqrt(pdx * pdx + pdy * pdy);
+        if (plen > 0) {
+          eng.player.facing = { x: pdx / plen, y: pdy / plen };
+        }
+      }
+    };
+
+    canvas.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
 
     const render = () => {
       const eng = engineRef.current;
@@ -116,15 +185,27 @@ export function GameCanvas({ engine }: Props) {
         const facing = eng.player.getFacingTile();
         const canPlace = eng.world.canPlaceModule(facing.x, facing.y, eng.buildMode);
         const color = canPlace ? '#44ff44' : '#ff4444';
-        // Simple preview — draw rectangle
+        const modDef = MODULES[eng.buildMode];
+        const mw = modDef ? modDef.width : 2;
+        const mh = modDef ? modDef.height : 2;
+        // Preview rectangle at actual module size
         ctx.strokeStyle = color;
         ctx.lineWidth = 2;
         ctx.globalAlpha = 0.5;
         ctx.strokeRect(
           facing.x * TILE_SIZE - camX,
           facing.y * TILE_SIZE - camY,
-          TILE_SIZE * 2,
-          TILE_SIZE * 2,
+          TILE_SIZE * mw,
+          TILE_SIZE * mh,
+        );
+        // Grid overlay
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.1;
+        ctx.fillRect(
+          facing.x * TILE_SIZE - camX,
+          facing.y * TILE_SIZE - camY,
+          TILE_SIZE * mw,
+          TILE_SIZE * mh,
         );
         ctx.globalAlpha = 1;
       }
@@ -132,11 +213,34 @@ export function GameCanvas({ engine }: Props) {
       // Draw player
       drawPlayer(ctx, eng, camX, camY);
 
+      // Draw tap-to-move target indicator
+      if (eng.player.moveTarget) {
+        const tpx = eng.player.moveTarget.x * TILE_SIZE - camX + TILE_SIZE / 2;
+        const tpy = eng.player.moveTarget.y * TILE_SIZE - camY + TILE_SIZE / 2;
+        const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.008);
+        ctx.strokeStyle = `rgba(100, 200, 255, ${0.4 + pulse * 0.4})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(tpx, tpy, 10 + pulse * 4, 0, Math.PI * 2);
+        ctx.stroke();
+        // Inner dot
+        ctx.fillStyle = `rgba(100, 200, 255, ${0.6 + pulse * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(tpx, tpy, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       rafId = requestAnimationFrame(render);
     };
 
     render();
-    return () => cancelAnimationFrame(rafId);
+    return () => {
+      cancelAnimationFrame(rafId);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+    };
   }, []);
 
   return (
@@ -310,16 +414,60 @@ function drawModule(
   camX: number, camY: number,
   eng: GameEngine,
 ) {
-  // Modules are drawn via their tiles, but we add a border and label
+  // Look up the module definition for proper sizing and styling.
+  const def = MODULES[mod.type];
+  const w = def ? def.width : 2;
+  const h = def ? def.height : 2;
+  const color = def ? def.color : '#334466';
+  const accent = def ? def.accentColor : '#5588aa';
+  const emoji = def ? def.emoji : '🏠';
+
   const px = mod.x * TILE_SIZE - camX;
   const py = mod.y * TILE_SIZE - camY;
-  const def = eng.world.modules.length > 0 ? null : null; // just to reference eng
+  const pw = w * TILE_SIZE;
+  const ph = h * TILE_SIZE;
 
-  // Module border
-  ctx.strokeStyle = 'rgba(100, 150, 200, 0.5)';
+  // Module body — filled with module color and semi-transparent overlay
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.35;
+  ctx.fillRect(px, py, pw, ph);
+  ctx.globalAlpha = 1;
+
+  // Border with accent color
+  ctx.strokeStyle = accent;
   ctx.lineWidth = 2;
-  ctx.strokeRect(px, py, TILE_SIZE * 2, TILE_SIZE * 2);
+  ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
+
+  // Corner accents
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 3;
+  const cs = 8; // corner size
+  // Top-left
+  ctx.beginPath(); ctx.moveTo(px, py + cs); ctx.lineTo(px, py); ctx.lineTo(px + cs, py); ctx.stroke();
+  // Top-right
+  ctx.beginPath(); ctx.moveTo(px + pw - cs, py); ctx.lineTo(px + pw, py); ctx.lineTo(px + pw, py + cs); ctx.stroke();
+  // Bottom-left
+  ctx.beginPath(); ctx.moveTo(px, py + ph - cs); ctx.lineTo(px, py + ph); ctx.lineTo(px + cs, py + ph); ctx.stroke();
+  // Bottom-right
+  ctx.beginPath(); ctx.moveTo(px + pw - cs, py + ph); ctx.lineTo(px + pw, py + ph); ctx.lineTo(px + pw, py + ph - cs); ctx.stroke();
+
+  // Label (emoji) centered
+  ctx.font = `${Math.min(pw, ph) * 0.4}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, px + pw / 2, py + ph / 2);
+
+  // Hull integrity bar (if damaged)
+  if (mod.hullIntegrity < 100) {
+    const barW = pw - 8;
+    const barH = 3;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(px + 4, py + ph - 6, barW, barH);
+    ctx.fillStyle = mod.hullIntegrity > 50 ? '#44ff44' : mod.hullIntegrity > 25 ? '#ffaa00' : '#ff4444';
+    ctx.fillRect(px + 4, py + ph - 6, barW * (mod.hullIntegrity / 100), barH);
+  }
 }
+
 
 function drawPlayer(
   ctx: CanvasRenderingContext2D,

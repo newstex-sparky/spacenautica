@@ -43,7 +43,7 @@ export interface InventorySlot {
   item: ItemStack | null;
 }
 
-export interface PlayerStats {
+export interface GameState {
   oxygen: number;       // seconds of O2 remaining
   maxOxygen: number;
   power: number;        // suit power for jetpack/tools
@@ -52,6 +52,12 @@ export interface PlayerStats {
   maxHealth: number;
   hullIntegrity: number; // station hull integrity (global, for now)
   maxHull: number;
+  alienAlloy: number;
+  gatewayCore: boolean;
+  reactorBuilt: boolean;
+  gatewayActivated: boolean;
+  questHistory: string[];
+  currentQuest: string | null;
 }
 
 export type Season = 'solar_max' | 'solar_min' | 'flare' | 'quiet';
@@ -71,7 +77,8 @@ export type GameScreen =
   | 'techtree'
   | 'map'
   | 'gameover'
-  | 'intro';
+  | 'intro'
+  | 'ending';
 
 export interface Notification {
   id: number;

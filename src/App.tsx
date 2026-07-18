@@ -7,6 +7,7 @@ import { TouchControls } from './components/TouchControls';
 import {
   InventoryModal, BuildModal, CraftModal, TechTreeModal, MapModal,
 } from './components/Modals';
+import { EndingChoice } from './components/EndingChoice';
 
 export function App() {
   const engineRef = useRef<GameEngine | null>(null);
@@ -14,6 +15,7 @@ export function App() {
   const [screen, setScreen] = useState<GameScreen | null>('intro');
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [gameOver, setGameOver] = useState<string | null>(null);
+  const [endingChoice, setEndingChoice] = useState<'home' | 'aliens' | null>(null);
 
   const update = useCallback(() => forceUpdate(n => n + 1), []);
 
@@ -47,7 +49,24 @@ export function App() {
     engine.restart();
     setGameOver(null);
     setScreen(null);
+    setEndingChoice(null);
     update();
+  };
+
+  const handleEndingChoice = (choice: 'home' | 'aliens') => {
+    setEndingChoice(choice);
+    // Show the appropriate cinematic
+    if (choice === 'home') {
+      setTimeout(() => {
+        // Home ending - show home cinematic and credits
+        alert(`CREDITS\n\nSpacenautica v0.1\n\nDeveloped by Newstex\n\nA survival game in the void.\n\nThank you for playing!`);
+      }, 1000);
+    } else {
+      setTimeout(() => {
+        // Aliens ending - show sequel hook
+        alert(`THE ALIENS\n\nYou step through the Gateway.\n\nThe alien vessel awaits.\n\n— To be continued in Spacenautica II —`);
+      }, 1000);
+    }
   };
 
   return (
@@ -100,6 +119,15 @@ export function App() {
       {screen === 'craft' && <CraftModal engine={engine} />}
       {screen === 'techtree' && <TechTreeModal engine={engine} />}
       {screen === 'map' && <MapModal engine={engine} />}
+
+      {/* Ending Choice */}
+      {endingChoice && (
+        <EndingChoice
+          show={true}
+          onHome={() => handleEndingChoice('home')}
+          onFollow={() => handleEndingChoice('aliens')}
+        />
+      )}
 
       {/* Notifications */}
       <div className="notifications">

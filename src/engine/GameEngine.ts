@@ -1,6 +1,6 @@
 import type {
   GameScreen, Notification, EngineCallbacks, ItemStack, Vec2,
-  ModuleType, PlacedModule, GameTime, Season, InputState,
+  ModuleType, PlacedModule, GameTime, Season, InputState, GameState,
 } from './types';
 import { World, TILE_SIZE } from './World';
 import { Player } from './Player';
@@ -8,6 +8,7 @@ import {
   ITEMS, RECIPES, MODULES, MODULE_LIST, getItemName, getItemBuyValue, getItemSellValue,
 } from './items';
 import { TECH_TREE, getStartingTech, canUnlockTech, getUnlockableTech } from './techTree';
+import { questChain, QuestStatus } from './quests';
 
 let notifId = 0;
 
@@ -48,6 +49,27 @@ export class GameEngine {
 
   // Day/night cycle (star rotation)
   private readonly CYCLE_LENGTH = 120; // 2 minutes = full day cycle
+
+  // Quest system
+  quests: typeof questChain = [...questChain];
+  gameState: GameState = {
+    oxygen: 1800,
+    maxOxygen: 1800,
+    power: 100,
+    maxPower: 100,
+    health: 100,
+    maxHealth: 100,
+    hullIntegrity: 100,
+    maxHull: 100,
+    alienAlloy: 0,
+    gatewayCore: false,
+    reactorBuilt: false,
+    gatewayActivated: false,
+    questHistory: [],
+    currentQuest: null,
+  };
+  endingChoice: 'home' | 'aliens' = 'home';
+  showCinematicScene = false;
 
   constructor(callbacks: EngineCallbacks) {
     this.callbacks = callbacks;
@@ -506,6 +528,77 @@ export class GameEngine {
     this.placeStartingPod();
     this.start();
     this.callbacks.onStateChange();
+  }
+
+  // ============ Quest System ============
+
+  addQuestQuest(alienAlloy: number): void {
+    if (alienAlloy >= 1) {
+      const quest = this.quests.find(q => q.id === 'collect_alien_alloy');
+      if (quest && quest.status === 'not_started') {
+        quest.status = 'in_progress';
+        this.notify('Quest Started: Alien Alloy Found. Explore the Meridian wreckage.', 'info');
+      }
+    }
+  }
+
+  craftGatewayCore(): boolean {
+    if (this.canCraft('gateway_core')) {
+      this.removeItem('alien_alloy', 3);
+      this.removeItem('crystal_matrix', 2);
+      const quest = this.quests.find(q => q.id === 'craft_gateway_core');
+      if (quest && quest.status === 'in_progress') {
+        quest.status = 'completed';
+        this.notify('Quest Completed: Gateway Core Crafted.', 'success');
+      }
+      return true;
+    }
+    return false;
+  }
+
+  buildReactor(): boolean {
+    if (this.canCraft('fusion_reactor')) {
+      this.removeItem('uranium', 5);
+      this.removeItem('iron_bar', 30);
+      this.removeItem('crystal_matrix', 8);
+      const quest = this.quests.find(q => q.id === 'build_fusion_reactor');
+      if (quest && quest.status === 'in_progress') {
+        quest.status = 'completed';
+        this.notify('Quest Completed: Fusion Reactor Built.', 'success');
+      }
+      return true;
+    }
+    return false;
+  }
+
+  installGatewayCore(): boolean {
+    if (this.player.hasItem('gateway_core') && !this.gameState.gatewayActivated) {
+      this.removeItem('gateway_core', 1);
+      this.gameState.gatewayActivated = true;
+      this.notify('Gateway Core Installed. Now you must activate it.', 'warning');
+      return true;
+    }
+    return false;
+  }
+
+  activateGateway(): boolean {
+    if (!this.gameState.gatewayActivated) return false;
+
+    // Trigger endgame cinematic sequence
+    this.screen = 'ending';
+    this.gameState.currentQuest = 'gateway_activated';
+    this.notify('Gateway Active! The gateway is now open. Choose your destiny.', 'success');
+    this.callbacks.onScreenChange('ending');
+    return true;
+  }
+
+  // ============ Ending Cinematics ============
+
+  makeEndingChoice(ending: 'home' | 'aliens'): void {
+    this.screen = 'cinematic';
+    this.endingChoice = ending;
+    this.callbacks.onScreenChange('cinematic');
+    this.showCinematicScene = true;
   }
 
   // ============ Buy/Sell (future NPC merchant) ============
