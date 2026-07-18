@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pirate Drone Combat — Spacenautica M5</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            background: #000;
+            font-family: 'Courier New', monospace;
+        }
+        #game-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            z-index: 100;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+        }
+        #health-bar {
+            width: 300px;
+            height: 25px;
+            background: rgba(0,0,0,0.5);
+            border: 2px solid #444;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        #health-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff4444, #ff6666);
+            width: 100%;
+            transition: width 0.3s;
+        }
+        #oxygen-bar {
+            width: 300px;
+            height: 20px;
+            background: rgba(0,0,0,0.5);
+            border: 2px solid #444;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        #oxygen-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4488ff, #66aaff);
+            width: 100%;
+            transition: width 0.3s;
+        }
+        #score {
+            font-size: 24px;
+            color: #fff;
+            margin-bottom: 5px;
+        }
+        #wave {
+            font-size: 18px;
+            color: #ffaa00;
+            margin-bottom: 20px;
+        }
+        #drone-types {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: #aaa;
+            font-size: 14px;
+            pointer-events: none;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,0.5);
+            border-radius: 50%;
+            z-index: 100;
+        }
+        #instructions {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: #aaa;
+            font-size: 14px;
+            background: rgba(0,0,0,0.5);
+            padding: 15px;
+            border-radius: 10px;
+            pointer-events: none;
+        }
+        #start-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #0a0a1a 0%, #1a1a3a 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            color: white;
+        }
+        #start-screen h1 {
+            font-size: 48px;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px #4488ff;
+        }
+        #start-screen p {
+            font-size: 18px;
+            color: #aaa;
+            margin-bottom: 30px;
+        }
+        #start-btn {
+            padding: 15px 40px;
+            font-size: 20px;
+            background: #4488ff;
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: all 0.3s;
+        }
+        #start-btn:hover {
+            background: #66aaff;
+            transform: scale(1.05);
+        }
+        #hit-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            font-size: 36px;
+            color: #ff3333;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container"></div>
+    
+    <div id="start-screen">
+        <h1>Pirate Drone Combat</h1>
+        <p>Survive the void with your mining laser. Defeat drone waves.</p>
+        <button id="start-btn">START MISSION</button>
+    </div>
+    
+    <div id="ui">
+        <div id="health-bar"><div id="health-fill"></div></div>
+        <div id="oxygen-bar"><div id="oxygen-fill"></div></div>
+        <div id="score">SCORE: 0</div>
+        <div id="wave">WAVE: 1</div>
+    </div>
+    
+    <div id="drone-types">
+        <strong style="color: #ff6666">Salvager</strong> — steals resources<br>
+        <strong style="color: #ffaa00">Saboteur</strong> — damages hull<br>
+        <strong style="color: #66ff66">Hunter</strong> — chases you
+    </div>
+    
+    <div id="crosshair"></div>
+    <div id="hit-indicator">HIT!</div>
+    <div id="instructions">
+        WASD — Move<br>
+        Mouse — Look Around<br>
+        Click — Mine Laser<br>
+        R — Reload
+    </div>
+    
+    <script>
+        // ============================================
+        // SPACENAUTICA M5 — PILOT DRONE COMBAT
+        // First-person survival in space with pirate drones
+        // ============================================
+        
+        // Three.js setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x000011);
+        document.getElementById('game-container').appendChild(renderer.domElement);
+        
+        // Game state
+        const game = {
+            running: false,
+            score: 0,
+            wave: 1,
+            waveCount: 0,
+            nextWaveTime: 30,
+            player: {
+                hp: 100,
+                maxHp: 100,
+                oxygen: 100,
+                maxOxygen: 100,
+                speed: 0.1,
+                inAir: true,
+                canShoot: true,
+                ammo: 30,
+                maxAmmo: 30
+            },
+            controls: {
+                moveForward: false,
+                moveBackward: false,
+                moveLeft: false,
+                moveRight: false,
+            },
+            mouse: {
+                movementX: 0,
+                movementY: 0
+            }
+        };
+        
+        // Drone types configuration
+        const DRONE_TYPES = {
+            salvager: {
+                name: 'Salvager',
+                color: 0xff6666,
+                health: 50,
+                speed: 0.03,
+                behavior: 'salvage',
+                points: 100,
+                size: 3
+            },
+            saboteur: {
+                name: 'Saboteur',
+                color: 0xffaa00,
+                health: 30,
+                speed: 0.05,
+                behavior: 'sabotage',
+                points: 75,
+                size: 2
+            },
+            hunter: {
+                name: 'Hunter',
+                color: 0x66ff66,
+                health: 80,
+                speed: 0.04,
+                behavior: 'chase',
+                points: 150,
+                size: 4
+            }
+        };
+        
+        // Initialize scene
+        function initScene() {
+            // Fog for depth
+            scene.fog = new THREE.FogExp2(0x000011, 0.005);
+            
+            // Starfield
+            createStarfield();
+            
+            // Distant asteroid belt
+            createAsteroidBelt();
+            
+            // Player spawn position
+            camera.position.set(0, 2, 20);
+            
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x333366, 0.5);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 20, 10);
+            scene.add(directionalLight);
+            
+            // Player weapon (mining laser)
+            createPlayerWeapon();
+        }
+        
+        function createStarfield() {
+            const starsGeometry = new THREE.BufferGeometry();
+            const starsMaterial = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: 0.1,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const starsVertices = [];
+            for (let i = 0; i < 2000; i++) {
+                const x = (Math.random() - 0.5) * 2000;
+                const y = (Math.random() - 0.5) * 2000;
+                const z = (Math.random() - 0.5) * 2000;
+                starsVertices.push(x, y, z);
+            }
+            
+            starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+            const starField = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(starField);
+        }
+        
+        function createAsteroidBelt() {
+            const asteroidGeometry = new THREE.DodecahedronGeometry(Math.random() * 2 + 1, 0);
+            const asteroidMaterial = new THREE.MeshStandardMaterial({
+                color: 0x445566,
+                roughness: 0.8,
+                metalness: 0.3
+            });
+            
+            for (let i = 0; i < 50; i++) {
+                const asteroid = new THREE.Mesh(asteroidGeometry, asteroidMaterial);
+                const angle = Math.random() * Math.PI * 2;
+                const radius = 30 + Math.random() * 30;
+                const height = (Math.random() - 0.5) * 40;
+                
+                asteroid.position.set(
+                    Math.cos(angle) * radius,
+                    height,
+                    Math.sin(angle) * radius
+                );
+                
+                asteroid.rotation.set(
+                    Math.random() * Math.PI,
+                    Math.random() * Math.PI,
+                    Math.random() * Math.PI
+                );
+                
+                asteroid.userData = {
+                    rotSpeed: {
+                        x: (Math.random() - 0.5) * 0.01,
+                        y: (Math.random() - 0.5) * 0.01,
+                        z: (Math.random() - 0.5) * 0.01
+                    }
+                };
+                
+                scene.add(asteroid);
+            }
+        }
+        
+        let playerWeapon;
+        function createPlayerWeapon() {
+            // Mining laser on player's chest
+            const geometry = new THREE.CylinderGeometry(0.1, 0.15, 1, 8);
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x4488ff,
+                metalness: 0.8,
+                roughness: 0.3,
+                emissive: 0x224488,
+                emissiveIntensity: 0.2
+            });
+            
+            playerWeapon = new THREE.Mesh(geometry, material);
+            playerWeapon.position.set(0, 0.5, -0.6);
+            playerWeapon.rotation.x = Math.PI / 2;
+            camera.add(playerWeapon);
+            scene.add(camera);
+        }
+        
+        // ============================================
+        // ENEMY SYSTEM — Pirate Drones
+        // ============================================
+        
+        const drones = [];
+        
+        function spawnDrone(type: keyof typeof DRONE_TYPES) {
+            const config = DRONE_TYPES[type];
+            
+            // Create 3D drone model
+            const group = new THREE.Group();
+            
+            // Main body
+            const bodyGeometry = new THREE.OctahedronGeometry(0.5);
+            const bodyMaterial = new THREE.MeshStandardMaterial({
+                color: config.color,
+                roughness: 0.4,
+                metalness: 0.6,
+                emissive: config.color,
+                emissiveIntensity: 0.3
+            });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            group.add(body);
+            
+            // Rotors
+            for (let i = 0; i < 4; i++) {
+                const rotorGeometry = new THREE.BoxGeometry(1, 0.02, 0.3);
+                const rotorMaterial = new THREE.MeshBasicMaterial({
+                    color: 0x888888,
+                    transparent: true,
+                    opacity: 0.6
+                });
+                const rotor = new THREE.Mesh(rotorGeometry, rotorMaterial);
+                
+                const angle = (i / 4) * Math.PI * 2;
+                rotor.position.set(
+                    Math.cos(angle) * 0.6,
+                    0.5,
+                    Math.sin(angle) * 0.6
+                );
+                rotor.rotation.y = -angle;
+                
+                group.add(rotor);
+            }
+            
+            // Shield glow
+            const shieldGeometry = new THREE.SphereGeometry(1.2);
+            const shieldMaterial = new THREE.MeshBasicMaterial({
+                color: config.color,
+                transparent: true,
+                opacity: 0.1,
+                wireframe: true
+            });
+            const shield = new THREE.Mesh(shieldGeometry, shieldMaterial);
+            group.add(shield);
+            
+            // Random spawn position
+            const angle = Math.random() * Math.PI * 2;
+            const radius = 15 + Math.random() * 20;
+            group.position.set(
+                Math.cos(angle) * radius,
+                (Math.random() - 0.5) * 10,
+                Math.sin(angle) * radius
+            );
+            
+            // Drone data
+            group.userData = {
+                type: type,
+                health: config.health,
+                maxHealth: config.health,
+                speed: config.speed,
+                behavior: config.behavior,
+                points: config.points,
+                shield: shield,
+                rotors: [],
+                id: Date.now() + Math.random()
+            };
+            
+            // Collect rotors for animation
+            group.children.forEach(child => {
+                if (child.geometry.type === 'BoxGeometry') {
+                    group.userData.rotors.push(child);
+                }
+            });
+            
+            scene.add(group);
+            drones.push(group);
+        }
+        
+        function updateDrones(dt: number) {
+            const playerPos = camera.position.clone();
+            
+            drones.forEach((drone, index) => {
+                if (!game.running) return;
+                
+                const data = drone.userData;
+                const behavior = data.behavior;
+                
+                // Animate rotors
+                data.rotors.forEach(rotor => {
+                    rotor.position.y = 0.5 + Math.sin(Date.now() * 0.02 + index) * 0.05;
+                });
+                
+                // Rotate body
+                drone.rotation.y += data.rotSpeed || 0.01;
+                
+                // AI behavior
+                const lookDir = new THREE.Vector3()
+                    .subVectors(playerPos, drone.position)
+                    .normalize();
+                
+                if (behavior === 'chase') {
+                    // Hunter: aggressive pursuit
+                    const moveDir = lookDir.clone().multiplyScalar(data.speed * 2);
+                    drone.position.add(moveDir);
+                } else if (behavior === 'salvage') {
+                    // Salvager: orbit the player
+                    const orbitRadius = 8 + Math.sin(Date.now() * 0.001 + index) * 2;
+                    const orbitPos = new THREE.Vector3(
+                        Math.cos(Date.now() * 0.0005 + index) * orbitRadius,
+                        Math.sin(Date.now() * 0.0005 + index) * orbitRadius,
+                        playerPos.z + 5
+                    );
+                    drone.lookAt(playerPos);
+                    drone.position.lerp(orbitPos, 0.02);
+                } else if (behavior === 'sabotage') {
+                    // Saboteur: approach but don't get too close
+                    const dist = drone.position.distanceTo(playerPos);
+                    if (dist > 8) {
+                        const moveDir = lookDir.clone().multiplyScalar(data.speed * 1.5);
+                        drone.position.add(moveDir);
+                    } else {
+                        // Shoot at player
+                        if (Math.random() < 0.02) {
+                            damagePlayer(10);
+                        }
+                    }
+                }
+                
+                // Face player
+                drone.lookAt(playerPos);
+                
+                // Shield pulse effect
+                if (data.shield) {
+                    data.shield.scale.setScalar(
+                        1.2 + Math.sin(Date.now() * 0.005 + index) * 0.2
+                    );
+                    data.shield.material.opacity = 0.1 + Math.sin(Date.now() * 0.005 + index) * 0.05;
+                }
+            });
+        }
+        
+        function removeDrones() {
+            // Filter out dead drones
+            for (let i = drones.length - 1; i >= 0; i--) {
+                if (drones[i].userData.health <= 0) {
+                    // Create explosion
+                    createExplosion(drones[i].position, DRONE_TYPES[drones[i].userData.type].color);
+                    
+                    scene.remove(drones[i]);
+                    drones.splice(i, 1);
+                }
+            }
+        }
+        
+        // ============================================
+        // BULLET SYSTEM
+        // ============================================
+        
+        const bullets = [];
+        
+        function shoot() {
+            if (!game.player.canShoot || game.player.ammo <= 0) return;
+            
+            game.player.ammo--;
+            updateUI();
+            
+            const direction = new THREE.Vector3(0, 0, -1);
+            direction.applyQuaternion(camera.quaternion);
+            
+            const bulletGeometry = new THREE.SphereGeometry(0.1);
+            const bulletMaterial = new THREE.MeshBasicMaterial({
+                color: 0x4488ff,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+            bullet.position.copy(camera.position);
+            bullet.userData = {
+                direction: direction,
+                speed: 1.5,
+                life: 100 // frames
+            };
+            
+            // Gun flash
+            const flashGeometry = new THREE.SphereGeometry(0.3);
+            const flashMaterial = new THREE.MeshBasicMaterial({
+                color: 0xaaddff,
+                transparent: true,
+                opacity: 0.8
+            });
+            const flash = new THREE.Mesh(flashGeometry, flashMaterial);
+            playerWeapon?.add(flash);
+            setTimeout(() => {
+                if (playerWeapon && flash.parent === playerWeapon) {
+                    flash.parent?.remove(flash);
+                }
+            }, 50);
+            
+            scene.add(bullet);
+            bullets.push(bullet);
+            
+            // Muzzle recoil
+            camera.rotation.x += 0.02;
+        }
+        
+        function updateBullets() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const bullet = bullets[i];
+                const moveDir = bullet.userData.direction.clone().multiplyScalar(bullet.userData.speed);
+                bullet.position.add(moveDir);
+                bullet.userData.life--;
+                
+                // Check collision with drones
+                let hit = false;
+                for (const drone of drones) {
+                    if (bullet.position.distanceTo(drone.position) < 2) {
+                        drone.userData.health -= 10;
+                        hit = true;
+                        break;
+                    }
+                }
+                
+                if (bullet.userData.life <= 0 || hit) {
+                    scene.remove(bullet);
+                    bullets.splice(i, 1);
+                }
+            }
+        }
+        
+        // ============================================
+        // PARTICLE SYSTEM
+        // ============================================
+        
+        const particles = [];
+        
+        function createExplosion(position: THREE.Vector3, color: number) {
+            for (let i = 0; i < 15; i++) {
+                const geometry = new THREE.SphereGeometry(0.1);
+                const material = new THREE.MeshBasicMaterial({
+                    color: color,
+                    transparent: true,
+                    opacity: 1
+                });
+                const particle = new THREE.Mesh(geometry, material);
+                particle.position.copy(position);
+                
+                const velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 10,
+                    (Math.random() - 0.5) * 10,
+                    (Math.random() - 0.5) * 10
+                );
+                
+                particle.userData = {
+                    velocity: velocity,
+                    life: 1.0,
+                    decay: 0.02 + Math.random() * 0.02
+                };
+                
+                scene.add(particle);
+                particles.push(particle);
+            }
+        }
+        
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const particle = particles[i];
+                particle.position.add(particle.userData.velocity.clone().multiplyScalar(0.05));
+                particle.userData.velocity.multiplyScalar(0.95);
+                particle.userData.life -= particle.userData.decay;
+                particle.material.opacity = particle.userData.life;
+                
+                if (particle.userData.life <= 0) {
+                    scene.remove(particle);
+                    particles.splice(i, 1);
+                }
+            }
+        }
+        
+        // ============================================
+        // GAME LOGIC
+        // ============================================
+        
+        function damagePlayer(amount: number) {
+            game.player.hp -= amount;
+            updateUI();
+            
+            // Hit indicator
+            const indicator = document.getElementById('hit-indicator');
+            indicator.style.opacity = '1';
+            setTimeout(() => {
+                indicator.style.opacity = '0';
+            }, 300);
+            
+            // Screen shake
+            camera.position.x += (Math.random() - 0.5) * 0.2;
+            camera.position.y += (Math.random() - 0.5) * 0.2;
+            
+            if (game.player.hp <= 0) {
+                gameOver();
+            }
+        }
+        
+        function updateGameLoop(dt: number) {
+            if (!game.running) return;
+            
+            // Player movement
+            const speed = game.player.speed;
+            const direction = new THREE.Vector3();
+            
+            if (game.controls.moveForward) direction.z -= 1;
+            if (game.controls.moveBackward) direction.z += 1;
+            if (game.controls.moveLeft) direction.x -= 1;
+            if (game.controls.moveRight) direction.x += 1;
+            
+            direction.normalize().multiplyScalar(speed);
+            direction.applyQuaternion(camera.quaternion);
+            
+            camera.position.add(direction);
+            
+            // Keep player in bounds
+            camera.position.x = Math.max(-50, Math.min(50, camera.position.x));
+            camera.position.y = Math.max(-25, Math.min(25, camera.position.y));
+            camera.position.z = Math.max(-20, Math.min(60, camera.position.z));
+            
+            // Update game objects
+            updateDrones(dt);
+            updateBullets();
+            updateParticles();
+            
+            // Wave management
+            game.nextWaveTime -= dt;
+            if (game.nextWaveTime <= 0) {
+                nextWave();
+            }
+        }
+        
+        function nextWave() {
+            game.wave++;
+            game.waveCount = 0;
+            game.nextWaveTime = 30 - Math.min(20, game.wave * 2);
+            
+            // Spawn more drones
+            const droneCount = 3 + Math.floor(game.wave * 1.5);
+            for (let i = 0; i < droneCount; i++) {
+                const typeKeys = ['salvager', 'saboteur', 'hunter'] as const;
+                const type = typeKeys[Math.floor(Math.random() * typeKeys.length)];
+                spawnDrone(type);
+                game.waveCount++;
+            }
+            
+            updateUI();
+        }
+        
+        function updateUI() {
+            document.getElementById('health-fill').style.width = `${(game.player.hp / game.player.maxHp) * 100}%`;
+            document.getElementById('oxygen-fill').style.width = `${(game.player.oxygen / game.player.maxOxygen) * 100}%`;
+            document.getElementById('score').textContent = `SCORE: ${game.score}`;
+            document.getElementById('wave').textContent = `WAVE: ${game.wave}`;
+        }
+        
+        function gameOver() {
+            game.running = false;
+            
+            document.getElementById('start-screen').innerHTML = `
+                <h1 style="color: #ff4444">MISSION FAILED</h1>
+                <p>You were destroyed in space</p>
+                <p style="font-size: 32px; margin-top: 20px">Final Score: ${game.score}</p>
+                <p style="font-size: 24px; color: #aaa; margin-top: 10px">Wave Reached: ${game.wave}</p>
+                <button id="restart-btn" style="margin-top: 30px; padding: 15px 40px; font-size: 20px; background: #4488ff; border: none; color: white; cursor: pointer; border-radius: 5px;">RETRY</button>
+            `;
+            
+            document.getElementById('start-btn').replaceWith(
+                document.getElementById('restart-btn')
+            );
+            
+            document.getElementById('restart-btn').addEventListener('click', startGame);
+        }
+        
+        function startGame() {
+            // Reset game state
+            game.running = true;
+            game.score = 0;
+            game.wave = 1;
+            game.waveCount = 0;
+            game.nextWaveTime = 30;
+            game.player.hp = 100;
+            game.player.oxygen = 100;
+            game.player.ammo = 30;
+            
+            // Clear objects
+            drones.forEach(d => scene.remove(d));
+            bullets.forEach(b => scene.remove(b));
+            particles.forEach(p => scene.remove(p));
+            drones.length = 0;
+            bullets.length = 0;
+            particles.length = 0;
+            
+            // Reset camera
+            camera.position.set(0, 2, 20);
+            camera.rotation.set(0, 0, 0);
+            
+            // Spawn initial wave
+            nextWave();
+            
+            // Start next wave countdown
+            game.nextWaveTime = 30;
+            
+            // Start game
+            document.getElementById('start-screen').style.display = 'none';
+            updateUI();
+            
+            animate();
+        }
+        
+        // ============================================
+        // INPUT HANDLING
+        // ============================================
+        
+        document.addEventListener('keydown', (e) => {
+            switch (e.code) {
+                case 'KeyW':
+                    game.controls.moveForward = true;
+                    break;
+                case 'KeyS':
+                    game.controls.moveBackward = true;
+                    break;
+                case 'KeyA':
+                    game.controls.moveLeft = true;
+                    break;
+                case 'KeyD':
+                    game.controls.moveRight = true;
+                    break;
+                case 'KeyR':
+                    if (game.player.ammo < game.player.maxAmmo) {
+                        game.player.ammo = game.player.maxAmmo;
+                        updateUI();
+                    }
+                    break;
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            switch (e.code) {
+                case 'KeyW':
+                    game.controls.moveForward = false;
+                    break;
+                case 'KeyS':
+                    game.controls.moveBackward = false;
+                    break;
+                case 'KeyA':
+                    game.controls.moveLeft = false;
+                    break;
+                case 'KeyD':
+                    game.controls.moveRight = false;
+                    break;
+            }
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            game.mouse.movementX = e.movementX;
+            game.mouse.movementY = e.movementY;
+        });
+        
+        document.addEventListener('click', () => {
+            if (game.running) {
+                shoot();
+            }
+        });
+        
+        // Pointer lock for better FPS controls
+        document.getElementById('start-btn').addEventListener('click', () => {
+            document.body.requestPointerLock();
+        });
+        
+        // ============================================
+        // RENDER LOOP
+        // ============================================
+        
+        const clock = new THREE.Clock();
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const dt = clock.getDelta();
+            
+            // Update rotation based on mouse movement
+            const sensitivity = 0.002;
+            camera.rotation.y -= game.mouse.movementX * sensitivity;
+            camera.rotation.x -= game.mouse.movementY * sensitivity;
+            camera.rotation.x = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, camera.rotation.x));
+            
+            // Reset mouse movement
+            game.mouse.movementX = 0;
+            game.mouse.movementY = 0;
+            
+            // Clamp rotation
+            camera.rotation.x = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, camera.rotation.x));
+            
+            // Update game
+            updateGameLoop(dt);
+            
+            // Render
+            renderer.render(scene, camera);
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Initialize scene
+        initScene();
+        
+        // UI Event Listeners
+        document.getElementById('start-btn').addEventListener('click', startGame);
+    </script>
+</body>
+</html>
