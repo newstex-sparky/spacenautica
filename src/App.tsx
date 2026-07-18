@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GameEngine } from './engine/GameEngine';
 import type { GameScreen, Notification } from './engine/types';
+import { Survival3D } from './components/Survival3D';
 import { GameCanvas } from './components/GameCanvas';
 import { HUD } from './components/HUD';
 import { TouchControls } from './components/TouchControls';
@@ -16,6 +17,7 @@ export function App() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [gameOver, setGameOver] = useState<string | null>(null);
   const [endingChoice, setEndingChoice] = useState<'home' | 'aliens' | null>(null);
+  const [showSurvival3D, setShowSurvival3D] = useState(false);
 
   const update = useCallback(() => forceUpdate(n => n + 1), []);
 
@@ -84,6 +86,9 @@ export function App() {
           <button className="intro-start" onClick={startGame}>
             Launch EVA
           </button>
+          <button className="intro-start-alt" onClick={() => setShowSurvival3D(true)}>
+            Enter 3D Survival Mode
+          </button>
           <div className="intro-controls">
             <p><strong>Controls:</strong></p>
             <p>🎮 Gamepad: Left stick=move, RT=mine, A=action, B=cancel, Y=inv, X=build, Start=tech</p>
@@ -105,7 +110,14 @@ export function App() {
       )}
 
       {/* Game canvas */}
-      {screen !== 'intro' && screen !== 'gameover' && (
+      {showSurvival3D ? (
+        <div className="survival-3d-container">
+          <Survival3D />
+          <button className="back-to-main" onClick={() => setShowSurvival3D(false)}>
+            ← Back to Main Game
+          </button>
+        </div>
+      ) : (
         <>
           <GameCanvas engine={engine} />
           <HUD engine={engine} />

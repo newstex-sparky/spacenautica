@@ -78,7 +78,8 @@ export type GameScreen =
   | 'map'
   | 'gameover'
   | 'intro'
-  | 'ending';
+  | 'ending'
+  | 'survival3d';
 
 export interface Notification {
   id: number;
