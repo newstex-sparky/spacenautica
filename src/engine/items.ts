@@ -173,6 +173,20 @@ export const RECIPES: Recipe[] = [
     inputs: [{ itemId: 'carbon', quantity: 2 }],
     output: { itemId: 'ration', quantity: 1 },
   },
+  {
+    id: 'gateway_core',
+    name: 'Gateway Core',
+    description: 'Core component for the ancient gateway device.',
+    inputs: [{ itemId: 'alien_alloy', quantity: 3 }, { itemId: 'crystal_matrix', quantity: 2 }],
+    output: { itemId: 'gateway_core', quantity: 1 },
+  },
+  {
+    id: 'fusion_reactor',
+    name: 'Fusion Reactor',
+    description: 'Massive power reactor for the gateway.',
+    inputs: [{ itemId: 'uranium', quantity: 5 }, { itemId: 'iron_bar', quantity: 30 }, { itemId: 'crystal_matrix', quantity: 8 }],
+    output: { itemId: 'fusion_reactor', quantity: 1 },
+  },
 ];
 
 // ============ Station Modules ============
@@ -225,6 +239,12 @@ export const MODULES: Record<string, ModuleDef> = {
     cost: 500, materials: [{ itemId: 'uranium', quantity: 3 }, { itemId: 'iron_bar', quantity: 15 }, { itemId: 'crystal_matrix', quantity: 2 }],
     width: 3, height: 3, color: '#226644', accentColor: '#44ff88', emoji: '⚛️',
     techTier: 3, unlocked: false, providesPower: 10, pressurized: false,
+  },
+  fusion_reactor: {
+    id: 'fusion_reactor', name: 'Fusion Reactor', description: 'Massive power reactor for the gateway.',
+    cost: 1500, materials: [{ itemId: 'uranium', quantity: 5 }, { itemId: 'iron_bar', quantity: 30 }, { itemId: 'crystal_matrix', quantity: 8 }],
+    width: 4, height: 4, color: '#442266', accentColor: '#ff88cc', emoji: '🔋',
+    techTier: 5, unlocked: false, providesPower: 25, pressurized: false,
   },
   shield: {
     id: 'shield', name: 'Shield Generator', description: 'Protects station from debris.',
