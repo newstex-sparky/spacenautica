@@ -36,19 +36,21 @@ const ASTEROID_TYPES: Record<AsteroidType, AsteroidTypeInfo> = {
 };
 
 // Buildable structures
-type BuildType = 'dome' | 'solar' | 'o2generator';
+type BuildType = 'dome' | 'solar' | 'o2generator' | 'smelter';
 
 interface BuildTypeInfo {
   name: string;
   costIron: number;
   costIce: number;
+  costRawOre: number; // NEW: smelter builds with raw ore
   hotkey: string;
 }
 
 const BUILD_TYPES: Record<BuildType, BuildTypeInfo> = {
-  dome:        { name: 'Habitat Dome',  costIron: 10, costIce: 0, hotkey: '1' },
-  solar:       { name: 'Solar Panel',   costIron: 5,  costIce: 0, hotkey: '2' },
-  o2generator: { name: 'O2 Generator',  costIron: 0,  costIce: 10, hotkey: '3' },
+  dome:        { name: 'Habitat Dome',  costIron: 10, costIce: 0, costRawOre: 0, hotkey: '1' },
+  solar:       { name: 'Solar Panel',   costIron: 5,  costIce: 0, costRawOre: 0, hotkey: '2' },
+  o2generator: { name: 'O2 Generator',  costIron: 0,  costIce: 10, costRawOre: 0, hotkey: '3' },
+  smelter:     { name: 'Smelter',       costIron: 0,  costIce: 0, costRawOre: 10, hotkey: '4' },
 };
 
 // Asteroid runtime object
@@ -66,6 +68,10 @@ interface Asteroid {
 interface BuiltStructure {
   group: THREE.Group;
   type: BuildType;
+  inventory: { rawOre: number }; // smelter internal inventory
+  isProcessing: boolean;
+  processingProgress: number; // 0-1, increments per processing tick
+  lastProcessTime: number;
 }
 
 // Particle for mining puffs
@@ -100,6 +106,7 @@ export function Survival3D() {
   const [uiIron, setUiIron] = useState(0);
   const [uiIce, setUiIce] = useState(0);
   const [uiOxygen, setUiOxygen] = useState(0); // oxygen resource count (separate from survival O2)
+  const [uiRawOre, setUiRawOre] = useState(0); // raw ore (for smelter)
   const [uiHoveredAsteroid, setUiHoveredAsteroid] = useState<string>('');
   const [uiMiningProgress, setUiMiningProgress] = useState(0);
   const [uiBuildMode, setUiBuildMode] = useState(false);
@@ -120,7 +127,7 @@ export function Survival3D() {
   const buildPreviewRef = useRef<THREE.Group | null>(null); // holographic build preview
 
   // Resource refs (mirrored to UI state)
-  const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0 });
+  const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0, rawOre: 0 });
   const o2Ref = useRef(O2_MAX);
   const buildModeRef = useRef(false);
   const buildTypeRef = useRef<BuildType>('dome');
@@ -330,10 +337,76 @@ export function Survival3D() {
     return group;
   };
 
+  const createSmelterMesh = (): THREE.Group => {
+    const group = new THREE.Group();
+    // Main chamber (cylinder)
+    const chamberGeo = new THREE.CylinderGeometry(1.2, 1.2, 2.5, 12);
+    const chamberMat = new THREE.MeshStandardMaterial({
+      color: 0x444444,
+      metalness: 0.9,
+      roughness: 0.3,
+    });
+    const chamber = new THREE.Mesh(chamberGeo, chamberMat);
+    chamber.position.y = 1.25;
+    group.add(chamber);
+    // Glowing interior (visible when processing)
+    const interiorGeo = new THREE.CylinderGeometry(0.8, 0.8, 2.3, 12);
+    const interiorMat = new THREE.MeshBasicMaterial({
+      color: 0xff6600, // orange
+      transparent: true,
+      opacity: 0,
+    });
+    const interior = new THREE.Mesh(interiorGeo, interiorMat);
+    interior.position.y = 1.25;
+    group.add(interior);
+    // Intake funnel at bottom
+    const funnelGeo = new THREE.ConeGeometry(0.8, 0.6, 16, 1, true);
+    const funnelMat = new THREE.MeshStandardMaterial({
+      color: 0x666666,
+      metalness: 0.8,
+      roughness: 0.4,
+    });
+    const funnel = new THREE.Mesh(funnelGeo, funnelMat);
+    funnel.position.y = 0.3;
+    funnel.rotation.x = Math.PI; // point down
+    group.add(funnel);
+    // Pipe leading into chamber
+    const pipeGeo = new THREE.CylinderGeometry(0.15, 0.15, 1.0, 8);
+    const pipeMat = new THREE.MeshStandardMaterial({
+      color: 0x555555,
+      metalness: 0.9,
+      roughness: 0.3,
+    });
+    const pipe = new THREE.Mesh(pipeGeo, pipeMat);
+    pipe.position.y = 0.8;
+    pipe.rotation.x = -0.3;
+    group.add(pipe);
+    // Stack on top
+    const stackGeo = new THREE.CylinderGeometry(0.6, 0.8, 0.8, 12);
+    const stackMat = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      metalness: 0.7,
+      roughness: 0.5,
+    });
+    const stack = new THREE.Mesh(stackGeo, stackMat);
+    stack.position.y = 2.8;
+    group.add(stack);
+    // Chimney with smoke port
+    const chimneyGeo = new THREE.CylinderGeometry(0.3, 0.4, 0.6, 8);
+    const chimney = new THREE.Mesh(chimneyGeo, stackMat);
+    chimney.position.y = 3.4;
+    group.add(chimney);
+    // Mesh ref for animation
+    (group as any).smelterInterior = interior;
+    return group;
+  };
+
   const createStructureMesh = (type: BuildType): THREE.Group => {
     if (type === 'dome') return createDomeMesh();
     if (type === 'solar') return createSolarPanelMesh();
-    return createO2GeneratorMesh();
+    if (type === 'o2generator') return createO2GeneratorMesh();
+    if (type === 'smelter') return createSmelterMesh();
+    return new THREE.Group();
   };
 
   // ====================== Particles ======================
@@ -432,20 +505,31 @@ export function Survival3D() {
     const type = buildTypeRef.current;
     const info = BUILD_TYPES[type];
     const r = resourcesRef.current;
-    if (r.iron < info.costIron || r.ice < info.costIce) {
+    if (r.iron < info.costIron || r.ice < info.costIce || r.rawOre < info.costRawOre) {
       // Not enough resources
       return false;
     }
     // Deduct resources
     r.iron -= info.costIron;
     r.ice -= info.costIce;
+    r.rawOre -= info.costRawOre;
     setUiIron(r.iron);
     setUiIce(r.ice);
+    setUiRawOre(r.rawOre);
     // Create structure at floor point
     const group = createStructureMesh(type);
     group.position.copy(point);
     scene.add(group);
-    structuresRef.current.push({ group, type });
+    let structureType: BuildType = type;
+    // Initialize smelter-specific state
+    if (type === 'smelter') {
+      structureType = 'smelter';
+      (group as any).smelterInventory = { rawOre: 0 };
+      (group as any).smelterIsProcessing = false;
+      (group as any).smelterProcessingProgress = 0;
+      (group as any).smelterLastProcessTime = 0;
+    }
+    structuresRef.current.push({ group, type: structureType });
     // Small particle puff
     createParticles(point.clone().setY(0.5), 8, 0x00ffff);
     return true;
