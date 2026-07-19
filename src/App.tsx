@@ -10,6 +10,7 @@ import {
 } from './components/Modals';
 import { EndingChoice } from './components/EndingChoice';
 import { NarratorScene } from './components/NarratorScene';
+import { HullBreach3D } from './components/HullBreach3D';
 
 export function App() {
   const engineRef = useRef<GameEngine | null>(null);
@@ -84,14 +85,17 @@ export function App() {
             <p>You wake in a jettisoned escape pod. 30 minutes of O2. No contact. Just you and the void.</p>
             <p><strong>Survive. Build. Explore. Find the signal.</strong></p>
           </div>
-          <button className="intro-start" onClick={startGame}>
-            Launch EVA
+          <button className="intro-start" onClick={() => setShowSurvival3D(true)}>
+            Launch EVA (3D)
           </button>
-          <button className="intro-start-alt" onClick={() => setShowSurvival3D(true)}>
-            Enter 3D Survival Mode
+          <button className="intro-start-alt" onClick={startGame}>
+            Classic 2D Mode
           </button>
           <button className="intro-start-alt-2" onClick={() => setScreen('narrator')}>
             Access Signal Questline
+          </button>
+          <button className="intro-hull-breach" onClick={() => setScreen('hullBreach')}>
+            View Hull Breaches
           </button>
           <div className="intro-controls">
             <p><strong>Controls:</strong></p>
@@ -115,6 +119,9 @@ export function App() {
 
       {/* Narrator Questline Screen */}
       {screen === 'narrator' && <NarratorScene onQuestComplete={handleQuestComplete} onGameOver={() => {}} />}
+
+      {/* Hull Breach 3D Screen */}
+      {screen === 'hullBreach' && <HullBreach3D />}
 
       {/* Game canvas */}
       {showSurvival3D ? (
