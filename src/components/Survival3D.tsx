@@ -42,7 +42,7 @@ interface BuildTypeInfo {
   name: string;
   costIron: number;
   costIce: number;
-  costRawOre: number; // NEW: smelter builds with raw ore
+  costRawOre: number;
   hotkey: string;
 }
 
@@ -52,6 +52,13 @@ const BUILD_TYPES: Record<BuildType, BuildTypeInfo> = {
   o2generator: { name: 'O2 Generator',  costIron: 0,  costIce: 10, costRawOre: 0, hotkey: '3' },
   smelter:     { name: 'Smelter',       costIron: 0,  costIce: 0, costRawOre: 10, hotkey: '4' },
 };
+
+// Smelting constants
+const SMELTER_PROCESS_RATE = 1 / 3; // 1/3 ore processed per tick (1 per 3 seconds)
+const SMELTER_ORE_TO_METAL = 1; // 1 raw ore produces 0.8 iron + 0.2 titanium
+const SMELTER_H2_CONSUMPTION = 1 / 5; // 1 H2 consumed per 5 ore processed
+const SMELTER_DEPOSIT_RANGE = 4; // Distance to deposit ore
+const SMELTER_DEPOSIT_KEY = 'KeyF'; // Deposit key
 
 // Asteroid runtime object
 interface Asteroid {
@@ -108,11 +115,14 @@ export function Survival3D() {
   const [uiOxygen, setUiOxygen] = useState(0); // oxygen resource count (separate from survival O2)
   const [uiRawOre, setUiRawOre] = useState(0); // raw ore (for smelter)
   const [uiH2, setUiH2] = useState(0); // H2 fuel
+  const [uiIronMetal, setUiIronMetal] = useState(0); // smelter output
+  const [uiTitaniumMetal, setUiTitaniumMetal] = useState(0); // smelter output
   const [uiHoveredAsteroid, setUiHoveredAsteroid] = useState<string>('');
   const [uiMiningProgress, setUiMiningProgress] = useState(0);
   const [uiBuildMode, setUiBuildMode] = useState(false);
   const [uiBuildType, setUiBuildType] = useState<BuildType>('dome');
-  const [compassHeading, setCompassHeading] = useState('E');
+  const [uiCompassHeading, setUiCompassHeading] = useState('E');
+  const [uiSmelterStatus, setUiSmelterStatus] = useState<string>(''); // hovered smelter status
 
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -129,7 +139,7 @@ export function Survival3D() {
   const buildPreviewRef = useRef<THREE.Group | null>(null); // holographic build preview
 
   // Resource refs (mirrored to UI state)
-  const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0 });
+  const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0, ironMetal: 0, titanium: 0 });
   const o2Ref = useRef(O2_MAX);
   const buildModeRef = useRef(false);
   const buildTypeRef = useRef<BuildType>('dome');
@@ -232,6 +242,42 @@ export function Survival3D() {
       isMined: false,
       basePosition: pos.clone(),
     };
+  };
+
+  // Deposit ore to smelter (called on F key press)
+  const depositOre = (): boolean => {
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    if (!scene || !camera) return false;
+
+    // Find all smelters
+    const smelters = structuresRef.current.filter(s => s.type === 'smelter');
+    if (smelters.length === 0) return false;
+
+    // Check if any smelter is within range (SMELTER_DEPOSIT_RANGE)
+    let nearbySmelter = null;
+    for (const smelter of smelters) {
+      const dist = smelter.group.position.distanceTo(camera.position);
+      if (dist <= SMELTER_DEPOSIT_RANGE) {
+        nearbySmelter = smelter;
+        break;
+      }
+    }
+
+    if (!nearbySmelter) return false;
+
+    // Check if player has raw ore
+    if (resourcesRef.current.rawOre < 1) return false;
+
+    // Deduct raw ore and add to smelter inventory
+    resourcesRef.current.rawOre -= 1;
+    setUiRawOre(resourcesRef.current.rawOre);
+    nearbySmelter.inventory.rawOre += 1;
+
+    // Create deposit particles at smelter intake
+    createParticles(nearbySmelter.group.position.clone().add(new THREE.Vector3(0, 0.3, 0)), 5, 0x888888);
+
+    return true;
   };
 
   const respawnAsteroid = (asteroid: Asteroid) => {
@@ -694,6 +740,11 @@ export function Survival3D() {
         }
         return;
       }
+      // F key: deposit ore to smelter
+      if (e.code === SMELTER_DEPOSIT_KEY) {
+        depositOre();
+        return;
+      }
       // 1/2/3/4 select build type (only in build mode)
       if (buildModeRef.current) {
         if (e.code === 'Digit1') { buildTypeRef.current = 'dome';        setUiBuildType('dome');        updateBuildPreviewMesh('dome'); }
@@ -796,7 +847,7 @@ export function Survival3D() {
       else if (yawDeg >= 202.5 && yawDeg < 247.5) heading = 'SW';
       else if (yawDeg >= 247.5 && yawDeg < 292.5) heading = 'W';
       else if (yawDeg >= 292.5 && yawDeg < 337.5) heading = 'NW';
-      setCompassHeading(heading);
+      setUiCompassHeading(heading);
 
       // Use refs to avoid stale closure — we re-read each frame via a small closure object
       // (We re-grab from refs below.)
@@ -1017,8 +1068,76 @@ export function Survival3D() {
       // ===== Particles =====
       updateParticles(clampedDtSafe(clampedDt));
 
+      // ===== Smelter processing =====
+      processSmelters();
+
       // Render
       renderer.render(scene, camera);
+    };
+
+    // Smelter processing loop (runs in updateGame)
+    const processSmelters = () => {
+      const now = Date.now() / 1000;
+      for (const smelter of structuresRef.current) {
+        if (smelter.type !== 'smelter') continue;
+
+        const { group, inventory, isProcessing, processingProgress, lastProcessTime } = smelter;
+
+        // Animate processing interior glow
+        const interiorMat = (group as any).smelterInterior;
+        if (isProcessing && interiorMat) {
+          const interior = interiorMat as THREE.Mesh;
+          // Pulse orange glow based on progress
+          const pulseIntensity = 0.6 + Math.sin(now * 10) * 0.3;
+          (interior.material as THREE.MeshBasicMaterial).opacity = pulseIntensity * processingProgress;
+          (interior.material as THREE.MeshBasicMaterial).color.set(0xff6600);
+        } else if (interiorMat) {
+          const interior = interiorMat as THREE.Mesh;
+          (interior.material as THREE.MeshBasicMaterial).opacity = 0;
+        }
+
+        // Process ore when ready
+        if (inventory.rawOre > 0 && isProcessing) {
+          // Check H2
+          if (resourcesRef.current.h2 <= 0) {
+            // H2 depleted - stop processing
+            smelter.isProcessing = false;
+            continue;
+          }
+
+          // Process ore at SMELTER_PROCESS_RATE (1 per 3 seconds)
+          if (now - lastProcessTime >= SMELTER_PROCESS_RATE) {
+            smelter.lastProcessTime = now;
+            
+            // Consume H2 (1 per 5 ore processed = SMELTER_H2_CONSUMPTION per tick)
+            resourcesRef.current.h2 -= SMELTER_H2_CONSUMPTION;
+            setUiH2(resourcesRef.current.h2);
+
+            // Process ore
+            if (inventory.rawOre > 0) {
+              inventory.rawOre -= 1;
+              
+              // Output: 0.8 Iron + 0.2 Titanium
+              const ironOutput = SMELTER_ORE_TO_METAL * 0.8;
+              const titaniumOutput = SMELTER_ORE_TO_METAL * 0.2;
+              resourcesRef.current.ironMetal += ironOutput;
+              resourcesRef.current.titanium += titaniumOutput;
+              setUiIronMetal(resourcesRef.current.ironMetal);
+              setUiTitaniumMetal(resourcesRef.current.titanium);
+
+              // Spawn smoke particles at chimney
+              const chimneyPos = new THREE.Vector3(0, 3.4, 0);
+              chimneyPos.applyMatrix4(group.matrixWorld);
+              createParticles(chimneyPos, 2, 0x888888);
+
+              // Spawn ore particles at intake
+              const intakePos = new THREE.Vector3(0, 0.3, 0);
+              intakePos.applyMatrix4(group.matrixWorld);
+              createParticles(intakePos, 3, 0xaaaaaa);
+            }
+          }
+        }
+      }
     };
 
     // Start game loop
@@ -1101,14 +1220,14 @@ export function Survival3D() {
     ctx.fillStyle = '#ffffff';
     for (const asteroid of asteroidsRef.current) {
       if (asteroid.isMined) continue;
-      
+
       // Convert world position to minimap coordinates
       const dx = asteroid.mesh.position.x - cameraRef.current.position.x;
-      const dz = asteroid.mesh.position.z - cameraRef.current.z;
+      const dz = asteroid.mesh.position.z - cameraRef.current.position.z;
       const scale = 4;
       const mapX = (width / 2) + dx * scale;
       const mapY = (height / 2) + dz * scale;
-      
+
       // Only draw if on screen
       if (mapX > -10 && mapX < width + 10 && mapY > -10 && mapY < height + 10) {
         const color = asteroid.type === 'iron' ? '#888888' :
@@ -1119,13 +1238,13 @@ export function Survival3D() {
         ctx.fill();
       }
     }
-    
+
     // Draw structures
     ctx.fillStyle = '#00ffff';
     for (const structure of structuresRef.current) {
       // Convert world position to minimap coordinates
       const dx = structure.group.position.x - cameraRef.current.position.x;
-      const dz = structure.group.position.z - cameraRef.current.z;
+      const dz = structure.group.position.z - cameraRef.current.position.z;
       const scale = 4;
       const mapX = (width / 2) + dx * scale;
       const mapY = (height / 2) + dz * scale;
@@ -1141,7 +1260,7 @@ export function Survival3D() {
   const handleRestart = () => {
     // Reset refs
     o2Ref.current = O2_MAX;
-    resourcesRef.current = { iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0 };
+    resourcesRef.current = { iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0, ironMetal: 0, titanium: 0 };
     buildModeRef.current = false;
     buildTypeRef.current = 'dome';
     mouseDownRef.current = false;
@@ -1181,7 +1300,9 @@ export function Survival3D() {
     setUiBuildType('dome');
     setUiMiningProgress(0);
     setUiHoveredAsteroid('');
-    setCompassHeading('E');
+    setUiCompassHeading('E');
+    setUiIronMetal(0);
+    setUiTitaniumMetal(0);
     setGameState(INITIAL_GAME_STATE);
   };
 
@@ -1217,7 +1338,7 @@ export function Survival3D() {
       {/* Compass/heading — top center, above O2 */}
       {!gameState.gameOver && (
         <div style={styles.compassContainer}>
-          <span style={styles.compassText}>{compassHeading} / 8</span>
+          <span style={styles.compassText}>{uiCompassHeading} / 8</span>
         </div>
       )}
 
@@ -1266,15 +1387,19 @@ export function Survival3D() {
         <div style={styles.resourcePanel}>
           <div style={styles.resourceRow}>
             <span style={{ ...styles.resourceIcon, backgroundColor: '#888888' }} />
-            <span style={styles.resourceText}>Iron: {uiIron}</span>
+            <span style={styles.resourceText}>Raw Ore: {uiRawOre}</span>
           </div>
           <div style={styles.resourceRow}>
             <span style={{ ...styles.resourceIcon, backgroundColor: '#00aaff' }} />
-            <span style={styles.resourceText}>Ice: {uiIce}</span>
+            <span style={styles.resourceText}>Water Ice: {uiIce}</span>
           </div>
           <div style={styles.resourceRow}>
-            <span style={{ ...styles.resourceIcon, backgroundColor: '#00ff88' }} />
-            <span style={styles.resourceText}>Oxygen Crystals: {uiOxygen}</span>
+            <span style={{ ...styles.resourceIcon, backgroundColor: '#ffaa00' }} />
+            <span style={styles.resourceText}>Iron Metal: {uiIronMetal}</span>
+          </div>
+          <div style={styles.resourceRow}>
+            <span style={{ ...styles.resourceIcon, backgroundColor: '#ff6600' }} />
+            <span style={styles.resourceText}>Titanium: {uiTitaniumMetal}</span>
           </div>
         </div>
       )}
@@ -1310,12 +1435,13 @@ export function Survival3D() {
         <div style={styles.buildMenu}>
           <div style={styles.buildMenuTitle}>BUILD MENU</div>
           <div style={styles.buildMenuRow}>
-            {(['dome', 'solar', 'o2generator'] as BuildType[]).map((t, idx) => {
+            {(['dome', 'solar', 'o2generator', 'smelter'] as BuildType[]).map((t, idx) => {
               const info = BUILD_TYPES[t];
               const selected = uiBuildType === t;
               const affordable =
                 resourcesRef.current.iron >= info.costIron &&
-                resourcesRef.current.ice >= info.costIce;
+                resourcesRef.current.ice >= info.costIce &&
+                resourcesRef.current.rawOre >= info.costRawOre;
               return (
                 <div
                   key={t}
@@ -1331,6 +1457,7 @@ export function Survival3D() {
                   <div style={styles.buildMenuItemCost}>
                     {info.costIron > 0 && <span style={{ color: '#aaa' }}>🪨 {info.costIron} Iron </span>}
                     {info.costIce > 0 && <span style={{ color: '#00aaff' }}>❄️ {info.costIce} Ice</span>}
+                    {info.costRawOre > 0 && <span style={{ color: '#ffaa00' }}>🪨 {info.costRawOre} Ore</span>}
                   </div>
                 </div>
               );
