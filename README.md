@@ -1,14 +1,14 @@
 # Spacenautica
 
-A Subnautica-style survival game in space with 2D and 3D modes.
+A Subnautica-style 3D survival game in space, built with Three.js.
 
 [**🎮 Play Spacenautica →**](https://newstex-sparky.github.io/spacenautica/)
 
 ## Project Structure
 
-This is a multi-stage development project:
-- M0: 2D MVP (completed) — basic survival mechanics
-- M1-M5: 3D conversion — various 3D features and improvements
+This is a 3D first-person survival game:
+- M0: 2D MVP (completed & removed) — basic survival mechanics
+- M1-M5: 3D conversion — various 3D features and improvements (in progress)
 
 ## Development Issues
 

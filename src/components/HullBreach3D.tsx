@@ -64,7 +64,11 @@ const CRACK_PATTERNS: Record<HullBreachType, CrackGeometry[]> = {
   ],
 };
 
-export function HullBreach3D() {
+interface HullBreach3DProps {
+  onExit?: () => void;
+}
+
+export function HullBreach3D({ onExit }: HullBreach3DProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hullState, setHullState] = useState<HullState>({
     maxIntegrity: 100,
@@ -512,6 +516,12 @@ export function HullBreach3D() {
   return (
     <div className="hull-breach-container">
       <div ref={containerRef} className="hull-breach-3d" />
+
+      {onExit && (
+        <button className="back-to-main" onClick={onExit} style={{ top: 20, left: 20, right: 'auto' }}>
+          ← Back to Main Menu
+        </button>
+      )}
 
       {/* Breach UI */}
       {hullState.breaches.length > 0 && (
