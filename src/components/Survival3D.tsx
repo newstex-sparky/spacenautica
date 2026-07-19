@@ -692,11 +692,12 @@ export function Survival3D() {
         }
         return;
       }
-      // 1/2/3 select build type (only in build mode)
+      // 1/2/3/4 select build type (only in build mode)
       if (buildModeRef.current) {
         if (e.code === 'Digit1') { buildTypeRef.current = 'dome';        setUiBuildType('dome');        updateBuildPreviewMesh('dome'); }
         if (e.code === 'Digit2') { buildTypeRef.current = 'solar';       setUiBuildType('solar');       updateBuildPreviewMesh('solar'); }
         if (e.code === 'Digit3') { buildTypeRef.current = 'o2generator'; setUiBuildType('o2generator'); updateBuildPreviewMesh('o2generator'); }
+        if (e.code === 'Digit4') { buildTypeRef.current = 'smelter';     setUiBuildType('smelter');     updateBuildPreviewMesh('smelter'); }
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => { keysRef.current[e.code] = false; };
@@ -978,7 +979,8 @@ export function Survival3D() {
             const info = BUILD_TYPES[buildTypeRef.current];
             const canAfford =
               resourcesRef.current.iron >= info.costIron &&
-              resourcesRef.current.ice >= info.costIce;
+              resourcesRef.current.ice >= info.costIce &&
+              resourcesRef.current.rawOre >= info.costRawOre;
             preview.traverse(child => {
               if (child instanceof THREE.Mesh) {
                 const m = child.material as THREE.MeshStandardMaterial | THREE.MeshBasicMaterial;
@@ -1041,7 +1043,7 @@ export function Survival3D() {
   const handleRestart = () => {
     // Reset refs
     o2Ref.current = O2_MAX;
-    resourcesRef.current = { iron: 0, ice: 0, oxygen: 0 };
+    resourcesRef.current = { iron: 0, ice: 0, oxygen: 0, rawOre: 0 };
     buildModeRef.current = false;
     buildTypeRef.current = 'dome';
     mouseDownRef.current = false;
