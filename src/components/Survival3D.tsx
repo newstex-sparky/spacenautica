@@ -117,6 +117,7 @@ export function Survival3D() {
   const [uiWave, setUiWave] = useState(1);
   const [uiLeviathanHealth, setUiLeviathanHealth] = useState(200);
   const [uiLeviathanStage, setUiLeviathanStage] = useState(0);
+  const [pointerLocked, setPointerLocked] = useState(false);
 
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -132,6 +133,8 @@ export function Survival3D() {
   // Input refs
   const keysRef = useRef<Record<string, boolean>>({});
   const mouseRef = useRef<Record<string, number>>({ x: 0, y: 0 });
+  const yawRef = useRef(0);   // horizontal look angle (radians)
+  const pitchRef = useRef(0); // vertical look angle (radians)
   const gameLoopRef = useRef<number | null>(null);
   const screenShakeRef = useRef(0);
 
@@ -145,18 +148,18 @@ export function Survival3D() {
     scene.fog = new THREE.Fog(0x0a0a1a, 10, 50);
     sceneRef.current = scene;
 
-    // Camera
+    // Camera — first-person, at eye level
     const camera = new THREE.PerspectiveCamera(
       75,
       window.innerWidth / window.innerHeight,
       0.1,
       1000
     );
-    camera.position.set(0, PLAYER_HEIGHT, 5);
+    camera.position.set(0, PLAYER_HEIGHT, 0);
     cameraRef.current = camera;
 
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // Renderer — preserveDrawingBuffer so screenshots can capture the 3D scene
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -188,13 +191,13 @@ export function Survival3D() {
     const gridHelper = new THREE.GridHelper(100, 50, 0x00ffff, 0x001133);
     scene.add(gridHelper);
 
-    // Create player
+    // Create player — invisible in first-person (camera IS the player)
     const player = new THREE.Group();
-    player.position.y = PLAYER_HEIGHT;
+    player.position.set(0, PLAYER_HEIGHT, 0);
     scene.add(player);
     playerRef.current = player;
 
-    // Player helmet
+    // Player helmet — hidden in first-person view (visible only in third-person)
     const helmetGeometry = new THREE.CapsuleGeometry(0.4, 1, 8, 16);
     const helmetMaterial = new THREE.MeshStandardMaterial({
       color: 0xff6600,
@@ -203,9 +206,10 @@ export function Survival3D() {
     });
     const helmet = new THREE.Mesh(helmetGeometry, helmetMaterial);
     helmet.castShadow = true;
+    helmet.visible = false; // hide in first-person
     player.add(helmet);
 
-    // Player visor
+    // Player visor — hidden in first-person
     const visorGeometry = new THREE.BoxGeometry(0.5, 0.25, 0.4);
     const visorMaterial = new THREE.MeshStandardMaterial({
       color: 0x00aaff,
@@ -214,13 +218,15 @@ export function Survival3D() {
     });
     const visor = new THREE.Mesh(visorGeometry, visorMaterial);
     visor.position.set(0, 0.1, 0.6);
+    visor.visible = false; // hide in first-person
     player.add(visor);
 
-    // Mining laser
+    // Mining laser — positioned in front of camera (first-person tool)
     const laserGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.5);
     const laserMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
     const miningLaser = new THREE.Mesh(laserGeometry, laserMaterial);
-    miningLaser.position.set(0, 0.25, 0);
+    miningLaser.position.set(0.3, -0.2, -0.8); // bottom-right of view, pointing forward
+    miningLaser.rotation.x = Math.PI / 2; // point forward (-Z)
     player.add(miningLaser);
     miningLaserRef.current = miningLaser;
 
@@ -246,22 +252,46 @@ export function Survival3D() {
     window.addEventListener('resize', handleResize);
 
     // Input handlers
-    const handleKeyDown = (e: KeyboardEvent) => keysRef.current[e.code] = true;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      keysRef.current[e.code] = true;
+      // ESC to toggle pause
+      if (e.code === 'Escape') {
+        setGameState(prev => ({ ...prev, isPaused: !prev.isPaused }));
+      }
+    };
     const handleKeyUp = (e: KeyboardEvent) => keysRef.current[e.code] = false;
     const handleMouseMove = (e: MouseEvent) => {
-      mouseRef.current.x = (e.clientX / window.innerWidth) * 2 - 1;
-      mouseRef.current.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      // FPS mouse look — uses movementX/movementY (works with pointer lock)
+      if (document.pointerLockElement) {
+        yawRef.current -= e.movementX * 0.002;
+        pitchRef.current -= e.movementY * 0.002;
+        // Clamp pitch to avoid flipping
+        pitchRef.current = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitchRef.current));
+      } else {
+        mouseRef.current.x = (e.clientX / window.innerWidth) * 2 - 1;
+        mouseRef.current.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      }
     };
     const handleClick = (e: MouseEvent) => {
+      // Request pointer lock on click (for FPS mouse look)
+      if (!document.pointerLockElement && containerRef.current) {
+        containerRef.current.requestPointerLock();
+        return;
+      }
       if (e.button === 0 && !gameState.gameOver && !gameState.isPaused) {
         shoot();
       }
+    };
+
+    const handlePointerLockChange = () => {
+      setPointerLocked(!!document.pointerLockElement);
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mousedown', handleClick);
+    document.addEventListener('pointerlockchange', handlePointerLockChange);
 
     // Create initial leviathan
     createLeviathan(scene);
@@ -274,6 +304,7 @@ export function Survival3D() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('pointerlockchange', handlePointerLockChange);
       window.removeEventListener('resize', handleResize);
 
       if (gameLoopRef.current) {
@@ -634,42 +665,54 @@ export function Survival3D() {
       if (screenShakeRef.current < 0.001) screenShakeRef.current = 0;
     }
 
-    // Screen shake offset
-    camera.position.x += (Math.random() - 0.5) * screenShakeRef.current * 10;
-    camera.position.y = PLAYER_HEIGHT + (Math.random() - 0.5) * screenShakeRef.current * 5;
-    camera.position.z += (Math.random() - 0.5) * screenShakeRef.current * 5;
-    camera.lookAt(player.position);
-
-    // Player movement
+    // First-person movement (WASD relative to camera facing via yaw)
     const moveDirection = new THREE.Vector3();
-    if (keysRef.current['KeyW']) moveDirection.z -= 1;
-    if (keysRef.current['KeyS']) moveDirection.z += 1;
-    if (keysRef.current['KeyA']) moveDirection.x -= 1;
-    if (keysRef.current['KeyD']) moveDirection.x += 1;
+    // Forward vector based on yaw (flattened to XZ plane)
+    const fwdX = Math.sin(yawRef.current);
+    const fwdZ = Math.cos(yawRef.current);
+    // Right vector is perpendicular to forward
+    const rightX = Math.cos(yawRef.current);
+    const rightZ = -Math.sin(yawRef.current);
+
+    if (keysRef.current['KeyW']) { moveDirection.x += fwdX; moveDirection.z += fwdZ; }
+    if (keysRef.current['KeyS']) { moveDirection.x -= fwdX; moveDirection.z -= fwdZ; }
+    if (keysRef.current['KeyA']) { moveDirection.x -= rightX; moveDirection.z -= rightZ; }
+    if (keysRef.current['KeyD']) { moveDirection.x += rightX; moveDirection.z += rightZ; }
 
     if (moveDirection.length() > 0) {
       moveDirection.normalize().multiplyScalar(PLAYER_SPEED * 0.016);
       player.position.add(moveDirection);
-
-      // Keep player on grid (smooth movement)
-      player.position.x = Math.round(player.position.x);
-      player.position.z = Math.round(player.position.z);
+      // Smooth position (no grid snapping — free 3D movement)
+      // Rotate player to face movement direction (for laser orientation)
+      const targetAngle = Math.atan2(moveDirection.x, moveDirection.z);
+      player.rotation.y = targetAngle;
     }
 
-    // Rotation based on movement
-    if (moveDirection.length() > 0) {
-      player.rotation.y = Math.atan2(moveDirection.x, moveDirection.z);
-    }
+    // First-person camera: position at player's eye level, look based on yaw/pitch
+    const shakeX = (Math.random() - 0.5) * screenShakeRef.current * 10;
+    const shakeY = (Math.random() - 0.5) * screenShakeRef.current * 5;
+    camera.position.set(
+      player.position.x + shakeX,
+      PLAYER_HEIGHT + shakeY,
+      player.position.z
+    );
 
-    // Camera follows player
-    const targetCameraPos = player.position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT, 5));
-    camera.position.lerp(targetCameraPos, 0.1);
-    camera.lookAt(player.position.clone().add(new THREE.Vector3(0, 0, -5)));
+    // Camera looks in the direction defined by yaw (horizontal) and pitch (vertical)
+    const lookDir = new THREE.Vector3(
+      Math.sin(yawRef.current) * Math.cos(pitchRef.current),
+      Math.sin(pitchRef.current),
+      Math.cos(yawRef.current) * Math.cos(pitchRef.current)
+    );
+    const lookTarget = new THREE.Vector3().copy(camera.position).add(lookDir);
+    camera.lookAt(lookTarget);
 
-    // Update mining laser direction
+    // Update player rotation to match camera yaw (for laser orientation)
+    player.rotation.y = yawRef.current;
+
+    // Update mining laser direction — follows where camera looks
     if (miningLaserRef.current) {
-      miningLaserRef.current.rotation.x = -Math.PI / 2 + player.rotation.x;
-      miningLaserRef.current.rotation.z = -player.rotation.y;
+      miningLaserRef.current.rotation.x = 0;
+      miningLaserRef.current.rotation.z = 0;
     }
 
     // Update bullets
@@ -710,19 +753,19 @@ export function Survival3D() {
     const scene = sceneRef.current;
     if (!scene || !playerRef.current || !cameraRef.current) return;
 
-    const direction = new THREE.Vector3();
-    direction.subVectors(
-      camera.position.clone(),
-      playerRef.current.position.clone()
-    );
-    direction.y = 0;
-    direction.normalize();
+    // Shoot from camera center in the direction the camera is looking (first-person)
+    const direction = new THREE.Vector3(
+      Math.sin(yawRef.current) * Math.cos(pitchRef.current),
+      Math.sin(pitchRef.current),
+      Math.cos(yawRef.current) * Math.cos(pitchRef.current)
+    ).normalize();
 
     const bulletGeometry = new THREE.SphereGeometry(0.1);
     const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
     const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
-    bullet.position.copy(playerRef.current.position);
-    bullet.position.y = PLAYER_HEIGHT;
+    // Start bullet at camera position (slightly forward so it doesn't clip the player)
+    bullet.position.copy(camera.position);
+    bullet.position.add(direction.clone().multiplyScalar(0.5));
 
     bullet.userData = {
       velocity: direction.clone().multiplyScalar(BULLET_SPEED),
@@ -937,6 +980,23 @@ export function Survival3D() {
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100vh', position: 'relative' }}>
+      {/* First-person crosshair */}
+      {!gameState.gameOver && !gameState.isPaused && (
+        <div style={styles.crosshair}>
+          <div style={styles.crosshairH} />
+          <div style={styles.crosshairV} />
+          <div style={styles.crosshairDot} />
+        </div>
+      )}
+
+      {/* Click-to-look hint (shows when pointer not locked) */}
+      {!gameState.gameOver && !gameState.isPaused && !pointerLocked && (
+        <div style={styles.hintOverlay} onClick={() => containerRef.current?.requestPointerLock()}>
+          <div style={styles.hintText}>🖱️ CLICK TO LOOK AROUND</div>
+          <div style={styles.hintSubtext}>WASD: Move · Mouse: Aim · Click: Shoot · ESC: Pause</div>
+        </div>
+      )}
+
       {/* Health bar */}
       <div style={styles.healthBarContainer}>
         <div style={styles.healthBar}>
@@ -978,7 +1038,7 @@ export function Survival3D() {
       {/* Game over overlay */}
       {gameState.gameOver && (
         <div style={styles.gameOverOverlay}>
-          <h1 style={styles.gameOverTitle}>WAVE SURVIVED</h1>
+          <h1 style={styles.gameOverTitle}>GAME OVER</h1>
           <p style={styles.gameOverScore}>Final Score: {uiScore}</p>
           <p style={styles.gameOverWave}>Wave Reached: {uiWave}</p>
           <button
@@ -1001,7 +1061,7 @@ export function Survival3D() {
             }}
             style={styles.restartButton}
           >
-            CONTINUE TO NEXT WAVE
+            RESTART
           </button>
         </div>
       )}
@@ -1028,6 +1088,70 @@ export function Survival3D() {
 }
 
 const styles = {
+  crosshair: {
+    position: 'absolute' as const,
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: 30,
+    height: 30,
+    pointerEvents: 'none' as const,
+    zIndex: 10,
+  },
+  crosshairH: {
+    position: 'absolute' as const,
+    top: '50%',
+    left: '50%',
+    width: 20,
+    height: 2,
+    transform: 'translate(-50%, -50%)',
+    backgroundColor: 'rgba(0, 255, 0, 0.7)',
+  },
+  crosshairV: {
+    position: 'absolute' as const,
+    top: '50%',
+    left: '50%',
+    width: 2,
+    height: 20,
+    transform: 'translate(-50%, -50%)',
+    backgroundColor: 'rgba(0, 255, 0, 0.7)',
+  },
+  crosshairDot: {
+    position: 'absolute' as const,
+    top: '50%',
+    left: '50%',
+    width: 4,
+    height: 4,
+    transform: 'translate(-50%, -50%)',
+    borderRadius: '50%',
+    backgroundColor: 'rgba(0, 255, 0, 0.9)',
+  },
+  hintOverlay: {
+    position: 'absolute' as const,
+    top: '60%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: '20px 40px',
+    borderRadius: 12,
+    border: '1px solid rgba(0, 255, 255, 0.4)',
+    textAlign: 'center' as const,
+    cursor: 'pointer',
+    zIndex: 50,
+    pointerEvents: 'auto' as const,
+  },
+  hintText: {
+    color: '#00ffff',
+    fontFamily: 'monospace',
+    fontSize: 20,
+    textShadow: '0 0 8px #00ffff',
+    marginBottom: 8,
+  },
+  hintSubtext: {
+    color: 'rgba(0, 255, 255, 0.6)',
+    fontFamily: 'monospace',
+    fontSize: 13,
+  },
   healthBarContainer: {
     position: 'absolute',
     top: 20,
