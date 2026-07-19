@@ -107,10 +107,12 @@ export function Survival3D() {
   const [uiIce, setUiIce] = useState(0);
   const [uiOxygen, setUiOxygen] = useState(0); // oxygen resource count (separate from survival O2)
   const [uiRawOre, setUiRawOre] = useState(0); // raw ore (for smelter)
+  const [uiH2, setUiH2] = useState(0); // H2 fuel
   const [uiHoveredAsteroid, setUiHoveredAsteroid] = useState<string>('');
   const [uiMiningProgress, setUiMiningProgress] = useState(0);
   const [uiBuildMode, setUiBuildMode] = useState(false);
   const [uiBuildType, setUiBuildType] = useState<BuildType>('dome');
+  const [compassHeading, setCompassHeading] = useState('E');
 
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -127,7 +129,7 @@ export function Survival3D() {
   const buildPreviewRef = useRef<THREE.Group | null>(null); // holographic build preview
 
   // Resource refs (mirrored to UI state)
-  const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0, rawOre: 0 });
+  const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0 });
   const o2Ref = useRef(O2_MAX);
   const buildModeRef = useRef(false);
   const buildTypeRef = useRef<BuildType>('dome');
@@ -783,6 +785,19 @@ export function Survival3D() {
         paused: gameState.isPaused,
         gameOver: gameState.gameOver,
       };
+      // Update compass heading based on yaw
+      const yawDeg = (yawRef.current * 180 / Math.PI) % 360;
+      let heading = 'N';
+      if (yawDeg >= 337.5 || yawDeg < 22.5) heading = 'N';
+      else if (yawDeg >= 22.5 && yawDeg < 67.5) heading = 'NE';
+      else if (yawDeg >= 67.5 && yawDeg < 112.5) heading = 'E';
+      else if (yawDeg >= 112.5 && yawDeg < 157.5) heading = 'SE';
+      else if (yawDeg >= 157.5 && yawDeg < 202.5) heading = 'S';
+      else if (yawDeg >= 202.5 && yawDeg < 247.5) heading = 'SW';
+      else if (yawDeg >= 247.5 && yawDeg < 292.5) heading = 'W';
+      else if (yawDeg >= 292.5 && yawDeg < 337.5) heading = 'NW';
+      setCompassHeading(heading);
+
       // Use refs to avoid stale closure — we re-read each frame via a small closure object
       // (We re-grab from refs below.)
       const isPaused = gameOverRef.current ? true : false; // paused handled via setGameState; check below
@@ -1034,16 +1049,99 @@ export function Survival3D() {
     pausedRef.current = gameState.isPaused;
   }, [gameState.isPaused]);
 
+  // Sync resources when they change
+  useEffect(() => {
+    if (resourcesRef.current.h2 !== uiH2) {
+      resourcesRef.current.h2 = uiH2;
+    }
+    if (resourcesRef.current.iron !== uiIron) {
+      resourcesRef.current.iron = uiIron;
+    }
+    if (resourcesRef.current.ice !== uiIce) {
+      resourcesRef.current.ice = uiIce;
+    }
+    if (resourcesRef.current.oxygen !== uiOxygen) {
+      resourcesRef.current.oxygen = uiOxygen;
+    }
+    if (resourcesRef.current.rawOre !== uiRawOre) {
+      resourcesRef.current.rawOre = uiRawOre;
+    }
+  }, [uiH2, uiIron, uiIce, uiOxygen, uiRawOre]);
   // Sync gameOver ref when state changes (e.g. user clicks RESTART)
   useEffect(() => {
     gameOverRef.current = gameState.gameOver;
   }, [gameState.gameOver]);
 
+  // ====================== Minimap rendering ======================
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const canvas = containerRef.current.querySelector('canvas');
+    if (!canvas || !cameraRef.current) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    // Clear canvas
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.fillRect(0, 0, width, height);
+    
+    // Draw compass rose
+    ctx.fillStyle = '#00ffff';
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('N', width / 2, 20);
+    ctx.fillText('S', width / 2, height - 5);
+    ctx.fillText('W', 10, height / 2);
+    ctx.fillText('E', width - 10, height / 2);
+    
+    // Draw asteroids
+    ctx.fillStyle = '#ffffff';
+    for (const asteroid of asteroidsRef.current) {
+      if (asteroid.isMined) continue;
+      
+      // Convert world position to minimap coordinates
+      const dx = asteroid.mesh.position.x - cameraRef.current.position.x;
+      const dz = asteroid.mesh.position.z - cameraRef.current.z;
+      const scale = 4;
+      const mapX = (width / 2) + dx * scale;
+      const mapY = (height / 2) + dz * scale;
+      
+      // Only draw if on screen
+      if (mapX > -10 && mapX < width + 10 && mapY > -10 && mapY < height + 10) {
+        const color = asteroid.type === 'iron' ? '#888888' :
+                      asteroid.type === 'ice' ? '#00aaff' : '#00ff88';
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(mapX, mapY, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    
+    // Draw structures
+    ctx.fillStyle = '#00ffff';
+    for (const structure of structuresRef.current) {
+      // Convert world position to minimap coordinates
+      const dx = structure.group.position.x - cameraRef.current.position.x;
+      const dz = structure.group.position.z - cameraRef.current.z;
+      const scale = 4;
+      const mapX = (width / 2) + dx * scale;
+      const mapY = (height / 2) + dz * scale;
+      
+      // Only draw if on screen
+      if (mapX > -10 && mapX < width + 10 && mapY > -10 && mapY < height + 10) {
+        ctx.fillRect(mapX - 4, mapY - 4, 8, 8);
+      }
+    }
+  }, [uiH2, uiIron, uiIce, uiOxygen, uiRawOre]);
+
   // ====================== Restart handler ======================
   const handleRestart = () => {
     // Reset refs
     o2Ref.current = O2_MAX;
-    resourcesRef.current = { iron: 0, ice: 0, oxygen: 0, rawOre: 0 };
+    resourcesRef.current = { iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0 };
     buildModeRef.current = false;
     buildTypeRef.current = 'dome';
     mouseDownRef.current = false;
@@ -1078,10 +1176,12 @@ export function Survival3D() {
     setUiIron(0);
     setUiIce(0);
     setUiOxygen(0);
+    setUiH2(0);
     setUiBuildMode(false);
     setUiBuildType('dome');
     setUiMiningProgress(0);
     setUiHoveredAsteroid('');
+    setCompassHeading('E');
     setGameState(INITIAL_GAME_STATE);
   };
 
@@ -1089,6 +1189,7 @@ export function Survival3D() {
   const o2Pct = (uiO2 / O2_MAX) * 100;
   const o2Color = uiO2 > 30 ? '#00ff88' : uiO2 > 15 ? '#ffaa00' : '#ff3333';
 
+  // ====================== Render JSX ======================
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100vh', position: 'relative' }}>
       {/* First-person crosshair (kept from original) */}
@@ -1113,6 +1214,13 @@ export function Survival3D() {
         </div>
       )}
 
+      {/* Compass/heading — top center, above O2 */}
+      {!gameState.gameOver && (
+        <div style={styles.compassContainer}>
+          <span style={styles.compassText}>{compassHeading} / 8</span>
+        </div>
+      )}
+
       {/* O2 bar — top center, large, cyan/green */}
       {!gameState.gameOver && (
         <div style={styles.o2Container}>
@@ -1133,6 +1241,26 @@ export function Survival3D() {
         </div>
       )}
 
+      {/* H2 power bar — top center, below O2, orange */}
+      {!gameState.gameOver && (
+        <div style={styles.h2Container}>
+          <div style={styles.h2Label}>⚡ H₂</div>
+          <div style={styles.h2BarOuter}>
+            <div
+              style={{
+                ...styles.h2BarFill,
+                width: `${(uiH2 / 100) * 100}%`,
+                backgroundColor: uiH2 > 30 ? '#ffaa00' : uiH2 > 15 ? '#ff6600' : '#ff3333',
+                boxShadow: `0 0 12px ${uiH2 > 30 ? '#ffaa00' : uiH2 > 15 ? '#ff6600' : '#ff3333'}`,
+              }}
+            />
+            <div style={styles.h2TextOverlay}>
+              {Math.ceil(uiH2)} / 100
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Resource counts — bottom left with colored icons */}
       {!gameState.gameOver && (
         <div style={styles.resourcePanel}>
@@ -1148,6 +1276,13 @@ export function Survival3D() {
             <span style={{ ...styles.resourceIcon, backgroundColor: '#00ff88' }} />
             <span style={styles.resourceText}>Oxygen Crystals: {uiOxygen}</span>
           </div>
+        </div>
+      )}
+
+      {/* Minimap — top-right corner, showing asteroid positions */}
+      {!gameState.gameOver && (
+        <div style={styles.minimapContainer}>
+          <canvas width={200} height={200} style={styles.minimapCanvas} />
         </div>
       )}
 
@@ -1537,5 +1672,86 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontFamily: 'monospace',
     zIndex: 100,
+  },
+  // Compass/heading — top center
+  compassContainer: {
+    position: 'absolute',
+    top: 20,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 30,
+  },
+  compassText: {
+    color: '#00ffff',
+    fontFamily: 'monospace',
+    fontSize: 18,
+    fontWeight: 'bold',
+    textShadow: '0 0 8px #00ffff',
+  },
+  // H2 bar — top center, below O2
+  h2Container: {
+    position: 'absolute',
+    top: 65,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    zIndex: 30,
+  },
+  h2Label: {
+    color: '#ffaa00',
+    fontFamily: 'monospace',
+    fontSize: 20,
+    fontWeight: 'bold',
+    textShadow: '0 0 10px #ffaa00',
+  },
+  h2BarOuter: {
+    position: 'relative',
+    width: 360,
+    height: 28,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 14,
+    border: '2px solid #ffaa00',
+    overflow: 'hidden',
+  },
+  h2BarFill: {
+    height: '100%',
+    transition: 'width 0.1s linear, background-color 0.2s',
+  },
+  h2TextOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#ffffff',
+    fontFamily: 'monospace',
+    fontSize: 14,
+    fontWeight: 'bold',
+    textShadow: '0 0 6px #000',
+    pointerEvents: 'none',
+  },
+  // Minimap — top-right corner
+  minimapContainer: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    width: 200,
+    height: 200,
+    borderRadius: 12,
+    border: '3px solid #00ffff',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    overflow: 'hidden',
+    zIndex: 30,
+    boxShadow: '0 0 10px rgba(0, 255, 255, 0.3)',
+  },
+  minimapCanvas: {
+    width: '100%',
+    height: '100%',
+    display: 'block',
   },
 };
