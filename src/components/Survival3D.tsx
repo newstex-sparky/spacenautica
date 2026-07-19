@@ -139,6 +139,8 @@ export function Survival3D() {
   const [pointerLocked, setPointerLocked] = useState(false);
   const [uiScannerStatus, setUiScannerStatus] = useState('SCANNER: OFF');
   const [uiHoveredResource, setUiHoveredResource] = useState<string>('');
+  const [beacons, setBeacons] = useState<Array<{ position: THREE.Vector3; type: string; timestamp: number }>>([]);
+  const [showDensityOverlay, setShowDensityOverlay] = useState(false);
 
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -153,6 +155,7 @@ export function Survival3D() {
 
   // Scanner refs
   const scannerBeamRef = useRef<THREE.Mesh | null>(null);
+  const scannerPulseRef = useRef<THREE.Mesh | null>(null);
   const scannerHighlightsRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const oreDepositsRef = useRef<Map<string, { mesh: THREE.Mesh; type: string; amount: number }>>(new Map());
 
@@ -256,7 +259,7 @@ export function Survival3D() {
     player.add(miningLaser);
     miningLaserRef.current = miningLaser;
 
-    // Scanner beam — visual effect in first-person view
+    // Scanner beam — visual pulse effect in first-person view
     const scannerBeamGeometry = new THREE.ConeGeometry(0.1, 5, 32, 1, true);
     const scannerBeamMaterial = new THREE.MeshBasicMaterial({
       color: 0x00ffff,
@@ -271,6 +274,34 @@ export function Survival3D() {
     scannerBeam.visible = false;
     scene.add(scannerBeam);
     scannerBeamRef.current = scannerBeam;
+
+    // Scanner pulse wave — expanding cone around player
+    const scannerPulseGeometry = new THREE.ConeGeometry(0.5, 30, 32, 1, true);
+    const scannerPulseMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const scannerPulse = new THREE.Mesh(scannerPulseGeometry, scannerPulseMaterial);
+    scannerPulse.position.set(0, PLAYER_HEIGHT, 0);
+    scannerPulse.rotation.x = Math.PI; // point forward
+    scannerPulse.userData = { life: 0, maxLife: 2 }; // 2s pulse cycle
+    scene.add(scannerPulse);
+    scannerPulseRef.current = scannerPulse; // store in ref
+
+    // Beacon marker geometry (floating ring)
+    const beaconGeometry = new THREE.TorusGeometry(1, 0.1, 8, 32);
+    const beaconMaterial = new THREE.MeshBasicMaterial({ color: 0xff00ff, transparent: true, opacity: 0.8 });
+    const beacon = new THREE.Mesh(beaconGeometry, beaconMaterial);
+    beacon.position.set(0, PLAYER_HEIGHT + 1, 5); // Placed in front of player
+    beacon.userData = { floatOffset: 0, isBeacon: true };
+    scene.add(beacon);
+
+    // Scanner effect refs
+    scannerBeamRef.current = scannerPulse;
 
     // Create shield
     const shieldGeometry = new THREE.SphereGeometry(0.8, 16, 16);
@@ -303,6 +334,18 @@ export function Survival3D() {
       // L key to toggle scanner
       if (e.code === 'KeyL') {
         setGameState(prev => ({ ...prev, scannerActive: !prev.scannerActive }));
+      }
+      // B key to toggle beacon placement mode
+      if (e.code === 'KeyB' && !gameState.isPaused && !gameState.gameOver) {
+        setBeacons(prev => {
+          // Toggle beacon placement mode
+          if (prev.length > 0) {
+            return []; // Clear beacons (exit placement mode)
+          } else {
+            setShowDensityOverlay(true); // Enter placement mode
+            return prev;
+          }
+        });
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => keysRef.current[e.code] = false;
@@ -380,7 +423,7 @@ export function Survival3D() {
     };
   }, [gameState.gameOver, gameState.isPaused]);
 
-  // Scanner raycast for highlighting ore
+  // Scanner raycast for highlighting ore with ore-type colored outlines
   const updateScannerHighlights = () => {
     const scannerActive = gameState.scannerActive;
     const scene = sceneRef.current;
@@ -414,34 +457,53 @@ export function Survival3D() {
     const playerPos = player.position.clone();
     playerPos.y = PLAYER_HEIGHT;
 
-    // Iterate through intersects, but we only want to highlight the closest one
+    // Iterate through intersects
     if (intersects.length > 0) {
       const hit = intersects[0];
       const hitPos = hit.point;
+      const hitDistance = hit.distance;
 
-      // Check if within 30m
-      if (hit.distance <= SCANNER_RANGE) {
-        // Add highlight if not exists
+      // Check if within scanner range
+      if (hitDistance <= SCANNER_RANGE) {
+        const oreType = hit.object.userData.oreType || 'unknown';
+        const oreTypeInfo = ORE_TYPES[oreType] || { color: 0xaaaaaa };
+
+        // Add highlight with ore-type-specific color if not exists
         const key = `${hit.object.id}`;
         const currentHighlight = scannerHighlightsRef.current.get(key);
 
         if (!currentHighlight) {
-          // Create highlight mesh
+          // Get ore-type-specific color for outline (slightly darker/faded version)
+          const highlightColor = new THREE.Color(oreTypeInfo.color);
+          highlightColor.multiplyScalar(0.7);
+
+          // Create highlight mesh with ore-type colored wireframe
           const highlightGeometry = new THREE.BoxGeometry(2, 2, 2);
           const highlightMaterial = new THREE.MeshBasicMaterial({
-            color: 0x00ffff,
+            color: highlightColor,
             transparent: true,
-            opacity: 0.4,
-            wireframe: true,
+            opacity: 0.6,
           });
           const highlight = new THREE.Mesh(highlightGeometry, highlightMaterial);
+
+          // Add wireframe outline for extra visibility
+          const wireframeGeometry = new THREE.WireframeGeometry(highlightGeometry);
+          const wireframeMaterial = new THREE.LineBasicMaterial({
+            color: oreTypeInfo.color,
+            transparent: true,
+            opacity: 0.9,
+          });
+          const wireframe = new THREE.LineSegments(wireframeGeometry, wireframeMaterial);
+          highlight.add(wireframe);
+
           highlight.position.copy(hit.object.position);
           highlight.userData.parentId = hit.object.id;
+          highlight.userData.oreType = oreType; // Store ore type for UI
           scene.add(highlight);
           scannerHighlightsRef.current.set(key, highlight);
 
-          // Add point light for glow effect
-          const glowLight = new THREE.PointLight(0x00ffff, 1, 5);
+          // Add point light for ore-type-specific glow
+          const glowLight = new THREE.PointLight(oreTypeInfo.color, 1, 8);
           glowLight.position.copy(hit.object.position);
           scene.add(glowLight);
           hit.object.userData.glowLight = glowLight;
@@ -453,8 +515,7 @@ export function Survival3D() {
           highlight.position.copy(hit.object.position);
         }
 
-        // Show UI for hovered resource
-        const oreType = hit.object.userData.oreType || 'unknown';
+        // Show UI for hovered resource with ore-type color
         if (oreType !== 'unknown') {
           setUiHoveredResource(oreType);
         } else {
@@ -902,8 +963,50 @@ export function Survival3D() {
       scannerBeamRef.current.visible = gameState.scannerActive;
     }
 
+    // Update scanner pulse animation
+    if (scannerPulseRef.current) {
+      const pulse = scannerPulseRef.current;
+      if (gameState.scannerActive) {
+        pulse.userData.life += 0.016;
+        if (pulse.userData.life > pulse.userData.maxLife) {
+          pulse.userData.life = 0;
+        }
+        const progress = pulse.userData.life / pulse.userData.maxLife;
+        // Expand cone: 0.5 to 5 radius
+        pulse.scale.set(1 + progress * 9, 1, 1 + progress * 9);
+        // Fade in/out: 0 to 0.15
+        pulse.material.opacity = progress * 0.15;
+      } else {
+        pulse.material.opacity = 0;
+        pulse.scale.set(1, 1, 1);
+      }
+    }
+
     // Update scanner highlights
     updateScannerHighlights();
+
+    // Update beacons (floating markers visible at distance)
+    scene.traverse((object) => {
+      if (object.userData.isBeacon) {
+        // Float the beacon up and down
+        object.userData.floatOffset += 0.02;
+        object.position.y = PLAYER_HEIGHT + 1 + Math.sin(object.userData.floatOffset) * 0.3;
+        object.rotation.y += 0.01; // Slowly rotate
+      }
+    });
+
+    // Handle beacon placement (B key press)
+    if (showDensityOverlay && !gameState.isPaused && !gameState.gameOver) {
+      // Pressing B toggles beacon placement mode
+      setBeacons(prev => {
+        if (prev.length > 0) {
+          return []; // Exit placement mode
+        } else {
+          // Enter placement mode - show visual indicator
+          return prev;
+        }
+      });
+    }
 
     // First-person movement (WASD relative to camera facing via yaw)
     const moveDirection = new THREE.Vector3();
@@ -1270,6 +1373,20 @@ export function Survival3D() {
         </div>
       )}
 
+      {/* Resource density overlay (for beacon placement) */}
+      {showDensityOverlay && (
+        <div style={styles.densityOverlay}>
+          <div style={styles.densityOuterRing} />
+          <div style={styles.densityInnerRing} />
+          <div style={styles.densityCenter}>
+            {beacons.length} BEACONS PLACED
+          </div>
+          <div style={styles.densityLabel}>
+            [B] Toggle Placement Mode
+          </div>
+        </div>
+      )}
+
       {/* Leviathan health bar */}
       {leviathanRef.current && !leviathanRef.current.isDead && (
         <div style={styles.leviathanBarContainer}>
@@ -1469,6 +1586,71 @@ const styles = {
     fontSize: 16,
     textAlign: 'center',
     zIndex: 20,
+  },
+  densityOverlay: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: 200,
+    height: 200,
+    pointerEvents: 'none' as const,
+    zIndex: 15,
+  },
+  densityOuterRing: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    borderRadius: '50%',
+    border: '2px solid rgba(255, 0, 255, 0.6)',
+    backgroundColor: 'rgba(255, 0, 255, 0.1)',
+  },
+  densityInnerRing: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    width: '60%',
+    height: '60%',
+    borderRadius: '50%',
+    border: '1px solid rgba(255, 0, 255, 0.4)',
+    backgroundColor: 'rgba(255, 0, 255, 0.2)',
+  },
+  densityCenter: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: '80%',
+    height: '80%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'column' as const,
+    textAlign: 'center' as const,
+    color: '#ff00ff',
+    fontFamily: 'monospace',
+    fontSize: 11,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: '50%',
+    padding: '5px',
+  },
+  densityLabel: {
+    position: 'absolute',
+    bottom: 10,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    color: '#ff00ff',
+    fontFamily: 'monospace',
+    fontSize: 10,
+    textAlign: 'center' as const,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: '4px 8px',
+    borderRadius: 4,
+    border: '1px solid rgba(255, 0, 255, 0.4)',
+    zIndex: 20,
+    pointerEvents: 'none' as const,
   },
   leviathanBarContainer: {
     position: 'absolute',
