@@ -174,6 +174,29 @@ export function Survival3D() {
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true;
+
+    // Add surface veins: thin transparent mesh with same geometry, slight offset
+    const surfaceGeo = new THREE.IcosahedronGeometry(baseScale * 1.02, 1);
+    const surfacePos = surfaceGeo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < surfacePos.count; i++) {
+      const v = new THREE.Vector3().fromBufferAttribute(surfacePos, i);
+      // Slight outward offset for surface layer
+      v.normalize().multiplyScalar(1.02);
+      surfacePos.setXYZ(i, v.x, v.y, v.z);
+    }
+
+    const surfaceMat = new THREE.MeshBasicMaterial({
+      color: info.color,
+      transparent: true,
+      opacity: 0.15,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const surfaceMesh = new THREE.Mesh(surfaceGeo, surfaceMat);
+    surfaceMesh.position.y = mesh.position.y; // same position
+    surfaceMesh.userData = { isSurface: true, type };
+    mesh.add(surfaceMesh);
+
     mesh.userData = { isAsteroid: true, type };
     return mesh;
   };
