@@ -2,6 +2,8 @@
 
 A Subnautica-style survival game in space with 2D and 3D modes.
 
+[**🎮 Play Spacenautica →**](https://newstex-sparky.github.io/spacenautica/)
+
 ## Project Structure
 
 This is a multi-stage development project:
