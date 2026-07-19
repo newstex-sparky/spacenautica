@@ -382,8 +382,8 @@ export function Survival3D() {
     window.addEventListener('mousedown', handleClick);
     document.addEventListener('pointerlockchange', handlePointerLockChange);
 
-    // Create initial leviathan
-    createLeviathan(scene);
+    // Leviathan only spawns at wave 5+ — phase 1 is drone combat only
+    // (createLeviathan will be called when wave reaches 5)
 
     // Start game loop
     startGameLoop();
@@ -1155,7 +1155,13 @@ export function Survival3D() {
 
             // Increase wave on kill
             if (uiScore > gameState.wave * 100) {
-              setGameState(prev => ({ ...prev, wave: prev.wave + 1 }));
+              const newWave = gameState.wave + 1;
+              setGameState(prev => ({ ...prev, wave: newWave }));
+
+              // Spawn Void Leviathan at wave 5 (phase 2 begins)
+              if (newWave === 5 && sceneRef.current && !leviathanRef.current) {
+                createLeviathan(sceneRef.current);
+              }
             }
 
             // Remove from scene
