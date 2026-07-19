@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { createAsteroid, updateAsteroid, explodeAsteroid, AsteroidType } from '../models/AsteroidModel';
 import { ExtendedGroup } from '../models/Types';
+import { OreDeposit } from '../models/ModelTypes';
 
 // Game constants
 const PLAYER_HEIGHT = 1.6;
@@ -12,6 +13,7 @@ const MINING_LASER_SPEED = 30;
 const DRONE_SPAWN_INTERVAL = 5000;
 const PARTICLE_LIFETIME = 1;
 const SCREEN_SHAKE_INTENSITY = 0.1;
+const SCANNER_RANGE = 30;
 
 // Drone types
 type DroneType = 'salvager' | 'saboteur' | 'hunter';
@@ -98,7 +100,23 @@ interface GameState {
   leviathanState: LeviathanState;
   isPaused: boolean;
   gameOver: boolean;
+  scannerActive: boolean;
 }
+
+// Resource types from ore deposits
+interface OreTypeInfo {
+  name: string;
+  color: number;
+}
+
+const ORE_TYPES: Record<string, OreTypeInfo> = {
+  iron: { name: 'Iron Ore', color: 0xa8a8a8 },
+  gold: { name: 'Gold Ore', color: 0xffaa00 },
+  crystal: { name: 'Crystal', color: 0xffffff },
+  silicon: { name: 'Silicon', color: 0xe0e0e0 },
+  uranium: { name: 'Uranium', color: 0x00ff00 },
+  alien_alloy: { name: 'Alien Alloy', color: 0xff00ff },
+};
 
 export function Survival3D() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -111,6 +129,7 @@ export function Survival3D() {
     leviathanState: LeviathanState.IDLE,
     isPaused: false,
     gameOver: false,
+    scannerActive: false,
   });
   const [uiHealth, setUiHealth] = useState(100);
   const [uiScore, setUiScore] = useState(0);
@@ -118,6 +137,8 @@ export function Survival3D() {
   const [uiLeviathanHealth, setUiLeviathanHealth] = useState(200);
   const [uiLeviathanStage, setUiLeviathanStage] = useState(0);
   const [pointerLocked, setPointerLocked] = useState(false);
+  const [uiScannerStatus, setUiScannerStatus] = useState('SCANNER: OFF');
+  const [uiHoveredResource, setUiHoveredResource] = useState<string>('');
 
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -129,6 +150,11 @@ export function Survival3D() {
   const particlesRef = useRef<Particle[]>([]);
   const leviathanRef = useRef<Leviathan | null>(null);
   const miningLaserRef = useRef<THREE.Mesh | null>(null);
+
+  // Scanner refs
+  const scannerBeamRef = useRef<THREE.Mesh | null>(null);
+  const scannerHighlightsRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const oreDepositsRef = useRef<Map<string, { mesh: THREE.Mesh; type: string; amount: number }>>(new Map());
 
   // Input refs
   const keysRef = useRef<Record<string, boolean>>({});
@@ -230,6 +256,22 @@ export function Survival3D() {
     player.add(miningLaser);
     miningLaserRef.current = miningLaser;
 
+    // Scanner beam — visual effect in first-person view
+    const scannerBeamGeometry = new THREE.ConeGeometry(0.1, 5, 32, 1, true);
+    const scannerBeamMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const scannerBeam = new THREE.Mesh(scannerBeamGeometry, scannerBeamMaterial);
+    scannerBeam.position.set(0, PLAYER_HEIGHT, -2);
+    scannerBeam.rotation.x = Math.PI; // point forward
+    scannerBeam.visible = false;
+    scene.add(scannerBeam);
+    scannerBeamRef.current = scannerBeam;
+
     // Create shield
     const shieldGeometry = new THREE.SphereGeometry(0.8, 16, 16);
     const shieldMaterial = new THREE.MeshBasicMaterial({
@@ -257,6 +299,10 @@ export function Survival3D() {
       // ESC to toggle pause
       if (e.code === 'Escape') {
         setGameState(prev => ({ ...prev, isPaused: !prev.isPaused }));
+      }
+      // L key to toggle scanner
+      if (e.code === 'KeyL') {
+        setGameState(prev => ({ ...prev, scannerActive: !prev.scannerActive }));
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => keysRef.current[e.code] = false;
@@ -325,8 +371,191 @@ export function Survival3D() {
         p.mesh.geometry.dispose();
         (p.mesh.material as THREE.Material).dispose();
       });
+      scannerBeamRef.current?.geometry.dispose();
+      scannerBeamRef.current?.material.dispose();
+      scannerHighlightsRef.current.forEach(highlight => {
+        highlight.geometry.dispose();
+        (highlight.material as THREE.Material).dispose();
+      });
     };
   }, [gameState.gameOver, gameState.isPaused]);
+
+  // Scanner raycast for highlighting ore
+  const updateScannerHighlights = () => {
+    const scannerActive = gameState.scannerActive;
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    const player = playerRef.current;
+
+    if (!scannerActive || !scene || !camera || !player) return;
+
+    // Raycast from camera in forward direction
+    const direction = new THREE.Vector3(
+      Math.sin(yawRef.current) * Math.cos(pitchRef.current),
+      Math.sin(pitchRef.current),
+      Math.cos(yawRef.current) * Math.cos(pitchRef.current)
+    );
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.set(camera.position.clone(), direction.clone().normalize());
+    raycaster.far = SCANNER_RANGE;
+
+    // Collect all ore meshes from scene
+    const oreMeshes: THREE.Mesh[] = [];
+    scene.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.userData.isOre) {
+        oreMeshes.push(object);
+      }
+    });
+
+    const intersects = raycaster.intersectObjects(oreMeshes);
+
+    // Get player position for distance check
+    const playerPos = player.position.clone();
+    playerPos.y = PLAYER_HEIGHT;
+
+    // Iterate through intersects, but we only want to highlight the closest one
+    if (intersects.length > 0) {
+      const hit = intersects[0];
+      const hitPos = hit.point;
+
+      // Check if within 30m
+      if (hit.distance <= SCANNER_RANGE) {
+        // Add highlight if not exists
+        const key = `${hit.object.id}`;
+        const currentHighlight = scannerHighlightsRef.current.get(key);
+
+        if (!currentHighlight) {
+          // Create highlight mesh
+          const highlightGeometry = new THREE.BoxGeometry(2, 2, 2);
+          const highlightMaterial = new THREE.MeshBasicMaterial({
+            color: 0x00ffff,
+            transparent: true,
+            opacity: 0.4,
+            wireframe: true,
+          });
+          const highlight = new THREE.Mesh(highlightGeometry, highlightMaterial);
+          highlight.position.copy(hit.object.position);
+          highlight.userData.parentId = hit.object.id;
+          scene.add(highlight);
+          scannerHighlightsRef.current.set(key, highlight);
+
+          // Add point light for glow effect
+          const glowLight = new THREE.PointLight(0x00ffff, 1, 5);
+          glowLight.position.copy(hit.object.position);
+          scene.add(glowLight);
+          hit.object.userData.glowLight = glowLight;
+        }
+
+        // Update highlight position
+        const highlight = scannerHighlightsRef.current.get(key);
+        if (highlight) {
+          highlight.position.copy(hit.object.position);
+        }
+
+        // Show UI for hovered resource
+        const oreType = hit.object.userData.oreType || 'unknown';
+        if (oreType !== 'unknown') {
+          setUiHoveredResource(oreType);
+        } else {
+          setUiHoveredResource('');
+        }
+      } else {
+        // No ore in range, clear highlights
+        clearHighlights(playerPos);
+      }
+    } else {
+      // No ore in view, clear highlights
+      clearHighlights(playerPos);
+    }
+  };
+
+  const clearHighlights = (playerPos: THREE.Vector3) => {
+    // Remove all highlights
+    scannerHighlightsRef.current.forEach((highlight, key) => {
+      const parentMeshId = highlight.userData.parentId;
+      if (parentMeshId) {
+        // Remove glow light from parent
+        sceneRef.current?.traverse((object) => {
+          if (object.id === parentMeshId && object.userData.glowLight) {
+            sceneRef.current?.remove(object.userData.glowLight!);
+            object.userData.glowLight?.dispose();
+          }
+        });
+      }
+      sceneRef.current?.remove(highlight);
+      highlight.geometry.dispose();
+      (highlight.material as THREE.Material).dispose();
+    });
+    scannerHighlightsRef.current.clear();
+    setUiHoveredResource('');
+  };
+
+  // Add ore deposits to scene
+  const addOreDeposits = (scene: THREE.Scene) => {
+    const oreDeposits: Map<string, { mesh: THREE.Mesh; type: string; amount: number }> = new Map();
+
+    // Create ore deposits around the scene
+    const oreTypes: (keyof typeof ORE_TYPES)[] = ['iron', 'gold', 'crystal', 'silicon', 'uranium', 'alien_alloy'];
+
+    for (let i = 0; i < 15; i++) {
+      const type = oreTypes[Math.floor(Math.random() * oreTypes.length)];
+      const oreInfo = ORE_TYPES[type];
+
+      // Position randomly in the scene
+      const distance = 10 + Math.random() * 30;
+      const angle = Math.random() * Math.PI * 2;
+      const xPos = Math.cos(angle) * distance;
+      const zPos = Math.sin(angle) * distance;
+      const yPos = PLAYER_HEIGHT + Math.random() * 5;
+
+      // Create ore mesh
+      const oreGeometry = new THREE.SphereGeometry(0.3 + Math.random() * 0.3, 8, 8);
+      const oreMaterial = new THREE.MeshStandardMaterial({
+        color: oreInfo.color,
+        metalness: 0.7,
+        roughness: 0.3,
+      });
+      const oreMesh = new THREE.Mesh(oreGeometry, oreMaterial);
+      oreMesh.position.set(xPos, yPos, zPos);
+      oreMesh.userData = {
+        isOre: true,
+        oreType: type,
+        amount: 10 + Math.floor(Math.random() * 20),
+        glowLight: null,
+      };
+
+      // Add smaller ore clusters for visual detail
+      const clusterCount = 3 + Math.floor(Math.random() * 3);
+      for (let j = 0; j < clusterCount; j++) {
+        const clusterGeometry = new THREE.SphereGeometry(0.15 + Math.random() * 0.1, 8, 8);
+        const clusterMaterial = new THREE.MeshStandardMaterial({
+          color: oreInfo.color,
+          metalness: 0.7,
+          roughness: 0.3,
+        });
+        const cluster = new THREE.Mesh(clusterGeometry, clusterMaterial);
+        cluster.position.set(
+          0.3 + Math.random() * 0.5,
+          0.1 + Math.random() * 0.2,
+          0.3 + Math.random() * 0.5
+        );
+        cluster.visible = false; // Not directly visible to camera
+        oreMesh.add(cluster);
+      }
+
+      scene.add(oreMesh);
+
+      const key = `ore-${i}`;
+      oreDeposits.set(key, {
+        mesh: oreMesh,
+        type,
+        amount: 10 + Math.floor(Math.random() * 20),
+      });
+    }
+
+    oreDepositsRef.current = oreDeposits;
+  };
 
   // Drone spawner
   useEffect(() => {
@@ -474,6 +703,9 @@ export function Survival3D() {
       scareTimer: 0,
       isDead: false,
     };
+
+    // Add ore deposits after leviathan created
+    addOreDeposits(scene);
   };
 
   const updateLeviathan = (timestamp: number) => {
@@ -665,6 +897,14 @@ export function Survival3D() {
       if (screenShakeRef.current < 0.001) screenShakeRef.current = 0;
     }
 
+    // Toggle scanner beam visibility based on state
+    if (scannerBeamRef.current) {
+      scannerBeamRef.current.visible = gameState.scannerActive;
+    }
+
+    // Update scanner highlights
+    updateScannerHighlights();
+
     // First-person movement (WASD relative to camera facing via yaw)
     const moveDirection = new THREE.Vector3();
     // Forward vector based on yaw (flattened to XZ plane)
@@ -728,6 +968,7 @@ export function Survival3D() {
     updateLeviathan(timestamp);
 
     // Update UI
+    setUiScannerStatus(gameState.scannerActive ? 'SCANNER: ACTIVE' : 'SCANNER: OFF');
     setUiHealth(Math.max(0, uiHealth));
     setUiScore(uiScore);
     setUiWave(uiWave);
@@ -993,7 +1234,7 @@ export function Survival3D() {
       {!gameState.gameOver && !gameState.isPaused && !pointerLocked && (
         <div style={styles.hintOverlay} onClick={() => containerRef.current?.requestPointerLock()}>
           <div style={styles.hintText}>🖱️ CLICK TO LOOK AROUND</div>
-          <div style={styles.hintSubtext}>WASD: Move · Mouse: Aim · Click: Shoot · ESC: Pause</div>
+          <div style={styles.hintSubtext}>WASD: Move · Mouse: Aim · Click: Shoot · L: Toggle Scanner · ESC: Pause</div>
         </div>
       )}
 
@@ -1016,6 +1257,18 @@ export function Survival3D() {
         <div>WAVE: {uiWave}</div>
         <div>DRONES: {dronesRef.current.length}</div>
       </div>
+
+      {/* Scanner status */}
+      <div style={styles.scannerStatus}>
+        {uiScannerStatus}
+      </div>
+
+      {/* Hovered resource info */}
+      {uiHoveredResource && (
+        <div style={styles.hoveredResource}>
+          {ORE_TYPES[uiHoveredResource]?.name || uiHoveredResource}: {ORE_TYPES[uiHoveredResource]?.color}
+        </div>
+      )}
 
       {/* Leviathan health bar */}
       {leviathanRef.current && !leviathanRef.current.isDead && (
@@ -1052,6 +1305,7 @@ export function Survival3D() {
                 leviathanState: LeviathanState.IDLE,
                 isPaused: false,
                 gameOver: false,
+                scannerActive: false,
               });
               setUiHealth(100);
               setUiScore(0);
@@ -1186,6 +1440,35 @@ const styles = {
     fontFamily: 'monospace',
     fontSize: 16,
     textAlign: 'right',
+  },
+  scannerStatus: {
+    position: 'absolute',
+    top: 20,
+    left: 50,
+    transform: 'translateX(-50%)',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: '10px 20px',
+    borderRadius: 10,
+    border: '2px solid #00ffff',
+    color: '#00ffff',
+    fontFamily: 'monospace',
+    fontSize: 14,
+    zIndex: 20,
+  },
+  hoveredResource: {
+    position: 'absolute',
+    top: 80,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    padding: '10px 20px',
+    borderRadius: 10,
+    border: '2px solid #ffff00',
+    color: '#ffff00',
+    fontFamily: 'monospace',
+    fontSize: 16,
+    textAlign: 'center',
+    zIndex: 20,
   },
   leviathanBarContainer: {
     position: 'absolute',
