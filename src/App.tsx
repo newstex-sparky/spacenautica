@@ -44,8 +44,8 @@ export function App() {
           {/* Story text */}
           <div className="intro-story">
             <p>The colony ship <em>Meridian</em> was 37 jumps from home when a gravity anomaly tore it apart.</p>
-            <p>You wake in a jettisoned escape pod. 30 minutes of O2. No contact. Just you and the void.</p>
-            <p><strong>Survive. Build. Explore. Find the signal.</strong></p>
+            <p>You wake in a jettisoned escape pod. O2 is running out. Asteroids drift nearby — iron, ice, oxygen crystals.</p>
+            <p><strong>Mine. Build. Survive the void.</strong></p>
           </div>
 
           {/* Info cards */}
@@ -54,24 +54,28 @@ export function App() {
               <h3 className="card-title">🎮 CONTROLS</h3>
               <div className="card-line">WASD — Move</div>
               <div className="card-line">Mouse — Aim</div>
-              <div className="card-line">Click — Shoot</div>
+              <div className="card-line">Click — Mine / Build</div>
+              <div className="card-line">B — Build mode</div>
+              <div className="card-line">1/2/3 — Select structure</div>
               <div className="card-line">ESC — Pause</div>
             </div>
 
             <div className="intro-card">
-              <h3 className="card-title">🎯 OBJECTIVES</h3>
-              <div className="card-line">Eliminate drones</div>
-              <div className="card-line">Damage Void Leviathan</div>
-              <div className="card-line">Survive waves</div>
-              <div className="card-line">Score points</div>
+              <h3 className="card-title">⛏️ OBJECTIVES</h3>
+              <div className="card-line">Mine asteroids for Iron</div>
+              <div className="card-line">Collect Ice for O2 generators</div>
+              <div className="card-line">Harvest Oxygen Crystals</div>
+              <div className="card-line">Build your base</div>
+              <div className="card-line">Don't run out of O2</div>
             </div>
 
             <div className="intro-card">
-              <h3 className="card-title">⚔️ THREATS</h3>
-              <div className="card-line">Salvager — low threat</div>
-              <div className="card-line">Hunter — high threat</div>
-              <div className="card-line">Saboteur — stealth</div>
-              <div className="card-line">Void Leviathan — wave 5 boss</div>
+              <h3 className="card-title">🪨 RESOURCES</h3>
+              <div className="card-line">Iron (gray) — structures</div>
+              <div className="card-line">Ice (cyan) — O2 generators</div>
+              <div className="card-line">O2 Crystal (green) — refills O2</div>
+              <div className="card-line">Habitat costs 10 Iron</div>
+              <div className="card-line">O2 Generator costs 10 Ice</div>
             </div>
           </div>
 
