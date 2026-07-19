@@ -9,6 +9,7 @@ import {
   InventoryModal, BuildModal, CraftModal, TechTreeModal, MapModal,
 } from './components/Modals';
 import { EndingChoice } from './components/EndingChoice';
+import { NarratorScene } from './components/NarratorScene';
 
 export function App() {
   const engineRef = useRef<GameEngine | null>(null);
@@ -89,6 +90,9 @@ export function App() {
           <button className="intro-start-alt" onClick={() => setShowSurvival3D(true)}>
             Enter 3D Survival Mode
           </button>
+          <button className="intro-start-alt-2" onClick={() => setScreen('narrator')}>
+            Access Signal Questline
+          </button>
           <div className="intro-controls">
             <p><strong>Controls:</strong></p>
             <p>🎮 Gamepad: Left stick=move, RT=mine, A=action, B=cancel, Y=inv, X=build, Start=tech</p>
@@ -108,6 +112,9 @@ export function App() {
           </button>
         </div>
       )}
+
+      {/* Narrator Questline Screen */}
+      {screen === 'narrator' && <NarratorScene onQuestComplete={handleQuestComplete} onGameOver={() => {}} />}
 
       {/* Game canvas */}
       {showSurvival3D ? (
