@@ -129,6 +129,7 @@ export function Survival3D() {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const playerRef = useRef<THREE.Group | null>(null);
+  const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Game-world refs (mutated by loop, not React state)
   const asteroidsRef = useRef<Asteroid[]>([]);
@@ -295,6 +296,108 @@ export function Survival3D() {
       Math.random() * Math.PI,
       Math.random() * Math.PI,
     );
+  };
+
+  // ====================== Gamepad Input ======================
+  const gamepadIndexRef = useRef<number | null>(null);
+  const gamepadEnabledRef = useRef(false);
+  const leftStickRef = useRef(new THREE.Vector3(0, 0, 0));
+  const rightStickRef = useRef(new THREE.Vector3(0, 0, 0));
+  const buttonAPressedRef = useRef(false);
+  const buttonBPressedRef = useRef(false);
+  const buttonXPressedRef = useRef(false);
+  const buttonYPressedRef = useRef(false);
+  const lbTriggerRef = useRef(false);
+  const rbTriggerRef = useRef(false);
+  const dpadUpRef = useRef(false);
+  const dpadDownRef = useRef(false);
+  const dpadLeftRef = useRef(false);
+  const dpadRightRef = useRef(false);
+
+  // Gamepad connected listener
+  useEffect(() => {
+    const handleGamepadConnect = (e: GamepadEvent) => {
+      console.log('Gamepad connected:', e.gamepad.id);
+      gamepadIndexRef.current = e.gamepad.index;
+      gamepadEnabledRef.current = true;
+    };
+
+    const handleGamepadDisconnect = (e: GamepadEvent) => {
+      console.log('Gamepad disconnected');
+      gamepadEnabledRef.current = false;
+      gamepadIndexRef.current = null;
+    };
+
+    window.addEventListener('gamepadconnected', handleGamepadConnect);
+    window.addEventListener('gamepaddisconnected', handleGamepadDisconnect);
+
+    return () => {
+      window.removeEventListener('gamepadconnected', handleGamepadConnect);
+      window.removeEventListener('gamepaddisconnected', handleGamepadDisconnect);
+    };
+  }, []);
+
+  const updateGamepadInput = (dt: number) => {
+    if (!gamepadEnabledRef.current || gamepadIndexRef.current === null) {
+      // Reset input to keyboard-only if no gamepad
+      leftStickRef.current.set(0, 0, 0);
+      rightStickRef.current.set(0, 0, 0);
+      buttonAPressedRef.current = false;
+      buttonBPressedRef.current = false;
+      buttonXPressedRef.current = false;
+      buttonYPressedRef.current = false;
+      lbTriggerRef.current = false;
+      rbTriggerRef.current = false;
+      dpadUpRef.current = false;
+      dpadDownRef.current = false;
+      dpadLeftRef.current = false;
+      dpadRightRef.current = false;
+      return;
+    }
+
+    const gamepad = navigator.getGamepads()[gamepadIndexRef.current];
+    if (!gamepad) {
+      gamepadEnabledRef.current = false;
+      gamepadIndexRef.current = null;
+      return;
+    }
+
+    // Read analog sticks (normalize to -1..1, then scale to movement speed)
+    const leftStickX = gamepad.axes[0];
+    const leftStickY = gamepad.axes[1];
+    const rightStickX = gamepad.axes[2];
+    const rightStickY = gamepad.axes[3];
+
+    // Deadzone threshold for sticks
+    const deadzone = 0.15;
+    const normalizeInput = (val: number) => {
+      if (Math.abs(val) < deadzone) return 0;
+      return Math.sign(val) * Math.sqrt(val * val);
+    };
+
+    leftStickRef.current.set(
+      normalizeInput(leftStickX),
+      normalizeInput(leftStickY),
+      0  // Z not used for left stick
+    ).multiplyScalar(PLAYER_SPEED * dt);
+
+    rightStickRef.current.set(
+      normalizeInput(rightStickX),
+      -normalizeInput(rightStickY),  // Flip Y for natural look
+      0
+    ).multiplyScalar(2 * dt);  // Camera turn sensitivity
+
+    // Read buttons
+    buttonAPressedRef.current = gamepad.buttons[0]?.pressed ?? false;           // A button
+    buttonBPressedRef.current = gamepad.buttons[1]?.pressed ?? false;           // B button
+    buttonXPressedRef.current = gamepad.buttons[2]?.pressed ?? false;           // X button
+    buttonYPressedRef.current = gamepad.buttons[3]?.pressed ?? false;           // Y button
+    lbTriggerRef.current = gamepad.buttons[4]?.pressed ?? false;               // L1 shoulder
+    rbTriggerRef.current = gamepad.buttons[5]?.pressed ?? false;               // R1 shoulder
+    dpadUpRef.current = gamepad.buttons[12]?.pressed ?? false;                 // D-pad up
+    dpadDownRef.current = gamepad.buttons[13]?.pressed ?? false;               // D-pad down
+    dpadLeftRef.current = gamepad.buttons[14]?.pressed ?? false;               // D-pad left
+    dpadRightRef.current = gamepad.buttons[15]?.pressed ?? false;              // D-pad right
   };
 
   // ====================== Build structure meshes ======================
@@ -854,7 +957,7 @@ export function Survival3D() {
       const isPaused = gameOverRef.current ? true : false; // paused handled via setGameState; check below
       // Actually check React state via a ref mirror we keep updated. Simpler: rely on gameOverRef.
       if (!gameOverRef.current) {
-        updateGame(clampedDt, timestamp);
+        updateGame(dt, timestamp);
       }
       gameLoopRef.current = requestAnimationFrame(loop);
     };
@@ -882,37 +985,69 @@ export function Survival3D() {
         setUiO2(Math.max(0, o2Ref.current));
       }
 
-      // ===== WASD movement (kept from original) =====
+      // ===== Movement (keyboard + gamepad) =====
       const moveDirection = new THREE.Vector3();
       const fwdX = Math.sin(yawRef.current);
       const fwdZ = Math.cos(yawRef.current);
       const rightX = Math.cos(yawRef.current);
       const rightZ = -Math.sin(yawRef.current);
+
+      // Keyboard input
       if (keysRef.current['KeyW']) { moveDirection.x += fwdX; moveDirection.z += fwdZ; }
       if (keysRef.current['KeyS']) { moveDirection.x -= fwdX; moveDirection.z -= fwdZ; }
       if (keysRef.current['KeyA']) { moveDirection.x -= rightX; moveDirection.z -= rightZ; }
       if (keysRef.current['KeyD']) { moveDirection.x += rightX; moveDirection.z += rightZ; }
-      if (moveDirection.length() > 0) {
-        moveDirection.normalize().multiplyScalar(PLAYER_SPEED * dt);
-        player.position.add(moveDirection);
+
+      // Gamepad left stick input (overrides keyboard if gamepad is active)
+      // Left stick moves forward/back (negative Y = forward in standard layout, but we used +Y)
+      // Our layout: Left stick Y affects X/Z plane relative to camera view
+      // Adjust: left stick Y positive = move backward? Check standard controllers
+      // Xbox controller: Left stick Y positive = push forward (toward player's nose)?
+      // Actually: on most controllers, pushing stick "up" (positive Y) moves you forward toward camera view
+      // But we need to check what our math expects...
+      // Let's be explicit: gamepad left stick should move character in the direction player is looking
+      const gamepadFwdX = leftStickRef.current.x;
+      const gamepadFwdZ = -leftStickRef.current.y; // Invert Y for natural feel
+
+      if (gamepadFwdX !== 0 || gamepadFwdZ !== 0) {
+        // Gamepad input takes precedence over keyboard for movement
+        moveDirection.x = gamepadFwdX;
+        moveDirection.z = gamepadFwdZ;
+
+        // Sync yaw/pitch from right stick for look
+        yawRef.current += rightStickRef.current.x;
+        pitchRef.current = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitchRef.current + rightStickRef.current.y));
+
         // Clamp to world radius
         const dist = Math.sqrt(player.position.x ** 2 + player.position.z ** 2);
         if (dist > WORLD_RADIUS) {
           player.position.x = (player.position.x / dist) * WORLD_RADIUS;
           player.position.z = (player.position.z / dist) * WORLD_RADIUS;
         }
-      }
+      } else {
+        // Keyboard-only movement
+        if (moveDirection.length() > 0) {
+          moveDirection.normalize().multiplyScalar(PLAYER_SPEED * dt);
+          player.position.add(moveDirection);
+          // Clamp to world radius
+          const dist = Math.sqrt(player.position.x ** 2 + player.position.z ** 2);
+          if (dist > WORLD_RADIUS) {
+            player.position.x = (player.position.x / dist) * WORLD_RADIUS;
+            player.position.z = (player.position.z / dist) * WORLD_RADIUS;
+          }
+        }
 
-      // ===== First-person camera (kept from original) =====
-      camera.position.set(player.position.x, PLAYER_HEIGHT, player.position.z);
-      const lookDir = new THREE.Vector3(
-        Math.sin(yawRef.current) * Math.cos(pitchRef.current),
-        Math.sin(pitchRef.current),
-        Math.cos(yawRef.current) * Math.cos(pitchRef.current),
-      );
-      const lookTarget = new THREE.Vector3().copy(camera.position).add(lookDir);
-      camera.lookAt(lookTarget);
-      player.rotation.y = yawRef.current;
+        // ===== First-person camera (keyboard + gamepad) =====
+        camera.position.set(player.position.x, PLAYER_HEIGHT, player.position.z);
+        const lookDir = new THREE.Vector3(
+          Math.sin(yawRef.current) * Math.cos(pitchRef.current),
+          Math.sin(pitchRef.current),
+          Math.cos(yawRef.current) * Math.cos(pitchRef.current),
+        );
+        const lookTarget = new THREE.Vector3().copy(camera.position).add(lookDir);
+        camera.lookAt(lookTarget);
+        player.rotation.y = yawRef.current;
+      }
 
       // ===== Asteroid rotation + respawn timers =====
       for (const asteroid of asteroidsRef.current) {
@@ -1066,13 +1201,121 @@ export function Survival3D() {
       }
 
       // ===== Particles =====
-      updateParticles(clampedDtSafe(clampedDt));
+      updateParticles(clampedDtSafe(dt));
 
       // ===== Smelter processing =====
       processSmelters();
 
+      // ===== Minimap rendering =====
+      renderMinimap();
+
       // Render
       renderer.render(scene, camera);
+    };
+
+    // Minimap rendering — top-right canvas
+    const renderMinimap = () => {
+      const canvas = minimapCanvasRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (!ctx || !sceneRef.current || !cameraRef.current) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      const scale = 2; // Map world coords to canvas (1 world unit = 2 canvas pixels)
+
+      // Clear with dark transparent background
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.fillRect(0, 0, w, h);
+
+      // Draw grid lines
+      ctx.strokeStyle = 'rgba(0, 255, 255, 0.15)';
+      ctx.lineWidth = 1;
+      const gridSize = 20 * scale;
+      for (let x = 0; x < w; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      for (let y = 0; y < h; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+
+      // Get player position
+      const player = playerRef.current;
+      const camera = cameraRef.current;
+      if (!player || !camera) return;
+
+      // Camera is at player position, so player.x/z is our center
+      const centerX = w / 2;
+      const centerY = h / 2;
+
+      // Draw nearby asteroids (within world radius)
+      for (const asteroid of asteroidsRef.current) {
+        if (asteroid.isMined) continue; // Skip mined asteroids
+
+        const dx = asteroid.mesh.position.x - camera.position.x;
+        const dz = asteroid.mesh.position.z - camera.position.z;
+
+        // Check if asteroid is visible on minimap
+        const distSq = dx * dx + dz * dz;
+        if (distSq > (WORLD_RADIUS * scale) ** 2) continue;
+
+        // Calculate on-canvas position
+        const mapX = centerX + dx * scale;
+        const mapY = centerY + dz * scale;
+
+        // Draw asteroid based on type
+        const typeColor = asteroid.type === 'iron' ? '#888888' : asteroid.type === 'ice' ? '#00aaff' : '#00ff88';
+        ctx.fillStyle = typeColor;
+        ctx.beginPath();
+        ctx.arc(mapX, mapY, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw warning ring if mining
+        if (asteroid.currentScale < 1) {
+          ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(mapX, mapY, 8 + (1 - asteroid.currentScale) * 4, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+
+      // Draw player position marker
+      ctx.fillStyle = '#ff00ff';
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, 8, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Draw player direction indicator
+      const heading = yawRef.current;
+      const dirLength = 20;
+      ctx.strokeStyle = '#ff00ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(centerX + Math.sin(heading) * dirLength, centerY + Math.cos(heading) * dirLength);
+      ctx.stroke();
+
+      // Draw compass cardinal points around minimap
+      ctx.fillStyle = 'rgba(0, 255, 255, 0.6)';
+      ctx.font = '12px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // N (center top)
+      const compassRadius = 45;
+      ctx.fillText('N', centerX, centerY - compassRadius);
+      // E (center right)
+      ctx.fillText('E', centerX + compassRadius, centerY);
+      // S (center bottom)
+      ctx.fillText('S', centerX, centerY + compassRadius);
+      // W (center left)
+      ctx.fillText('W', centerX - compassRadius, centerY);
     };
 
     // Smelter processing loop (runs in updateGame)
