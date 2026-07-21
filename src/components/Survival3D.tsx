@@ -219,6 +219,8 @@ export function Survival3D() {
   const pitchRef = useRef(0);  // vertical look angle (radians)   — kept from original
   const gameLoopRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
+  // Gamepad look sensitivity (configurable)
+  const lookSensitivityRef = useRef(1.0);
 
   // ====================== Build helpers ======================
   const randomAsteroidType = (): AsteroidType => {
@@ -489,7 +491,7 @@ export function Survival3D() {
       normalizeInput(rightStickX),
       -normalizeInput(rightStickY),  // Flip Y for natural look
       0
-    ).multiplyScalar(2 * dt);  // Camera turn sensitivity
+    ).multiplyScalar(2 * lookSensitivityRef.current * dt);  // Apply configurable sensitivity
 
     // Read buttons
     buttonAPressedRef.current = gamepad.buttons[0]?.pressed ?? false;           // A button
@@ -1522,22 +1524,122 @@ export function Survival3D() {
         }
       }
 
-      // D-pad: Hotbar selection (visual feedback)
+      // Y button: Inventory toggle (3D holographic panel)
+      if (buttonYPressedRef.current && !gameOverRef.current) {
+        inventoryOpenRef.current = !inventoryOpenRef.current;
+        // Sync with React UI
+        setUiInventoryOpen(inventoryOpenRef.current);
+      }
+
+      // LT (button 4): Jetpack boost (hold for upward thrust)
+      if (lbTriggerRef.current && !gameOverRef.current) {
+        const player = playerRef.current;
+        if (player) {
+          // Upward thrust (opposite to camera pitch)
+          const thrustAmount = 2.5 * dt;
+          player.position.y += thrustAmount;
+          // Create thruster particles
+          if (Math.random() < 0.3) {
+            createParticles(
+              camera.position.clone().add(
+                new THREE.Vector3(0, -0.5, 0)
+              ),
+              1,
+              0x00aaff  // blue thruster exhaust
+            );
+          }
+        }
+      }
+
+      // LB (button 4) or D-pad left/right: Cycle build type
+      if (lbTriggerRef.current && !buttonBPressedRef.current && !gameOverRef.current) {
+        // LB cycles build type left
+        buildTypeRef.current = (buildTypeRef.current === 'dome' ? 'storage' :
+                                 buildTypeRef.current === 'storage' ? 'solar' :
+                                 buildTypeRef.current === 'solar' ? 'o2generator' :
+                                 buildTypeRef.current === 'o2generator' ? 'smelter' :
+                                 buildTypeRef.current === 'smelter' ? 'refinery' : 'dome');
+        setUiBuildType(buildTypeRef.current);
+      }
+
+      // RB (button 5) or D-pad: Cycle build type
+      if (rbTriggerRef.current && !buttonBPressedRef.current && !gameOverRef.current) {
+        // RB cycles build type right
+        buildTypeRef.current = (buildTypeRef.current === 'dome' ? 'smelter' :
+                                 buildTypeRef.current === 'smelter' ? 'refinery' :
+                                 buildTypeRef.current === 'refinery' ? 'o2generator' :
+                                 buildTypeRef.current === 'o2generator' ? 'solar' :
+                                 buildTypeRef.current === 'solar' ? 'storage' : 'dome');
+        setUiBuildType(buildTypeRef.current);
+      }
+
+      // D-pad: Hotbar selection (cycles through build types)
       if (dpadUpRef.current) {
-        // Could cycle through build types
+        // Cycle to next build type
+        buildTypeRef.current = (buildTypeRef.current === 'dome' ? 'smelter' :
+                                 buildTypeRef.current === 'smelter' ? 'refinery' :
+                                 buildTypeRef.current === 'refinery' ? 'o2generator' :
+                                 buildTypeRef.current === 'o2generator' ? 'solar' :
+                                 buildTypeRef.current === 'solar' ? 'storage' : 'dome');
+        setUiBuildType(buildTypeRef.current);
       }
       if (dpadDownRef.current) {
-        // Could cycle through build types
+        // Cycle to previous build type
+        buildTypeRef.current = (buildTypeRef.current === 'dome' ? 'storage' :
+                                 buildTypeRef.current === 'storage' ? 'solar' :
+                                 buildTypeRef.current === 'solar' ? 'o2generator' :
+                                 buildTypeRef.current === 'o2generator' ? 'refinery' :
+                                 buildTypeRef.current === 'refinery' ? 'smelter' : 'dome');
+        setUiBuildType(buildTypeRef.current);
       }
       if (dpadLeftRef.current) {
-        // Could cycle left
+        // Cycle left
+        buildTypeRef.current = (buildTypeRef.current === 'dome' ? 'storage' :
+                                 buildTypeRef.current === 'storage' ? 'solar' :
+                                 buildTypeRef.current === 'solar' ? 'o2generator' :
+                                 buildTypeRef.current === 'o2generator' ? 'refinery' :
+                                 buildTypeRef.current === 'refinery' ? 'smelter' : 'dome');
+        setUiBuildType(buildTypeRef.current);
       }
       if (dpadRightRef.current) {
-        // Could cycle right
+        // Cycle right
+        buildTypeRef.current = (buildTypeRef.current === 'dome' ? 'smelter' :
+                                 buildTypeRef.current === 'smelter' ? 'refinery' :
+                                 buildTypeRef.current === 'refinery' ? 'o2generator' :
+                                 buildTypeRef.current === 'o2generator' ? 'solar' :
+                                 buildTypeRef.current === 'solar' ? 'storage' : 'dome');
+        setUiBuildType(buildTypeRef.current);
+      }
+
+      // A button: Action/Interact (enter structure, use fabricator) — only in build mode
+      if (buttonAPressedRef.current && !gameOverRef.current && buildModeRef.current) {
+        // Check for nearby structures to interact with
+        const camera = cameraRef.current;
+        const scene = sceneRef.current;
+        if (!camera || !scene) return;
+
+        let nearbyStructure = null;
+        for (const structure of structuresRef.current) {
+          const dist = structure.group.position.distanceTo(camera.position);
+          if (dist <= BUILD_RANGE) {
+            nearbyStructure = structure;
+            break;
+          }
+        }
+
+        if (nearbyStructure) {
+          // Show simple interaction prompt (could be expanded to 3D UI)
+          console.log(`Interact with ${nearbyStructure.type} structure`);
+          // Could open crafting menu, place module, etc.
+          // For now, just toggle build preview on/off to indicate interaction ready
+          if (buildPreviewRef.current) {
+            buildPreviewRef.current.visible = true;
+          }
+        }
       }
 
       // Start: Pause menu
-      if (buttonAPressedRef.current && !gameOverRef.current) {
+      if (buttonAPressedRef.current && !gameOverRef.current && !buildModeRef.current) {
         setGameState(prev => ({ ...prev, isPaused: !prev.isPaused }));
       }
 
