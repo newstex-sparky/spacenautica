@@ -73,6 +73,7 @@ const SMELTER_ORE_TO_METAL = 1; // 1 raw ore produces 0.8 iron + 0.2 titanium
 const SMELTER_H2_CONSUMPTION = 1 / 5; // 1 H2 consumed per 5 ore processed
 const SMELTER_DEPOSIT_RANGE = 4; // Distance to deposit ore
 const SMELTER_DEPOSIT_KEY = 'KeyF'; // Deposit key
+const REFINERY_DEPOSIT_KEY = 'KeyG'; // Deposit water ice to refinery
 
 // Asteroid runtime object
 interface Asteroid {
@@ -342,6 +343,44 @@ export function Survival3D() {
 
     // Create deposit particles at smelter intake
     createParticles(nearbySmelter.group.position.clone().add(new THREE.Vector3(0, 0.3, 0)), 5, 0x888888);
+
+    return true;
+  };
+
+  // Deposit water ice to refinery (called on G key press)
+  const depositWaterIce = (): boolean => {
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    if (!scene || !camera) return false;
+
+    // Find all refineries
+    const refineries = structuresRef.current.filter(s => s.type === 'refinery');
+    if (refineries.length === 0) return false;
+
+    // Check if any refinery is within range (SMELTER_DEPOSIT_RANGE)
+    let nearbyRefinery = null;
+    for (const refinery of refineries) {
+      const dist = refinery.group.position.distanceTo(camera.position);
+      if (dist <= SMELTER_DEPOSIT_RANGE) {
+        nearbyRefinery = refinery;
+        break;
+      }
+    }
+
+    if (!nearbyRefinery) return false;
+
+    // Check if player has water ice
+    if (resourcesRef.current.ice < 1) return false;
+
+    // Deduct water ice and add to refinery inventory
+    resourcesRef.current.ice -= 1;
+    setUiIce(resourcesRef.current.ice);
+    if (nearbyRefinery.refineryInventory) {
+      nearbyRefinery.refineryInventory.waterIce += 1;
+    }
+
+    // Create deposit particles at refinery intake (blue ice particles)
+    createParticles(nearbyRefinery.group.position.clone().add(new THREE.Vector3(0, 0.6, 0)), 5, 0x00aaff);
 
     return true;
   };
@@ -1673,6 +1712,76 @@ export function Survival3D() {
               const intakePos = new THREE.Vector3(0, 0.3, 0);
               intakePos.applyMatrix4(group.matrixWorld);
               createParticles(intakePos, 3, 0xaaaaaa);
+            }
+          }
+        }
+      }
+    };
+
+    // ====================== Refinery processing ======================
+    const processRefineries = () => {
+      const now = Date.now() / 1000;
+      for (const refinery of structuresRef.current) {
+        if (refinery.type !== 'refinery') continue;
+
+        const { group, refineryInventory, isRefineryProcessing, refineryProcessingProgress, refineryLastProcessTime } = refinery;
+
+        // Animate processing interior glow
+        const chamberMat = (group as any).refineryChamber;
+        if (isRefineryProcessing && chamberMat) {
+          const chamber = chamberMat as THREE.Mesh;
+          // Pulse cyan/blue glow based on progress (oxygen processing)
+          const pulseIntensity = 0.6 + Math.sin(now * 8) * 0.2;
+          (chamber.material as THREE.MeshBasicMaterial).opacity = pulseIntensity * refineryProcessingProgress;
+          (chamber.material as THREE.MeshBasicMaterial).color.set(0x00ffff);
+        } else if (chamberMat) {
+          const chamber = chamberMat as THREE.Mesh;
+          (chamber.material as THREE.MeshBasicMaterial).opacity = 0;
+        }
+
+        // Process ice when ready
+        if (refineryInventory?.waterIce > 0 && isRefineryProcessing) {
+          // Output ratio: 1 Ice → 2 O2 + 1 H2 per 2 seconds
+          const REFINERY_PROCESS_RATE = 1 / 2; // 0.5 ice per tick (1 per 2 sec)
+          
+          // Check H2 (refinery needs H2 to bootstrap/start)
+          if (resourcesRef.current.h2 <= 0) {
+            isRefineryProcessing = false;
+            continue;
+          }
+
+          // Process ice
+          if (now - refineryLastProcessTime >= REFINERY_PROCESS_RATE) {
+            refinery.refineryLastProcessTime = now;
+
+            if (refinery.refineryInventory.waterIce > 0) {
+              refinery.refineryInventory.waterIce -= 1;
+
+              // Output: 2 O2 + 1 H2 per ice processed
+              const o2Output = 2;
+              const h2Output = 1;
+
+              // O2 refills player O2 tank
+              resourcesRef.current.o2 = Math.min(O2_MAX, resourcesRef.current.o2 + o2Output);
+              setUiO2(resourcesRef.current.o2);
+
+              // H2 goes to station power storage
+              resourcesRef.current.h2 += h2Output;
+              setUiH2(resourcesRef.current.h2);
+
+              // Spawn O2/H2 particles at output pipes
+              const outputPipePos = new THREE.Vector3(1.8, 2.5, 0); // H2 pipe (orange)
+              outputPipePos.applyMatrix4(group.matrixWorld);
+              createParticles(outputPipePos, 2, 0xffaa00);
+
+              const outputO2Pos = new THREE.Vector3(1.8, 1.0, 0); // O2 pipe (cyan)
+              outputO2Pos.applyMatrix4(group.matrixWorld);
+              createParticles(outputO2Pos, 3, 0x00ffff);
+
+              // Spawn ice particles at intake
+              const intakePos = new THREE.Vector3(0, 0.6, 0);
+              intakePos.applyMatrix4(group.matrixWorld);
+              createParticles(intakePos, 2, 0x00aaff);
             }
           }
         }
