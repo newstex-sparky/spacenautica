@@ -44,39 +44,32 @@ Asteroids (mined in 3D first-person)
 
 ## Milestones
 
-### M1 — Core Survival Loop ✅ (mostly done)
+### M1 — Core Survival Loop ✅ (done)
 
 The basic 3D first-person survival experience. Mine, breathe, build.
 
-| Issue | Title | Status |
+|| Issue | Title | Status |
 |-------|-------|--------|
-| #28 | Three.js scene with first-person camera | ✅ Done — close |
-| #30 | 3D asteroids with ore veins | ⚠️ Partial — has asteroids, needs ore veins + dual resource types |
-| #31 | First-person HUD (O2, resources) | ⚠️ Partial — has O2 bar + resources, needs minimap/compass |
-| #32 | Gamepad controls (6DOF) | ❌ Not started |
-| #33 | O2 survival loop | ⚠️ Partial — drains + game over, needs death sequence + respawn |
+| #28 | Three.js scene with first-person camera | ✅ Done |
+| #30 | 3D asteroids with dual resource types (Iron Ore, Water Ice, Oxygen Crystal) | ✅ Done |
+| #31 | First-person HUD (O2, resources, minimap, compass) | ✅ Done |
+| #32 | Gamepad controls (6DOF WASD + analog sticks) | ✅ Done |
+| #33 | O2 survival loop (depletion, game over, respawn, inventory) | ✅ Done |
 
-**New issues needed:**
-- Raw ore + water ice dual resource model (replace current Iron/Ice/Oxygen types)
-- Smelter structure (ore → metals)
-- Electrolysis refinery structure (ice → O2 + H2)
-- H2 power system (structures consume H2 to function)
+**All M1 issues complete. Proceed to M2.**
 
 ### M2 — Station Building
 
 Build a real station with connected modules, walk inside, use crafting.
 
-| Issue | Title | Status |
+**Priority order:** #36 → #37 → #38 → #39
+
+|| Issue | Title | Status |
 |-------|-------|--------|
-| #36 | Station module placement (snap-to-grid, adjacency) | ⚠️ Partial — has build mode, needs real module system |
+| #36 | Station module placement (snap-to-grid, adjacency, 6 module types) | ⚠️ Partial |
 | #37 | Walk inside pressurized station | ❌ Not started |
 | #38 | Airlock transition (vacuum ↔ pressurized) | ❌ Not started |
 | #39 | 3D crafting UI at fabricator | ❌ Not started |
-| #40 | Hull breach (visual cracks, venting, repair) | ❌ Deferred — passive mode, no threats yet |
-
-**New issues needed:**
-- H2 power grid (connect modules to power source)
-- Station module connectivity (pipes/corridors between modules)
 
 ### M3 — Art Pipeline
 

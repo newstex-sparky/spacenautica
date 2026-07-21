@@ -19,6 +19,8 @@ const WORLD_RADIUS = 45;               // asteroid spawn radius around origin
 
 // Build mode
 const BUILD_RANGE = 8;                 // raycast floor within 8 units
+const BUILD_GRID_SIZE = 4;             // 4x4 tile grid, 4 units per tile
+const STORAGE_LOCKER_COST = { costIron: 5, costIce: 0, costRawOre: 0 }; // 1x1 module
 
 // Asteroid types
 type AsteroidType = 'iron' | 'ice' | 'oxygen';
@@ -35,8 +37,18 @@ const ASTEROID_TYPES: Record<AsteroidType, AsteroidTypeInfo> = {
   oxygen: { name: 'Oxygen Crystal',    color: 0x00ff88, yieldAmount: 1 }, // oxygen type refills O2 directly
 };
 
-// Buildable structures
-type BuildType = 'dome' | 'solar' | 'o2generator' | 'smelter';
+// Build structure types (6 module types for M2)
+type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
+
+// Structure dimensions (tile-based: BUILD_GRID_SIZE = 4 units)
+const STRUCTURE_DIMENSIONS: Record<BuildableStructureType, { width: number; depth: number }> = {
+  dome:        { width: 1, depth: 1 },
+  solar:       { width: 2, depth: 1 },
+  o2generator: { width: 1, depth: 2 },
+  smelter:     { width: 2, depth: 2 },
+  refinery:    { width: 2, depth: 2 },
+  storage:     { width: 1, depth: 1 },
+};
 
 interface BuildTypeInfo {
   name: string;
@@ -46,11 +58,13 @@ interface BuildTypeInfo {
   hotkey: string;
 }
 
-const BUILD_TYPES: Record<BuildType, BuildTypeInfo> = {
+const BUILD_TYPES: Record<BuildableStructureType, BuildTypeInfo> = {
   dome:        { name: 'Habitat Dome',  costIron: 10, costIce: 0, costRawOre: 0, hotkey: '1' },
   solar:       { name: 'Solar Panel',   costIron: 5,  costIce: 0, costRawOre: 0, hotkey: '2' },
   o2generator: { name: 'O2 Generator',  costIron: 0,  costIce: 10, costRawOre: 0, hotkey: '3' },
   smelter:     { name: 'Smelter',       costIron: 0,  costIce: 0, costRawOre: 10, hotkey: '4' },
+  refinery:    { name: 'Electrolysis Refinery', costIron: 0, costIce: 15, costRawOre: 0, hotkey: '5' },
+  storage:     { name: 'Storage Locker', costIron: 5,  costIce: 0, costRawOre: 0, hotkey: '6' },
 };
 
 // Smelting constants
@@ -71,15 +85,59 @@ interface Asteroid {
   basePosition: THREE.Vector3;
 }
 
-// Built structure runtime object
-interface BuiltStructure {
+// Unified structure runtime object (supports both BuiltStructure and Refinery)
+interface Structure {
   group: THREE.Group;
-  type: BuildType;
-  inventory: { rawOre: number }; // smelter internal inventory
-  isProcessing: boolean;
-  processingProgress: number; // 0-1, increments per processing tick
-  lastProcessTime: number;
+  type: BuildableStructureType;
+  // Smelter-specific properties
+  inventory?: { rawOre: number };
+  isSmelterProcessing?: boolean;
+  smelterLastProcessTime?: number;
+  // Refinery-specific properties
+  refineryInventory?: { waterIce: number };
+  isRefineryProcessing?: boolean;
+  refineryLastProcessTime?: number;
 }
+
+// Tool types (equipped, not stacked)
+type ToolType = 'mining-drill-mk1' | 'mining-drill-mk2' | 'repair-tool' | 'scanner' | 'jetpack-mk1' | 'jetpack-mk2';
+
+// Inventory item types
+interface InventoryItem {
+  name: string;
+  type: 'resource' | 'crafted' | 'tool';
+  count: number;
+  max: number;
+}
+
+// Inventory panel runtime object
+interface InventoryPanel {
+  group: THREE.Group;
+  isVisible: boolean;
+}
+
+// Equipped tool
+let equippedTool: ToolType = 'repair-tool'; // Default tool
+
+// Inventory items
+const INITIAL_INVENTORY: InventoryItem[] = [
+  // Resources
+  { name: 'Raw Ore', type: 'resource', count: 0, max: 100 },
+  { name: 'Water Ice', type: 'resource', count: 0, max: 100 },
+  { name: 'Iron Metal', type: 'resource', count: 0, max: 50 },
+  { name: 'Titanium', type: 'resource', count: 0, max: 50 },
+  // Crafted items
+  { name: 'O2 Canister', type: 'crafted', count: 0, max: 10 },
+  { name: 'H2 Canister', type: 'crafted', count: 0, max: 10 },
+  { name: 'Tech Chips', type: 'crafted', count: 0, max: 99 },
+  // Tools (equipped, not stacked - only one can be active at a time)
+  { name: 'Repair Tool', type: 'tool', count: 1, max: 1 }, // Equipped by default
+  { name: 'Mining Drill Mk1', type: 'tool', count: 0, max: 1 },
+  { name: 'Mining Drill Mk2', type: 'tool', count: 0, max: 1 },
+  { name: 'Scanner', type: 'tool', count: 0, max: 1 },
+  { name: 'Jetpack Mk1', type: 'tool', count: 0, max: 1 },
+  { name: 'Jetpack Mk2', type: 'tool', count: 0, max: 1 },
+];
 
 // Particle for mining puffs
 interface Particle {
@@ -93,7 +151,7 @@ interface GameState {
   isPaused: boolean;
   gameOver: boolean;
   buildMode: boolean;
-  buildType: BuildType;
+  buildType: BuildableStructureType;
 }
 
 const INITIAL_GAME_STATE: GameState = {
@@ -120,9 +178,14 @@ export function Survival3D() {
   const [uiHoveredAsteroid, setUiHoveredAsteroid] = useState<string>('');
   const [uiMiningProgress, setUiMiningProgress] = useState(0);
   const [uiBuildMode, setUiBuildMode] = useState(false);
-  const [uiBuildType, setUiBuildType] = useState<BuildType>('dome');
+  const [uiBuildType, setUiBuildType] = useState<BuildableStructureType>('dome');
   const [uiCompassHeading, setUiCompassHeading] = useState('E');
   const [uiSmelterStatus, setUiSmelterStatus] = useState<string>(''); // hovered smelter status
+
+  // Inventory UI state
+  const [uiInventoryOpen, setUiInventoryOpen] = useState(false);
+  const [uiInventoryItems, setUiInventoryItems] = useState<InventoryItem[]>(INITIAL_INVENTORY.slice());
+  const [uiEquippedTool, setUiEquippedTool] = useState<ToolType>('repair-tool');
 
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -138,14 +201,16 @@ export function Survival3D() {
   const miningBeamRef = useRef<THREE.Mesh | null>(null);    // laser beam visual while mining
   const miningRingRef = useRef<THREE.Mesh | null>(null);     // progress ring around mined asteroid
   const buildPreviewRef = useRef<THREE.Group | null>(null); // holographic build preview
+  const inventoryPanelRef = useRef<InventoryPanel | null>(null); // holographic inventory panel
 
   // Resource refs (mirrored to UI state)
   const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0, ironMetal: 0, titanium: 0 });
   const o2Ref = useRef(O2_MAX);
   const buildModeRef = useRef(false);
-  const buildTypeRef = useRef<BuildType>('dome');
+  const buildTypeRef = useRef<BuildableStructureType>('dome');
   const mouseDownRef = useRef(false);
   const gameOverRef = useRef(false);
+  const inventoryOpenRef = useRef(false); // Track if inventory is open via I/Y key
 
   // Input refs
   const keysRef = useRef<Record<string, boolean>>({});
@@ -552,11 +617,96 @@ export function Survival3D() {
     return group;
   };
 
-  const createStructureMesh = (type: BuildType): THREE.Group => {
+  const createRefineryMesh = (): THREE.Group => {
+    const group = new THREE.Group();
+    // Main cylinder body (horizontal for refinery)
+    const bodyGeo = new THREE.CylinderGeometry(1.5, 1.5, 3, 16);
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x555555,
+      metalness: 0.8,
+      roughness: 0.4,
+    });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.rotation.z = Math.PI / 2; // Horizontal
+    body.position.y = 1.5;
+    group.add(body);
+    
+    // Interior chamber (visible when processing)
+    const chamberGeo = new THREE.CylinderGeometry(1.0, 1.0, 2.5, 16);
+    const chamberMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0,
+    });
+    const chamber = new THREE.Mesh(chamberGeo, chamberMat);
+    chamber.rotation.z = Math.PI / 2;
+    chamber.position.y = 1.5;
+    group.add(chamber);
+    (group as any).refineryChamber = chamber;
+    
+    // Intake ports on both ends (water ice in)
+    const portGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.6, 12);
+    const portMat = new THREE.MeshStandardMaterial({
+      color: 0x00aaff,
+      metalness: 0.8,
+      roughness: 0.3,
+    });
+    const port1 = new THREE.Mesh(portGeo, portMat);
+    port1.rotation.z = Math.PI / 2;
+    port1.position.set(-1.8, 0.6, 0);
+    group.add(port1);
+    
+    const port2 = new THREE.Mesh(portGeo, portMat);
+    port2.rotation.z = Math.PI / 2;
+    port2.position.set(1.8, 0.6, 0);
+    group.add(port2);
+    
+    // Output pipes on sides (O2 and H2 out)
+    const pipeH2 = new THREE.CylinderGeometry(0.15, 0.15, 1.0, 8);
+    const pipeMatH2 = new THREE.MeshStandardMaterial({
+      color: 0xffaa00,
+      metalness: 0.9,
+      roughness: 0.2,
+    });
+    const h2Pipe = new THREE.Mesh(pipeH2, pipeMatH2);
+    h2Pipe.rotation.z = Math.PI / 2;
+    h2Pipe.position.set(1.8, 2.5, 0);
+    group.add(h2Pipe);
+    h2Pipe.userData = { type: 'h2' };
+    
+    const pipeO2 = new THREE.CylinderGeometry(0.15, 0.15, 1.0, 8);
+    const pipeMatO2 = new THREE.MeshStandardMaterial({
+      color: 0x00ffff,
+      metalness: 0.9,
+      roughness: 0.2,
+    });
+    const o2Pipe = new THREE.Mesh(pipeO2, pipeMatO2);
+    o2Pipe.rotation.z = Math.PI / 2;
+    o2Pipe.position.set(1.8, 1.0, 0);
+    group.add(o2Pipe);
+    o2Pipe.userData = { type: 'o2' };
+    
+    // Control panel
+    const panelGeo = new THREE.BoxGeometry(0.8, 0.5, 0.2);
+    const panelMat = new THREE.MeshStandardMaterial({
+      color: 0x222222,
+      metalness: 0.9,
+      roughness: 0.3,
+    });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    panel.position.set(0, 3.0, 0);
+    panel.rotation.y = -Math.PI / 2;
+    group.add(panel);
+    
+    return group;
+  };
+
+  const createStructureMesh = (type: BuildableStructureType): THREE.Group => {
     if (type === 'dome') return createDomeMesh();
     if (type === 'solar') return createSolarPanelMesh();
     if (type === 'o2generator') return createO2GeneratorMesh();
     if (type === 'smelter') return createSmelterMesh();
+    if (type === 'refinery') return createRefineryMesh();
     return new THREE.Group();
   };
 
@@ -671,7 +821,7 @@ export function Survival3D() {
     const group = createStructureMesh(type);
     group.position.copy(point);
     scene.add(group);
-    let structureType: BuildType = type;
+    let structureType: BuildableStructureType = type;
     // Initialize smelter-specific state
     if (type === 'smelter') {
       structureType = 'smelter';
@@ -828,6 +978,18 @@ export function Survival3D() {
         return;
       }
       if (gameOverRef.current) return;
+      // I or Y to toggle inventory
+      if (e.code === 'KeyI' || e.code === 'KeyY') {
+        inventoryOpenRef.current = !inventoryOpenRef.current;
+        setUiInventoryOpen(inventoryOpenRef.current);
+        // Keep build mode disabled when inventory is open
+        if (inventoryOpenRef.current) {
+          setGameState(prev => ({ ...prev, buildMode: false }));
+          setUiBuildMode(false);
+          buildModeRef.current = false;
+        }
+        return;
+      }
       // B key: toggle build mode
       if (e.code === 'KeyB') {
         buildModeRef.current = !buildModeRef.current;
@@ -900,7 +1062,7 @@ export function Survival3D() {
     document.addEventListener('pointerlockchange', handlePointerLockChange);
 
     // Helper: rebuild the build preview mesh when selection changes
-    function updateBuildPreviewMesh(type: BuildType) {
+    function updateBuildPreviewMesh(type: BuildableStructureType) {
       const group = buildPreviewRef.current;
       if (!group) return;
       // Clear existing children
@@ -1206,6 +1368,140 @@ export function Survival3D() {
       // ===== Smelter processing =====
       processSmelters();
 
+      // ===== Gamepad button handlers =====
+      // RT (button 5): Mine / use tool (same as left-click mouse)
+      if (rbTriggerRef.current && !buildModeRef.current && !gameOverRef.current) {
+        // Attempt mining
+        const target = getAsteroidInSight();
+        if (target) {
+          // Shrink asteroid
+          target.currentScale -= MINE_RATE_PER_SEC * dt;
+          const scale = Math.max(0.05, target.currentScale);
+          target.mesh.scale.set(scale, scale, scale);
+
+          // Progress for UI
+          setUiMiningProgress(1 - target.currentScale);
+          setUiHoveredAsteroid(ASTEROID_TYPES[target.type].name);
+
+          // Mining beam visual
+          if (beam) {
+            const camPos = camera.position.clone();
+            const astPos = target.mesh.position.clone();
+            const mid = camPos.clone().add(astPos).multiplyScalar(0.5);
+            beam.position.copy(mid);
+            const dist = camPos.distanceTo(astPos);
+            beam.scale.set(1, dist, 1);
+            const dirVec = astPos.clone().sub(camPos).normalize();
+            const quat = new THREE.Quaternion().setFromUnitVectors(
+              new THREE.Vector3(0, 1, 0),
+              dirVec,
+            );
+            beam.quaternion.copy(quat);
+            beam.visible = true;
+          }
+
+          // Progress ring
+          if (ring) {
+            ring.position.copy(target.mesh.position);
+            const ringScale = target.baseScale * 1.6;
+            ring.scale.set(ringScale, ringScale, ringScale);
+            ring.lookAt(camera.position);
+            const mat = ring.material as THREE.MeshBasicMaterial;
+            const prog = 1 - target.currentScale;
+            mat.opacity = 0.4 + prog * 0.6;
+            mat.color.set(ASTEROID_TYPES[target.type].color);
+            ring.visible = true;
+          }
+
+          // Spawn particles
+          if (Math.random() < dt * 8) {
+            createParticles(target.mesh.position.clone(), 1, ASTEROID_TYPES[target.type].color);
+          }
+
+          // Fully mined?
+          if (target.currentScale <= 0.05) {
+            target.isMined = true;
+            target.mesh.visible = false;
+            target.respawnTimer = ASTEROID_RESPAWN_DELAY;
+            // Award resources
+            const info = ASTEROID_TYPES[target.type];
+            const r = resourcesRef.current;
+            if (target.type === 'oxygen') {
+              o2Ref.current = Math.min(O2_MAX, o2Ref.current + O2_REFILL_CRYSTAL);
+              setUiO2(o2Ref.current);
+              r.oxygen += info.yieldAmount;
+              setUiOxygen(r.oxygen);
+            } else if (target.type === 'iron') {
+              r.iron += info.yieldAmount;
+              setUiIron(r.iron);
+            } else if (target.type === 'ice') {
+              r.ice += info.yieldAmount;
+              setUiIce(r.ice);
+            }
+            createParticles(target.mesh.position.clone(), 12, ASTEROID_TYPES[target.type].color);
+            beam && (beam.visible = false);
+            ring && (ring.visible = false);
+            setUiMiningProgress(0);
+            setUiHoveredAsteroid('');
+          }
+        } else {
+          // Not looking at asteroid
+          beam && (beam.visible = false);
+          ring && (ring.visible = false);
+          setUiMiningProgress(0);
+          setUiHoveredAsteroid('');
+        }
+      }
+
+      // B button: Cancel / exit pointer lock or toggle build mode
+      if (buttonBPressedRef.current) {
+        if (document.pointerLockElement) {
+          document.exitPointerLock();
+        } else {
+          // Toggle build mode if pointer is unlocked
+          buildModeRef.current = !buildModeRef.current;
+          const newMode = buildModeRef.current;
+          setGameState(prev => ({ ...prev, buildMode: newMode }));
+          setUiBuildMode(newMode);
+          if (miningBeamRef.current) miningBeamRef.current.visible = false;
+          if (miningRingRef.current) miningRingRef.current.visible = false;
+          if (buildPreviewRef.current) {
+            buildPreviewRef.current.visible = newMode;
+          }
+        }
+      }
+
+      // X button: Build menu toggle
+      if (buttonXPressedRef.current && !buildModeRef.current && !gameOverRef.current) {
+        buildModeRef.current = true;
+        setGameState(prev => ({ ...prev, buildMode: true }));
+        setUiBuildMode(true);
+        if (miningBeamRef.current) miningBeamRef.current.visible = false;
+        if (miningRingRef.current) miningRingRef.current.visible = false;
+        if (buildPreviewRef.current) {
+          buildPreviewRef.current.visible = true;
+        }
+      }
+
+      // D-pad: Hotbar selection (visual feedback)
+      if (dpadUpRef.current) {
+        // Could cycle through build types
+      }
+      if (dpadDownRef.current) {
+        // Could cycle through build types
+      }
+      if (dpadLeftRef.current) {
+        // Could cycle left
+      }
+      if (dpadRightRef.current) {
+        // Could cycle right
+      }
+
+      // Start: Pause menu
+      if (buttonAPressedRef.current && !gameOverRef.current) {
+        setGameState(prev => ({ ...prev, isPaused: !prev.isPaused }));
+      }
+
       // ===== Minimap rendering =====
       renderMinimap();
 
@@ -1351,7 +1647,7 @@ export function Survival3D() {
           // Process ore at SMELTER_PROCESS_RATE (1 per 3 seconds)
           if (now - lastProcessTime >= SMELTER_PROCESS_RATE) {
             smelter.lastProcessTime = now;
-            
+
             // Consume H2 (1 per 5 ore processed = SMELTER_H2_CONSUMPTION per tick)
             resourcesRef.current.h2 -= SMELTER_H2_CONSUMPTION;
             setUiH2(resourcesRef.current.h2);
@@ -1359,7 +1655,7 @@ export function Survival3D() {
             // Process ore
             if (inventory.rawOre > 0) {
               inventory.rawOre -= 1;
-              
+
               // Output: 0.8 Iron + 0.2 Titanium
               const ironOutput = SMELTER_ORE_TO_METAL * 0.8;
               const titaniumOutput = SMELTER_ORE_TO_METAL * 0.2;
@@ -1382,6 +1678,70 @@ export function Survival3D() {
         }
       }
     };
+
+    // ====================== Inventory management ======================
+    const updateInventoryUI = () => {
+      // Update inventory items from resourcesRef
+      const items = uiInventoryItems.map(item => {
+        if (item.type === 'resource') {
+          let count = 0;
+          if (item.name === 'Raw Ore') count = resourcesRef.current.rawOre;
+          else if (item.name === 'Water Ice') count = resourcesRef.current.ice;
+          else if (item.name === 'Iron Metal') count = resourcesRef.current.ironMetal;
+          else if (item.name === 'Titanium') count = resourcesRef.current.titanium;
+          return { ...item, count };
+        }
+        return item; // Crafted items and tools stay the same
+      });
+      setUiInventoryItems(items);
+    };
+
+    const equipTool = (toolName: string) => {
+      const index = uiInventoryItems.findIndex(item => item.name === toolName);
+      if (index !== -1 && uiInventoryItems[index].count > 0) {
+        setUiEquippedTool(toolName as ToolType);
+        // Show equipped tool in UI
+        console.log(`Equipped: ${toolName}`);
+      }
+    };
+
+    const consumeCanister = (canisterName: string) => {
+      const index = uiInventoryItems.findIndex(item => item.name === canisterName);
+      if (index !== -1 && uiInventoryItems[index].count > 0) {
+        // Consume canister (decrease count)
+        setUiInventoryItems(prev => prev.map(item => {
+          if (item.name === canisterName) {
+            return { ...item, count: item.count - 1 };
+          }
+          return item;
+        }));
+
+        // Apply effect
+        if (canisterName === 'O2 Canister') {
+          o2Ref.current = Math.min(O2_MAX, o2Ref.current + 25);
+          setUiO2(o2Ref.current);
+        } else if (canisterName === 'H2 Canister') {
+          resourcesRef.current.h2 += 10;
+          setUiH2(resourcesRef.current.h2);
+        }
+
+        // Keep inventory open after consuming
+        setUiInventoryOpen(true);
+        inventoryOpenRef.current = true;
+      }
+    };
+
+    // Sync inventory with resources when they change
+    useEffect(() => {
+      if (!inventoryOpenRef.current) {
+        updateInventoryUI();
+      }
+    }, [
+      resourcesRef.current.rawOre,
+      resourcesRef.current.ice,
+      resourcesRef.current.ironMetal,
+      resourcesRef.current.titanium,
+    ]);
 
     // Start game loop
     gameLoopRef.current = requestAnimationFrame(loop);
@@ -1740,7 +2100,148 @@ export function Survival3D() {
       >
         PAUSE
       </button>
+
+      {/* Inventory toggle hint */}
+      {uiInventoryOpen && (
+        <div style={styles.inventoryHint}>
+          <div style={{ color: '#00ffff', marginBottom: '4px' }}>INVENTORY (I/Y)</div>
+          <div style={{ color: '#888', fontSize: '12px' }}>
+            Click items to equip • Click canisters to use
+          </div>
+        </div>
+      )}
     </div>
+  );
+
+  // ====================== Inventory Panel ======================
+  // Inventory panel — holographic 3D overlay in front of player
+  if (!uiInventoryOpen) return null;
+
+  return (
+    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 100 }}>
+        <div style={{
+          position: 'absolute',
+          top: '10%',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: '600px',
+          backgroundColor: 'rgba(0, 20, 40, 0.85)',
+          border: '4px solid #00ffff',
+          borderRadius: 16,
+          padding: 20,
+          pointerEvents: 'auto',
+          boxShadow: '0 0 20px rgba(0, 255, 255, 0.3)',
+          backdropFilter: 'blur(8px)',
+        }}>
+          <h2 style={{
+            color: '#00ffff',
+            fontSize: 24,
+            textAlign: 'center',
+            fontFamily: 'monospace',
+            textShadow: '0 0 8px #00ffff',
+            marginBottom: 10,
+          }}>
+            INVENTORY
+          </h2>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{
+              color: '#ffaa00',
+              fontSize: 18,
+              fontFamily: 'monospace',
+            }}>
+              EQUIPPED: <span style={{ fontWeight: 'bold', color: '#ffffff' }}>{uiEquippedTool}</span>
+            </div>
+          </div>
+          <div style={{
+            marginBottom: 10,
+            fontSize: 12,
+            color: '#00ffff',
+            fontFamily: 'monospace',
+          }}>
+            Press ESC or click outside to close
+          </div>
+          <div style={{
+            maxHeight: '300px',
+            overflowY: 'auto',
+            border: '2px solid rgba(0, 255, 255, 0.3)',
+            borderRadius: 8,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          }}>
+            {uiInventoryItems.map((item, idx) => (
+              <div
+                key={idx}
+                onClick={() => {
+                  if (item.type === 'tool') {
+                    equipTool(item.name);
+                  } else if (item.type === 'crafted' && item.count > 0) {
+                    consumeCanister(item.name);
+                  }
+                }}
+                style={{
+                  padding: '8px 12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                  borderBottom: idx < uiInventoryItems.length - 1 ? '1px solid rgba(0, 255, 255, 0.2)' : 'none',
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(0, 255, 255, 0.15)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                <span style={{ color: item.type === 'tool' ? '#ffaa00' : item.type === 'resource' ? '#00ff88' : '#aaa', fontFamily: 'monospace' }}>
+                  {item.type === 'tool' && '🔧 '}
+                  {item.type === 'crafted' && '📦 '}
+                  {item.name}
+                </span>
+                <span style={{
+                  color: item.type === 'crafted' ? '#ff6600' : '#ffffff',
+                  fontSize: 14,
+                  fontFamily: 'monospace',
+                  fontWeight: 'bold',
+                  background: item.type === 'tool' ? 'rgba(255, 170, 0, 0.2)' : 'rgba(0, 0, 0, 0.6)',
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  pointerEvents: 'none',
+                }}>
+                  {item.type === 'tool' ? (item.count === 1 ? '1' : item.count) : item.count} / {item.max}
+                </span>
+              </div>
+            ))}
+          </div>
+          {/* Resource bar */}
+          <div style={{
+            marginTop: 15,
+            padding: '10px',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            borderRadius: 8,
+            border: '2px solid rgba(0, 255, 255, 0.2)',
+          }}>
+            <div style={{ fontSize: 12, color: '#00ffff', fontFamily: 'monospace', marginBottom: 5 }}>
+              RESOURCES
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: '#888888' }} />
+              <span style={{ color: '#ffffff', fontFamily: 'monospace', fontSize: 13 }}>
+                Raw Ore: {resourcesRef.current.rawOre} / {uiInventoryItems.find((i) => i.name === 'Raw Ore')?.count || 0}
+              </span>
+              <span style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: '#00aaff' }} />
+              <span style={{ color: '#ffffff', fontFamily: 'monospace', fontSize: 13 }}>
+                Water Ice: {resourcesRef.current.ice} / {uiInventoryItems.find((i) => i.name === 'Water Ice')?.count || 0}
+              </span>
+              <span style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: '#ffaa00' }} />
+              <span style={{ color: '#ffffff', fontFamily: 'monospace', fontSize: 13 }}>
+                Iron: {resourcesRef.current.ironMetal} / {uiInventoryItems.find((i) => i.name === 'Iron Metal')?.count || 0}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
   );
 }
 
@@ -2042,6 +2543,72 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontFamily: 'monospace',
     zIndex: 100,
+  },
+  // Inventory toggle hint
+  inventoryHint: {
+    position: 'absolute',
+    top: 20,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    backgroundColor: 'rgba(0, 255, 255, 0.15)',
+    padding: '8px 16px',
+    borderRadius: 8,
+    border: '1px solid rgba(0, 255, 255, 0.5)',
+    color: '#00ffff',
+    fontFamily: 'monospace',
+    fontSize: 14,
+    textAlign: 'center',
+    zIndex: 100,
+  },
+  // Inventory panel — holographic
+  inventoryPanel: {
+    position: 'absolute',
+    top: '10%',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    width: '600px',
+    backgroundColor: 'rgba(0, 20, 40, 0.85)',
+    border: '4px solid #00ffff',
+    borderRadius: 16,
+    padding: 20,
+    pointerEvents: 'auto',
+    boxShadow: '0 0 20px rgba(0, 255, 255, 0.3)',
+    backdropFilter: 'blur(8px)',
+    animation: 'fadeIn 0.2s ease-out',
+  },
+  inventoryTitle: {
+    color: '#00ffff',
+    fontSize: 24,
+    textAlign: 'center',
+    fontFamily: 'monospace',
+    textShadow: '0 0 8px #00ffff',
+    marginBottom: 10,
+  },
+  inventoryEquipped: {
+    color: '#ffaa00',
+    fontSize: 18,
+    fontFamily: 'monospace',
+    marginBottom: 10,
+  },
+  inventoryItemCount: {
+    color: '#ff6600',
+    fontSize: 14,
+    fontFamily: 'monospace',
+    fontWeight: 'bold',
+    background: 'rgba(255, 102, 0, 0.2)',
+    padding: '2px 8px',
+    borderRadius: 4,
+    pointerEvents: 'none',
+  },
+  inventoryItemCountDefault: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontFamily: 'monospace',
+    fontWeight: 'bold',
+    background: 'rgba(0, 0, 0, 0.6)',
+    padding: '2px 8px',
+    borderRadius: 4,
+    pointerEvents: 'none',
   },
   // Compass/heading — top center
   compassContainer: {
