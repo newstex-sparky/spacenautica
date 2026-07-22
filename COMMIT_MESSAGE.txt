@@ -1,0 +1,21 @@
+feat: M1 — Gamepad controls implementation
+
+Implements all gamepad control requirements for 6DOF first-person
+space survival (mining and building):
+
+- Left stick: Move forward/back/strafe
+- Right stick: Look (pitch/yaw) with configurable sensitivity
+- LT (L1): Jetpack boost (hold for upward thrust with thruster particles)
+- RT (R1): Mine/use tool (same as left-click mouse)
+- A: Action/interact (toggle build preview near structures)
+- B: Cancel / exit pointer lock or toggle build mode
+- X: Build menu toggle
+- Y: Inventory toggle (3D holographic panel)
+- LB/RB: Cycle build type left/right
+- D-pad: Hotbar selection (cycles through build types)
+- Start: Pause menu
+- Deadzone: 0.15 on sticks
+- Sensitivity: Default 1.0, configurable
+
+All actions reachable with gamepad alone alongside keyboard/mouse
+with no conflicts.

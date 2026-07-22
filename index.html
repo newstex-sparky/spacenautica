@@ -1,13 +1,569 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Spacenautica</title>
-  <link rel="stylesheet" href="/src/styles/game.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spacenautica - 3D Space Survival</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #000;
+        }
+
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            color: #fff;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        }
+
+        .stat-row {
+            margin-bottom: 8px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 15px;
+            border-radius: 8px;
+            min-width: 250px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        #o2-bar-container {
+            width: 100%;
+            height: 20px;
+            background: rgba(50, 50, 50, 0.8);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+
+        #o2-bar-fill {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+            transition: width 0.1s;
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 10;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        }
+
+        #instructions h3 {
+            margin-bottom: 8px;
+            color: #4facfe;
+        }
+
+        #instructions p {
+            margin: 4px 0;
+            color: #ccc;
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            width: 20px;
+            height: 20px;
+            pointer-events: none;
+        }
+
+        #crosshair::before,
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.7);
+            box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+        }
+
+        #crosshair::before {
+            width: 2px;
+            height: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        #crosshair::after {
+            width: 100%;
+            height: 2px;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        #game-over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 20;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 40px;
+            border-radius: 12px;
+            text-align: center;
+            color: #fff;
+            display: none;
+        }
+
+        #game-over h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            color: #ff6b6b;
+        }
+
+        #game-over button {
+            margin-top: 20px;
+            padding: 15px 30px;
+            font-size: 18px;
+            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #game-over button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(79, 172, 254, 0.4);
+        }
+
+        .minimap {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 150px;
+            height: 150px;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: 50%;
+            border: 3px solid rgba(79, 172, 254, 0.5);
+            z-index: 10;
+            overflow: hidden;
+        }
+
+        .minimap-canvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="module" src="/src/main.tsx"></script>
+    <div id="game-container"></div>
+
+    <div id="ui">
+        <div class="stat-row">
+            <div class="stat-label">OXYGEN</div>
+            <div id="o2-bar-container">
+                <div id="o2-bar-fill"></div>
+            </div>
+            <div class="stat-value" id="o2-value">100%</div>
+        </div>
+
+        <div class="stat-row">
+            <div class="stat-label">RESOURCES</div>
+            <div class="stat-value">
+                <span style="color: #f8e71c;">⚡ Iron: <span id="iron-value">0</span></span><br>
+                <span style="color: #00f2fe;">❄️ Ice: <span id="ice-value">0</span></span><br>
+                <span style="color: #ff6b6b;">💎 O2: <span id="o2crystal-value">0</span></span>
+            </div>
+        </div>
+    </div>
+
+    <div id="instructions">
+        <h3>Controls</h3>
+        <p>WASD - Move</p>
+        <p>Mouse - Look around</p>
+        <p>Click - Mine asteroids</p>
+        <p>ESC - Pause</p>
+        <p>1 - Show map</p>
+    </div>
+
+    <div id="crosshair"></div>
+
+    <div class="minimap">
+        <canvas id="minimap-canvas" class="minimap-canvas"></canvas>
+    </div>
+
+    <div id="game-over">
+        <h1>O2 DEPLETED</h1>
+        <p>Your survival mission has ended.</p>
+        <button onclick="location.reload()">Restart</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Game State
+        const gameState = {
+            o2: 100,
+            iron: 0,
+            ice: 0,
+            o2crystal: 0,
+            isGameOver: false,
+            isPaused: false
+        };
+
+        // Scene, camera, renderer
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('game-container').appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(50, 50, 50);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 500;
+        directionalLight.shadow.camera.left = -100;
+        directionalLight.shadow.camera.right = 100;
+        directionalLight.shadow.camera.top = 100;
+        directionalLight.shadow.camera.bottom = -100;
+        scene.add(directionalLight);
+
+        const pointLight = new THREE.PointLight(0x4facfe, 1, 100);
+        pointLight.position.set(0, 10, 0);
+        scene.add(pointLight);
+
+        // Stars
+        const starsGeometry = new THREE.BufferGeometry();
+        const starsMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.5,
+            sizeAttenuation: true
+        });
+
+        const starPositions = [];
+        for (let i = 0; i < 2000; i++) {
+            starPositions.push(
+                (Math.random() - 0.5) * 500,
+                (Math.random() - 0.5) * 500,
+                (Math.random() - 0.5) * 500
+            );
+        }
+
+        starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+        const stars = new THREE.Points(starsGeometry, starsMaterial);
+        scene.add(stars);
+
+        // Asteroids (3D)
+        const asteroidGeometry = new THREE.IcosahedronGeometry(5, 1);
+        const asteroidMaterial = new THREE.MeshStandardMaterial({
+            color: 0x8b7355,
+            roughness: 0.8,
+            metalness: 0.2
+        });
+
+        const asteroids = [];
+        const asteroidPositions = [];
+
+        for (let i = 0; i < 30; i++) {
+            const asteroid = new THREE.Mesh(asteroidGeometry, asteroidMaterial.clone());
+
+            // Random position
+            const x = (Math.random() - 0.5) * 150;
+            const y = (Math.random() - 0.5) * 50;
+            const z = (Math.random() - 0.5) * 150;
+            asteroid.position.set(x, y, z);
+
+            // Random rotation
+            asteroid.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+
+            // Different asteroid types
+            const type = Math.random();
+            if (type < 0.4) {
+                // Iron ore asteroid
+                asteroid.material.color.setHex(0xc0c0c0);
+                asteroid.userData = { type: 'iron', health: 3 };
+            } else if (type < 0.7) {
+                // Water ice asteroid
+                asteroid.material.color.setHex(0xaaddff);
+                asteroid.userData = { type: 'ice', health: 3 };
+            } else {
+                // Oxygen crystal asteroid
+                asteroid.material.color.setHex(0xff6b6b);
+                asteroid.userData = { type: 'o2crystal', health: 1 };
+            }
+
+            asteroid.castShadow = true;
+            asteroid.receiveShadow = true;
+            scene.add(asteroid);
+            asteroids.push(asteroid);
+            asteroidPositions.push({
+                position: asteroid.position.clone(),
+                mesh: asteroid
+            });
+        }
+
+        // Player
+        camera.position.set(0, 5, 0);
+        camera.castShadow = true;
+
+        // Pointer lock
+        document.body.addEventListener('click', () => {
+            if (!gameState.isGameOver && !gameState.isPaused) {
+                renderer.domElement.requestPointerLock();
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement !== renderer.domElement) {
+                gameState.isPaused = true;
+            } else {
+                gameState.isPaused = false;
+            }
+        });
+
+        // Controls
+        const keys = {};
+        const moveSpeed = 0.1;
+        const mouseSensitivity = 0.002;
+
+        document.addEventListener('keydown', (e) => keys[e.code] = true);
+        document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        let yaw = 0;
+        let pitch = 0;
+
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === renderer.domElement) {
+                yaw -= e.movementX * mouseSensitivity;
+                pitch -= e.movementY * mouseSensitivity;
+                pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+            }
+        });
+
+        // Mining
+        const raycaster = new THREE.Raycaster();
+        document.addEventListener('mousedown', (e) => {
+            if (e.button === 0 && document.pointerLockElement === renderer.domElement) {
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const intersects = raycaster.intersectObjects(asteroids);
+
+                if (intersects.length > 0) {
+                    const hit = intersects[0];
+                    const target = asteroids[asteroids.indexOf(hit.object)];
+
+                    if (target) {
+                        target.userData.health--;
+
+                        // Particle explosion
+                        for (let i = 0; i < 5; i++) {
+                            const particle = new THREE.Mesh(
+                                new THREE.SphereGeometry(0.5),
+                                new THREE.MeshBasicMaterial({ color: target.material.color })
+                            );
+                            particle.position.copy(target.position);
+                            particle.userData = {
+                                velocity: new THREE.Vector3(
+                                    (Math.random() - 0.5) * 5,
+                                    (Math.random() - 0.5) * 5 + 2,
+                                    (Math.random() - 0.5) * 5
+                                ),
+                                life: 1.0
+                            };
+                            scene.add(particle);
+
+                            const particles = [];
+                            particles.push({ mesh: particle, velocity: particle.userData.velocity, life: 1.0 });
+                        }
+
+                        if (target.userData.health <= 0) {
+                            scene.remove(target);
+
+                            // Add resources
+                            if (target.userData.type === 'iron') {
+                                gameState.iron += 5;
+                            } else if (target.userData.type === 'ice') {
+                                gameState.ice += 5;
+                            } else if (target.userData.type === 'o2crystal') {
+                                gameState.o2crystal += 1;
+                            }
+
+                            // Remove from array
+                            const index = asteroids.indexOf(target);
+                            if (index > -1) {
+                                asteroids.splice(index, 1);
+                            }
+
+                            // Spawn new asteroid
+                            const newAsteroid = new THREE.Mesh(asteroidGeometry, asteroidMaterial.clone());
+                            const type = Math.random();
+                            if (type < 0.4) {
+                                newAsteroid.material.color.setHex(0xc0c0c0);
+                                newAsteroid.userData = { type: 'iron', health: 3 };
+                            } else if (type < 0.7) {
+                                newAsteroid.material.color.setHex(0xaaddff);
+                                newAsteroid.userData = { type: 'ice', health: 3 };
+                            } else {
+                                newAsteroid.material.color.setHex(0xff6b6b);
+                                newAsteroid.userData = { type: 'o2crystal', health: 1 };
+                            }
+                            newAsteroid.position.set(
+                                (Math.random() - 0.5) * 150,
+                                (Math.random() - 0.5) * 50,
+                                (Math.random() - 0.5) * 150
+                            );
+                            newAsteroid.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+                            newAsteroid.castShadow = true;
+                            newAsteroid.receiveShadow = true;
+                            scene.add(newAsteroid);
+                            asteroids.push(newAsteroid);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Minimap
+        const minimapCanvas = document.getElementById('minimap-canvas');
+        const minimapCtx = minimapCanvas.getContext('2d');
+        minimapCanvas.width = 150;
+        minimapCanvas.height = 150;
+
+        function updateMinimap() {
+            minimapCtx.clearRect(0, 0, 150, 150);
+            minimapCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            minimapCtx.beginPath();
+            minimapCtx.arc(75, 75, 70, 0, Math.PI * 2);
+            minimapCtx.fill();
+
+            asteroids.forEach(asteroid => {
+                const x = (asteroid.position.x / 100 + 1) / 2 * 150;
+                const y = (asteroid.position.z / 100 + 1) / 2 * 150;
+                minimapCtx.fillStyle = asteroid.material.color.getHexString();
+                minimapCtx.beginPath();
+                minimapCtx.arc(x, y, 3, 0, Math.PI * 2);
+                minimapCtx.fill();
+            });
+
+            minimapCtx.fillStyle = '#4facfe';
+            minimapCtx.beginPath();
+            minimapCtx.arc(75, 75, 4, 0, Math.PI * 2);
+            minimapCtx.fill();
+        }
+
+        function updateUI() {
+            const o2BarFill = document.getElementById('o2-bar-fill');
+            const o2Value = document.getElementById('o2-value');
+            const ironValue = document.getElementById('iron-value');
+            const iceValue = document.getElementById('ice-value');
+            const o2crystalValue = document.getElementById('o2crystal-value');
+
+            o2BarFill.style.width = `${gameState.o2}%`;
+            o2Value.textContent = `${Math.round(gameState.o2)}%`;
+
+            o2BarFill.style.background = gameState.o2 < 30
+                ? 'linear-gradient(90deg, #ff6b6b 0%, #ff8e8e 100%)'
+                : 'linear-gradient(90deg, #4facfe 0%, #00f2fe 100%)';
+
+            ironValue.textContent = gameState.iron;
+            iceValue.textContent = gameState.ice;
+            o2crystalValue.textContent = gameState.o2crystal;
+
+            if (gameState.o2 <= 0 && !gameState.isGameOver) {
+                gameState.isGameOver = true;
+                document.exitPointerLock();
+                document.getElementById('game-over').style.display = 'block';
+            }
+        }
+
+        // Main game loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (gameState.isGameOver || gameState.isPaused) {
+                return;
+            }
+
+            // Update camera rotation
+            camera.rotation.order = 'YXZ';
+            camera.rotation.y = yaw;
+            camera.rotation.x = pitch;
+
+            // Player movement
+            const moveDirection = new THREE.Vector3();
+            if (keys['KeyW']) moveDirection.z -= 1;
+            if (keys['KeyS']) moveDirection.z += 1;
+            if (keys['KeyA']) moveDirection.x -= 1;
+            if (keys['KeyD']) moveDirection.x += 1;
+
+            if (moveDirection.length() > 0) {
+                moveDirection.normalize().multiplyScalar(moveSpeed);
+                camera.position.add(moveDirection);
+            }
+
+            // O2 depletion (1% per second)
+            gameState.o2 = Math.max(0, gameState.o2 - 0.016);
+
+            // Update particles
+            for (let i = asteroids.length - 1; i >= 0; i--) {
+                const asteroid = asteroids[i];
+                asteroid.rotation.x += 0.001;
+                asteroid.rotation.y += 0.002;
+            }
+
+            updateUI();
+            updateMinimap();
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start game
+        console.log('🎮 Spacenautica loaded!');
+        console.log('Asteroids will appear. Mine them for resources and maintain your O2 level!');
+        console.log('Controls: WASD movement, Mouse look, Click to mine');
+
+        animate();
+    </script>
 </body>
 </html>

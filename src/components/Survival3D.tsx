@@ -7,8 +7,11 @@ const PLAYER_SPEED = 5;
 
 // Oxygen survival
 const O2_MAX = 100;
-const O2_DEPLETION_PER_SEC = 1;       // 1 O2 per second
+const O2_DEPLETION_PER_SEC = 1;       // 1 O2 per second in vacuum
 const O2_REFILL_CRYSTAL = 25;          // mining an oxygen crystal refills +25
+const O2_LOW_WARNING_THRESHOLD = 20;   // Warning when O2 drops below this
+const O2_RESPAWN_AMOUNT = 50;          // O2 restored on respawn
+const LOW_O2_WARNING_DURATION = 30;    // seconds of warning before hard fail
 
 // Asteroid mining
 const ASTEROID_COUNT = 40;             // 30-50 asteroids in world
@@ -23,7 +26,7 @@ const BUILD_GRID_SIZE = 4;             // 4x4 tile grid, 4 units per tile
 const STORAGE_LOCKER_COST = { costIron: 5, costIce: 0, costRawOre: 0 }; // 1x1 module
 
 // Asteroid types
-type AsteroidType = 'iron' | 'ice' | 'oxygen';
+export type AsteroidType = 'iron' | 'ice' | 'oxygen';
 
 interface AsteroidTypeInfo {
   name: string;
@@ -38,7 +41,7 @@ const ASTEROID_TYPES: Record<AsteroidType, AsteroidTypeInfo> = {
 };
 
 // Build structure types (6 module types for M2)
-type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
+export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
 
 // Structure dimensions (tile-based: BUILD_GRID_SIZE = 4 units)
 const STRUCTURE_DIMENSIONS: Record<BuildableStructureType, { width: number; depth: number }> = {
@@ -62,7 +65,7 @@ const BUILD_TYPES: Record<BuildableStructureType, BuildTypeInfo> = {
   dome:        { name: 'Habitat Dome',  costIron: 10, costIce: 0, costRawOre: 0, hotkey: '1' },
   solar:       { name: 'Solar Panel',   costIron: 5,  costIce: 0, costRawOre: 0, hotkey: '2' },
   o2generator: { name: 'O2 Generator',  costIron: 0,  costIce: 10, costRawOre: 0, hotkey: '3' },
-  smelter:     { name: 'Smelter',       costIron: 0,  costIce: 0, costRawOre: 10, hotkey: '4' },
+  smelter:     { name: 'Smelter',       costIron: 10, costIce: 0, costRawOre: 0, hotkey: '4' },
   refinery:    { name: 'Electrolysis Refinery', costIron: 0, costIce: 15, costRawOre: 0, hotkey: '5' },
   storage:     { name: 'Storage Locker', costIron: 5,  costIce: 0, costRawOre: 0, hotkey: '6' },
 };
@@ -90,6 +93,7 @@ interface Asteroid {
 interface Structure {
   group: THREE.Group;
   type: BuildableStructureType;
+  isInteriorVisible?: boolean; // When true, show interior and hide exterior shell
   // Smelter-specific properties
   inventory?: { rawOre: number };
   isSmelterProcessing?: boolean;
@@ -162,7 +166,14 @@ const INITIAL_GAME_STATE: GameState = {
   buildType: 'dome',
 };
 
-export function Survival3D() {
+// ====================== Save/Load Callback Props ======================
+export interface Survival3DProps {
+  onGetState?: () => any;
+  onRestoreState?: (state: any) => void;
+  newGame?: () => void;
+}
+
+export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // UI state
@@ -182,6 +193,8 @@ export function Survival3D() {
   const [uiBuildType, setUiBuildType] = useState<BuildableStructureType>('dome');
   const [uiCompassHeading, setUiCompassHeading] = useState('E');
   const [uiSmelterStatus, setUiSmelterStatus] = useState<string>(''); // hovered smelter status
+  const [uiLowO2Warning, setUiLowO2Warning] = useState(false); // low O2 warning state
+  const [uiDeathSequence, setUiDeathSequence] = useState(false); // death sequence playing
 
   // Inventory UI state
   const [uiInventoryOpen, setUiInventoryOpen] = useState(false);
@@ -194,6 +207,7 @@ export function Survival3D() {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const playerRef = useRef<THREE.Group | null>(null);
   const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ambientLightRef = useRef<THREE.AmbientLight | null>(null); // Lighting ref for inside/outside adjustment
 
   // Game-world refs (mutated by loop, not React state)
   const asteroidsRef = useRef<Asteroid[]>([]);
@@ -221,6 +235,222 @@ export function Survival3D() {
   const lastTimeRef = useRef<number>(0);
   // Gamepad look sensitivity (configurable)
   const lookSensitivityRef = useRef(1.0);
+
+  // ====================== Save/Load Helpers ======================
+  const buildSaveData = useCallback((): any => {
+    if (!sceneRef.current || !playerRef.current || !cameraRef.current) {
+      throw new Error('Cannot save: scene or camera not initialized');
+    }
+
+    const player = playerRef.current;
+    const camera = cameraRef.current;
+
+    return {
+      version: '0.3.0',
+      timestamp: Date.now(),
+      player: {
+        position: [player.position.x, player.position.y, player.position.z],
+        rotation: [player.rotation.x, player.rotation.y, player.rotation.z],
+        yaw: yawRef.current,
+        pitch: pitchRef.current,
+      },
+      resources: {
+        iron: resourcesRef.current.iron,
+        ice: resourcesRef.current.ice,
+        oxygen: resourcesRef.current.oxygen,
+        rawOre: resourcesRef.current.rawOre,
+        h2: resourcesRef.current.h2,
+        ironMetal: resourcesRef.current.ironMetal,
+        titanium: resourcesRef.current.titanium,
+      },
+      inventory: uiInventoryItems.map(item => ({
+        name: item.name,
+        type: item.type,
+        count: item.count,
+        max: item.max,
+      })),
+      equippedTool: uiEquippedTool,
+      structures: structuresRef.current.map(structure => {
+        const group = structure.group;
+        return {
+          type: structure.type,
+          position: [group.position.x, group.position.y, group.position.z],
+          rotation: [group.rotation.x, group.rotation.y, group.rotation.z],
+          integrity: structure.integrity ?? 100,
+          smelterInventory: structure.inventory
+            ? { rawOre: (structure.inventory as any).rawOre }
+            : undefined,
+          smelterProcessing: structure.smelterIsProcessing ?? false,
+          smelterLastProcessTime: structure.smelterLastProcessTime ?? 0,
+        };
+      }),
+      asteroids: asteroidsRef.current.map(asteroid => ({
+        type: asteroid.type,
+        position: [asteroid.mesh.position.x, asteroid.mesh.position.y, asteroid.mesh.position.z],
+        rotation: [asteroid.mesh.rotation.x, asteroid.mesh.rotation.y, asteroid.mesh.rotation.z],
+        scale: asteroid.mesh.scale.x,
+        respawnTimer: asteroid.respawnTimer,
+        isMined: asteroid.isMined,
+      })),
+      uiState: {
+        buildMode: buildModeRef.current,
+        buildType: buildTypeRef.current,
+        lowO2Warning: uiLowO2Warning,
+        deathSequence: uiDeathSequence,
+      },
+    };
+  }, [
+    uiInventoryItems,
+    uiEquippedTool,
+    uiLowO2Warning,
+    uiDeathSequence,
+  ]);
+
+  const restoreSaveData = useCallback((data: any) => {
+    if (!sceneRef.current || !playerRef.current) {
+      console.error('Cannot restore: scene or player not initialized');
+      return;
+    }
+
+    console.log('Restoring save data:', data);
+
+    // Restore player state
+    const player = playerRef.current;
+    const camera = cameraRef.current;
+
+    if (data.player) {
+      player.position.set(data.player.position[0], data.player.position[1], data.player.position[2]);
+      player.rotation.set(data.player.rotation[0], data.player.rotation[1], data.player.rotation[2]);
+      yawRef.current = data.player.yaw ?? 0;
+      pitchRef.current = data.player.pitch ?? 0;
+      if (camera) {
+        camera.position.set(player.position.x, data.player.position[1], player.position.z);
+        const dir = new THREE.Vector3(
+          Math.sin(yawRef.current) * Math.cos(pitchRef.current),
+          Math.sin(pitchRef.current),
+          Math.cos(yawRef.current) * Math.cos(pitchRef.current),
+        );
+        camera.lookAt(player.position.x + dir.x, player.position.y + dir.y, player.position.z + dir.z);
+      }
+    }
+
+    // Restore resources
+    if (data.resources) {
+      resourcesRef.current.iron = data.resources.iron ?? 0;
+      resourcesRef.current.ice = data.resources.ice ?? 0;
+      resourcesRef.current.oxygen = data.resources.oxygen ?? 0;
+      resourcesRef.current.rawOre = data.resources.rawOre ?? 0;
+      resourcesRef.current.h2 = data.resources.h2 ?? 0;
+      resourcesRef.current.ironMetal = data.resources.ironMetal ?? 0;
+      resourcesRef.current.titanium = data.resources.titanium ?? 0;
+      setUiIron(resourcesRef.current.iron);
+      setUiIce(resourcesRef.current.ice);
+      setUiOxygen(resourcesRef.current.oxygen);
+      setUiRawOre(resourcesRef.current.rawOre);
+      setUiH2(resourcesRef.current.h2);
+      setUiIronMetal(resourcesRef.current.ironMetal);
+      setUiTitaniumMetal(resourcesRef.current.titanium);
+    }
+
+    // Restore inventory
+    if (data.inventory && Array.isArray(data.inventory)) {
+      // Preserve existing inventory items, but update counts
+      const itemMap = new Map<string, InventoryItem>();
+      for (const item of uiInventoryItems) {
+        itemMap.set(item.name, item);
+      }
+      for (const savedItem of data.inventory) {
+        const existing = itemMap.get(savedItem.name);
+        if (existing) {
+          existing.count = savedItem.count;
+          existing.max = savedItem.max;
+        } else {
+          uiInventoryItems.push({
+            name: savedItem.name,
+            type: savedItem.type,
+            count: savedItem.count,
+            max: savedItem.max,
+          });
+        }
+      }
+      setUiInventoryItems([...uiInventoryItems]);
+    }
+
+    // Restore equipped tool
+    if (data.equippedTool) {
+      setUiEquippedTool(data.equippedTool);
+    }
+
+    // Restore structures
+    // Clear existing structures
+    for (const structure of structuresRef.current) {
+      sceneRef.current?.remove(structure.group);
+    }
+    structuresRef.current = [];
+
+    if (data.structures && Array.isArray(data.structures)) {
+      for (const structData of data.structures) {
+        const group = createStructureMesh(structData.type);
+        group.position.set(structData.position[0], structData.position[1], structData.position[2]);
+        group.rotation.set(structData.rotation[0], structData.rotation[1], structData.rotation[2]);
+        sceneRef.current?.add(group);
+        let structureType = structData.type;
+        if (structData.type === 'smelter') {
+          structureType = 'smelter';
+          (group as any).smelterInventory = { rawOre: structData.smelterInventory?.rawOre ?? 0 };
+          (group as any).smelterIsProcessing = structData.smelterProcessing ?? false;
+          (group as any).smelterLastProcessTime = structData.smelterLastProcessTime ?? 0;
+        }
+        // Initialize smelter-specific state
+        if (structData.type === 'smelter') {
+          (group as any).smelterInventory = { rawOre: 0 };
+          (group as any).smelterIsProcessing = false;
+          (group as any).smelterProcessingProgress = 0;
+          (group as any).smelterLastProcessTime = 0;
+        }
+        structuresRef.current.push({ group, type: structureType, integrity: structData.integrity ?? 100 });
+      }
+    }
+
+    // Restore asteroids
+    // Clear existing asteroids
+    for (const asteroid of asteroidsRef.current) {
+      sceneRef.current?.remove(asteroid.mesh);
+      (asteroid.mesh.geometry as THREE.BufferGeometry).dispose();
+      (asteroid.mesh.material as THREE.Material).dispose();
+    }
+    asteroidsRef.current = [];
+
+    if (data.asteroids && Array.isArray(data.asteroids)) {
+      for (const astData of data.asteroids) {
+        const type = astData.type;
+        const baseScale = astData.scale * (0.4 + Math.random() * 0.5);
+        const mesh = createAsteroidMesh(type, baseScale);
+        mesh.position.set(astData.position[0], astData.position[1], astData.position[2]);
+        mesh.rotation.set(astData.rotation[0], astData.rotation[1], astData.rotation[2]);
+        sceneRef.current?.add(mesh);
+        asteroidsRef.current.push({
+          mesh,
+          type,
+          baseScale,
+          currentScale: astData.scale,
+          respawnTimer: astData.respawnTimer,
+          isMined: astData.isMined,
+          basePosition: mesh.position.clone(),
+        });
+      }
+    }
+
+    // Restore UI state
+    if (data.uiState) {
+      setUiLowO2Warning(data.uiState.lowO2Warning ?? false);
+      setUiDeathSequence(data.uiState.deathSequence ?? false);
+      setUiBuildMode(data.uiState.buildMode ?? false);
+      setUiBuildType(data.uiState.buildType ?? 'dome');
+    }
+
+    console.log('Save data restored successfully');
+  }, []);
 
   // ====================== Build helpers ======================
   const randomAsteroidType = (): AsteroidType => {
@@ -506,27 +736,148 @@ export function Survival3D() {
     dpadRightRef.current = gamepad.buttons[15]?.pressed ?? false;              // D-pad right
   };
 
+  // ====================== Structure Proximity Detection ======================
+  const getNearbyStructure = (): { structure: Structure; distance: number; inside: boolean } | null => {
+    const camera = cameraRef.current;
+    if (!camera) return null;
+
+    const nearby = structuresRef.current
+      .map(s => ({
+        structure: s,
+        distance: s.group.position.distanceTo(camera.position),
+        inside: s.group.position.distanceTo(camera.position) < 4, // Inside if within 4 units
+      }))
+      .filter(item => item.distance < 10) // Only structures within 10 units
+      .sort((a, b) => a.distance - b.distance)[0]; // Closest
+
+    if (!nearby) return null;
+    return { ...nearby };
+  };
+
+  const isInsidePressurizedStructure = (): boolean => {
+    const nearby = getNearbyStructure();
+    return nearby?.inside ?? false;
+  };
+
+  // Update interior/exterior visibility based on player position
+  const updateInteriorVisibility = () => {
+    const camera = cameraRef.current;
+    if (!camera) return;
+
+    const nearby = getNearbyStructure();
+    const inPressurized = nearby?.inside ?? false;
+
+    structuresRef.current.forEach(structure => {
+      structure.isInteriorVisible = inPressurized;
+
+      // Update exterior shell visibility (hide when inside)
+      structure.group.traverse(child => {
+        if (child instanceof THREE.Mesh && child.userData.isExterior) {
+          child.visible = !inPressurized;
+        }
+      });
+    });
+
+    // Adjust ambient light based on inside/outside state
+    if (ambientLightRef.current) {
+      const targetIntensity = inPressurized ? 0.15 : 0.6;
+      ambientLightRef.current.intensity += (targetIntensity - ambientLightRef.current.intensity) * 0.5;
+    }
+  };
+
   // ====================== Build structure meshes ======================
   const createDomeMesh = (): THREE.Group => {
     const group = new THREE.Group();
     const geo = new THREE.IcosahedronGeometry(2, 1);
-    const mat = new THREE.MeshStandardMaterial({
+    // Exteriors dome shell (transparent, visible from outside)
+    const exteriorMat = new THREE.MeshStandardMaterial({
       color: 0x00ff66,
-      metalness: 0.2,
+      metalness: 0.1,
       roughness: 0.3,
       transparent: true,
-      opacity: 0.55,
-      wireframe: false,
+      opacity: 0.4,
+      side: THREE.DoubleSide,
     });
-    const dome = new THREE.Mesh(geo, mat);
-    dome.position.y = 2;
-    // Wireframe overlay for geodesic look
+    const exterior = new THREE.Mesh(geo, exteriorMat);
+    exterior.position.y = 2;
+    exterior.userData = { isExterior: true, isDome: true }; // Mark as exterior shell
+    group.add(exterior);
+
+    // Wireframe overlay for geodesic look (exterior)
     const wireGeo = new THREE.WireframeGeometry(geo);
-    const wireMat = new THREE.LineBasicMaterial({ color: 0x00ff88 });
+    const wireMat = new THREE.LineBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.6 });
     const wire = new THREE.LineSegments(wireGeo, wireMat);
     wire.position.y = 2;
-    group.add(dome);
     group.add(wire);
+
+    // Interior dome shell (opaque, visible from inside)
+    const interiorMat = new THREE.MeshStandardMaterial({
+      color: 0xddffdd,
+      metalness: 0.1,
+      roughness: 0.8,
+      side: THREE.DoubleSide,
+    });
+    const interiorShell = new THREE.Mesh(geo, interiorMat);
+    interiorShell.position.y = 2;
+    group.add(interiorShell);
+
+    // Floor
+    const floorGeo = new THREE.CircleGeometry(1.8, 32);
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      metalness: 0.5,
+      roughness: 0.7,
+    });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = 0.05;
+    group.add(floor);
+
+    // Interior light (warm, ambient)
+    const interiorLight = new THREE.PointLight(0xffaa55, 0.8, 8);
+    interiorLight.position.set(0, 2, 0);
+    interiorLight.name = "domeInteriorLight";
+    group.add(interiorLight);
+    (group as any).interiorLight = interiorLight;
+
+    // Wall decorations (panels, vents)
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      const panelGeo = new THREE.BoxGeometry(0.3, 1.5, 0.1);
+      const panelMat = new THREE.MeshStandardMaterial({
+        color: 0x444444,
+        metalness: 0.6,
+        roughness: 0.4,
+      });
+      const panel = new THREE.Mesh(panelGeo, panelMat);
+      panel.position.set(Math.cos(angle) * 1.5, 1.5, Math.sin(angle) * 1.5);
+      panel.rotation.y = angle;
+      group.add(panel);
+    }
+
+    // Window frames showing exterior stars
+    const windowGeo = new THREE.CircleGeometry(0.4, 16);
+    const windowMat = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+    });
+    const window1 = new THREE.Mesh(windowGeo, windowMat);
+    window1.position.set(0, 2, -1.8);
+    group.add(window1);
+
+    // Window glow (stars visible through window)
+    const starlightMat = new THREE.MeshBasicMaterial({
+      color: 0x6699ff,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    });
+    const starlight = new THREE.Mesh(new THREE.CircleGeometry(0.4, 16), starlightMat);
+    starlight.position.set(0, 2, -1.9);
+    group.add(starlight);
+
     return group;
   };
 
@@ -905,9 +1256,9 @@ export function Survival3D() {
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
-    scene.add(ambientLight);
+    // Lighting - will be modified when inside pressurized structure
+    ambientLightRef.current = new THREE.AmbientLight(0x404040, 0.6);
+    scene.add(ambientLightRef.current);
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
     directionalLight.position.set(10, 20, 10);
     directionalLight.castShadow = true;
@@ -1179,13 +1530,41 @@ export function Survival3D() {
 
       // ===== Oxygen depletion =====
       if (!gameOverRef.current) {
-        o2Ref.current -= O2_DEPLETION_PER_SEC * dt;
+        const inPressurized = isInsidePressurizedStructure();
+
+        // Adjust ambient light based on inside/outside state
+        if (ambientLightRef.current) {
+          const targetIntensity = inPressurized ? 0.15 : 0.6;
+          ambientLightRef.current.intensity += (targetIntensity - ambientLightRef.current.intensity) * dt * 2;
+        }
+
+        // O2 depletion only happens in vacuum
+        if (!inPressurized) {
+          o2Ref.current -= O2_DEPLETION_PER_SEC * dt;
+          setUiO2(Math.max(0, o2Ref.current));
+
+          // Low O2 warning when below threshold
+          const o2Percent = o2Ref.current / O2_MAX;
+          setUiLowO2Warning(o2Percent < O2_LOW_WARNING_THRESHOLD / O2_MAX);
+
+          // Death sequence before hitting 0
+          if (o2Ref.current < LOW_O2_WARNING_DURATION && o2Ref.current > 0) {
+            // Fade to black, camera floats, SIGNAL LOST
+            cameraRef.current?.position.y = 0.5; // Float away
+            sceneRef.current?.background = new THREE.Color(0x000000); // Fade to black
+          }
+        } else {
+          setUiO2(O2_MAX); // Inside pressurized structure, max O2
+          setUiLowO2Warning(false); // No warning inside
+        }
+
+        // Game over at 0 O2
         if (o2Ref.current <= 0) {
           o2Ref.current = 0;
           gameOverRef.current = true;
           setGameState(prev => ({ ...prev, gameOver: true, isPaused: true }));
+          setUiDeathSequence(true); // Trigger death sequence
         }
-        setUiO2(Math.max(0, o2Ref.current));
       }
 
       // ===== Movement (keyboard + gamepad) =====
@@ -1242,6 +1621,10 @@ export function Survival3D() {
 
         // ===== First-person camera (keyboard + gamepad) =====
         camera.position.set(player.position.x, PLAYER_HEIGHT, player.position.z);
+        
+        // Update interior/exterior visibility based on position
+        updateInteriorVisibility();
+
         const lookDir = new THREE.Vector3(
           Math.sin(yawRef.current) * Math.cos(pitchRef.current),
           Math.sin(pitchRef.current),
@@ -2176,6 +2559,20 @@ export function Survival3D() {
         </div>
       )}
 
+      {/* Low O2 warning overlay — red screen tint + pulse */}
+      {uiLowO2Warning && !gameState.gameOver && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'rgba(255, 0, 0, 0.15)',
+            pointerEvents: 'none',
+            zIndex: 20,
+            animation: 'pulse 1s infinite',
+          }}
+        />
+      )}
+
       {/* H2 power bar — top center, below O2, orange */}
       {!gameState.gameOver && (
         <div style={styles.h2Container}>
@@ -2450,84 +2847,83 @@ export function Survival3D() {
               </span>
             </div>
           </div>
-        </div>
       </div>
-    )}
   );
-}
 
-// ====================== Helper ======================
-function clampedDtSafe(dt: number): number {
-  return Math.min(Math.max(dt, 0.001), 0.05);
-}
+  // ====================== Helper ======================
+  function clampedDtSafe(dt: number): number {
+    return Math.min(Math.max(dt, 0.001), 0.05);
+  }
 
-// ====================== Styles ======================
-const styles: Record<string, React.CSSProperties> = {
-  crosshair: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    width: 30,
-    height: 30,
-    pointerEvents: 'none',
-    zIndex: 10,
-  },
-  crosshairH: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    width: 20,
-    height: 2,
-    transform: 'translate(-50%, -50%)',
-    backgroundColor: 'rgba(0, 255, 0, 0.7)',
-  },
-  crosshairV: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    width: 2,
-    height: 20,
-    transform: 'translate(-50%, -50%)',
-    backgroundColor: 'rgba(0, 255, 0, 0.7)',
-  },
-  crosshairDot: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    width: 4,
-    height: 4,
-    transform: 'translate(-50%, -50%)',
-    borderRadius: '50%',
-    backgroundColor: 'rgba(0, 255, 0, 0.9)',
-  },
-  hintOverlay: {
-    position: 'absolute',
-    top: '60%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    padding: '20px 40px',
-    borderRadius: 12,
-    border: '1px solid rgba(0, 255, 255, 0.4)',
-    textAlign: 'center',
-    cursor: 'pointer',
-    zIndex: 50,
-  },
-  hintText: {
-    color: '#00ffff',
-    fontFamily: 'monospace',
-    fontSize: 20,
-    textShadow: '0 0 8px #00ffff',
-    marginBottom: 8,
-  },
-  hintSubtext: {
-    color: 'rgba(0, 255, 255, 0.6)',
-    fontFamily: 'monospace',
-    fontSize: 13,
-  },
+  // ====================== Styles ======================
+  const styles: Record<string, React.CSSProperties> = {
+    crosshair: {
+      position: 'absolute',
+      top: '50%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      width: 30,
+      height: 30,
+      pointerEvents: 'none',
+      zIndex: 10,
+    },
+    crosshairH: {
+      position: 'absolute',
+      top: '50%',
+      left: '50%',
+      width: 20,
+      height: 2,
+      transform: 'translate(-50%, -50%)',
+      backgroundColor: 'rgba(0, 255, 0, 0.7)',
+    },
+    crosshairV: {
+      position: 'absolute',
+      top: '50%',
+      left: '50%',
+      width: 2,
+      height: 20,
+      transform: 'translate(-50%, -50%)',
+      backgroundColor: 'rgba(0, 255, 0, 0.7)',
+    },
+    crosshairDot: {
+      position: 'absolute',
+      top: '50%',
+      left: '50%',
+      width: 4,
+      height: 4,
+      transform: 'translate(-50%, -50%)',
+      borderRadius: '50%',
+      backgroundColor: 'rgba(0, 255, 0, 0.9)',
+    },
+    hintOverlay: {
+      position: 'absolute',
+      top: '60%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      backgroundColor: 'rgba(0, 0, 0, 0.7)',
+      padding: '20px 40px',
+      borderRadius: 12,
+      border: '1px solid rgba(0, 255, 255, 0.4)',
+      textAlign: 'center',
+      cursor: 'pointer',
+      zIndex: 50,
+    },
+    hintText: {
+      color: '#00ffff',
+      fontFamily: 'monospace',
+      fontSize: 20,
+      textShadow: '0 0 8px #00ffff',
+      marginBottom: 8,
+    },
+    hintSubtext: {
+      color: 'rgba(0, 255, 255, 0.6)',
+      fontFamily: 'monospace',
+      fontSize: 13,
+    },
+  };
+
   // O2 bar — top center
-  o2Container: {
+  const o2Container: React.CSSProperties = {
     position: 'absolute',
     top: 20,
     left: '50%',
@@ -2536,8 +2932,9 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: 10,
     zIndex: 30,
-  },
-  o2Label: {
+  };
+
+  const o2Label: React.CSSProperties = {
     color: '#00ffff',
     fontFamily: 'monospace',
     fontSize: 26,

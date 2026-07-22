@@ -3,24 +3,187 @@ import { Survival3D } from './components/Survival3D';
 import { NarratorScene } from './components/NarratorScene';
 import { HullBreach3D } from './components/HullBreach3D';
 
-type Screen = 'intro' | 'narrator' | 'hullBreach' | null;
+export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
+export type AsteroidType = 'iron' | 'ice' | 'oxygen';
+
+// Save data structure for localStorage
+export interface SaveData {
+  version: string;
+  timestamp: number;
+  player: {
+    position: [number, number, number];
+    yaw: number;
+    pitch: number;
+  };
+  resources: {
+    iron: number;
+    ice: number;
+    oxygen: number;
+    rawOre: number;
+    h2: number;
+    ironMetal: number;
+    titanium: number;
+  };
+  inventory: Array<{ name: string; type: 'resource' | 'crafted' | 'tool'; count: number; max: number }>;
+  structures: Array<{
+    type: BuildableStructureType;
+    position: [number, number, number];
+    rotation: number;
+    integrity: number;
+  }>;
+  asteroids: Array<{
+    type: AsteroidType;
+    position: [number, number, number];
+    respawnTimer: number;
+    isMined: boolean;
+  }>;
+  uiState: {
+    buildType: BuildableStructureType;
+  };
+  gameFlags: {
+    hasBroadcastSignal: boolean;
+    rescueTriggered: boolean;
+    rescued: boolean;
+  };
+}
+
+type Screen = 'intro' | 'narrator' | 'hullBreach' | 'newgame' | 'continue' | null;
 
 export function App() {
   const [screen, setScreen] = useState<Screen>('intro');
   const [show3D, setShow3D] = useState(false);
   const [pulse, setPulse] = useState(0);
   const rafRef = useRef<number>(0);
+  const saveExistsRef = useRef(false);
 
+  // Load save data on mount
   useEffect(() => {
-    let frame = 0;
-    const animate = () => {
-      frame = (frame + 1) % 120;
-      setPulse(Math.sin(frame / 15) * 0.15 + 1);
-      rafRef.current = requestAnimationFrame(animate);
-    };
-    rafRef.current = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(rafRef.current);
+    const saveDataStr = localStorage.getItem('spacenautica_save');
+    if (saveDataStr) {
+      try {
+        const saveData = JSON.parse(saveDataStr) as SaveData;
+        saveExistsRef.current = true;
+        console.log('Save data loaded:', saveData);
+      } catch (e) {
+        console.error('Failed to load save data:', e);
+      }
+    }
   }, []);
+
+  // Auto-save every 30 seconds
+  useEffect(() => {
+    if (saveExistsRef.current) {
+      const interval = setInterval(() => {
+        saveGame();
+      }, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [saveExistsRef.current]);
+
+  // Save on page unload
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      saveGame();
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [saveGame]);
+
+  // Helper: Save game state to localStorage
+  const saveGame = useCallback((): void => {
+    if (!saveExistsRef.current) return;
+
+    try {
+      // Get state from Survival3D component
+      const state = onGetState ? onGetState() : null;
+      if (!state) {
+        console.warn('Cannot save: onGetState callback not provided');
+        return;
+      }
+
+      const saveData: SaveData = {
+        version: '0.3.0',
+        timestamp: Date.now(),
+        player: {
+          position: state.player?.position || [0, 1.6, 0],
+          yaw: state.player?.yaw ?? 0,
+          pitch: state.player?.pitch ?? 0,
+          rotation: state.player?.rotation || [0, 0, 0],
+        },
+        resources: state.resources || {
+          iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0, ironMetal: 0, titanium: 0,
+        },
+        inventory: state.inventory || [],
+        equippedTool: state.equippedTool || 'repair-tool',
+        structures: state.structures || [],
+        asteroids: state.asteroids || [],
+        uiState: state.uiState || {
+          buildMode: false,
+          buildType: 'dome',
+          lowO2Warning: false,
+          deathSequence: false,
+        },
+        gameFlags: state.gameFlags || {
+          hasBroadcastSignal: false,
+          rescueTriggered: false,
+          rescued: false,
+        },
+      };
+
+      localStorage.setItem('spacenautica_save', JSON.stringify(saveData));
+      console.log('Game saved:', saveData);
+    } catch (e) {
+      console.error('Failed to save game:', e);
+    }
+  }, [onGetState]);
+
+  // Helper: Load game state from localStorage
+  const loadGame = useCallback((): SaveData | null => {
+    const saveDataStr = localStorage.getItem('spacenautica_save');
+    if (!saveDataStr) return null;
+
+    try {
+      let saveData = JSON.parse(saveDataStr) as SaveData;
+
+      // Version check
+      if (saveData.version !== '0.3.0') {
+        console.warn('Save file version mismatch, attempting migration');
+        // TODO: Implement version migration
+      }
+
+      // Restore state in Survival3D component
+      if (onRestoreState && saveData) {
+        onRestoreState(saveData);
+      }
+
+      return saveData;
+    } catch (e) {
+      console.error('Failed to load game:', e);
+      return null;
+    }
+  }, [onRestoreState]);
+
+  // Handle 'New Game' - clear save data
+  const handleNewGame = useCallback(() => {
+    localStorage.removeItem('spacenautica_save');
+    saveExistsRef.current = false;
+    setScreen('intro');
+  }, []);
+
+  // Handle 'Continue' - load save and start game
+  const handleContinue = useCallback(() => {
+    const saveData = loadGame();
+    if (saveData) {
+      setScreen(null);
+      setShow3D(true);
+      console.log('Starting game from save:', saveData);
+      // TODO: Pass save data to Survival3D component to restore state
+    } else {
+      console.error('No save data found');
+    }
+  }, [loadGame]);
 
   const handleQuestComplete = () => {
     setScreen(null);
@@ -80,9 +243,14 @@ export function App() {
           </div>
 
           {/* Buttons */}
-          <button className="intro-start" onClick={() => setShow3D(true)}>
-            LAUNCH EVA
+          <button className="intro-start" onClick={handleNewGame}>
+            NEW GAME
           </button>
+          {saveExistsRef.current && (
+            <button className="intro-start-alt" onClick={handleContinue}>
+              CONTINUE
+            </button>
+          )}
           <div className="intro-button-row">
             <button className="intro-start-alt" onClick={() => setScreen('narrator')}>
               Access Signal Questline
@@ -109,7 +277,10 @@ export function App() {
       {/* Main 3D Survival Mode */}
       {show3D && (
         <div className="survival-3d-container">
-          <Survival3D />
+          <Survival3D
+            onGetState={onGetState}
+            onRestoreState={onRestoreState}
+          />
           <button className="back-to-main" onClick={() => { setShow3D(false); setScreen('intro'); }}>
             ← Back to Main Menu
           </button>
