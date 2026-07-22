@@ -7,9 +7,15 @@
     "dev": "python3 -m http.server 8000",
     "serve": "npx serve"
   },
-  "keywords": ["game", "three.js", "survival", "3d"],
+  "keywords": [
+    "game",
+    "three.js",
+    "survival",
+    "3d"
+  ],
   "author": "",
   "license": "MIT",
-  "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
 }

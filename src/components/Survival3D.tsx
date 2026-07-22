@@ -94,6 +94,11 @@ interface Structure {
   group: THREE.Group;
   type: BuildableStructureType;
   isInteriorVisible?: boolean; // When true, show interior and hide exterior shell
+  // Airlock/Interior properties
+  isInterior?: boolean; // True when player is actively inside
+  airlockOpen?: boolean; // Airlock door state
+  airlockTimer?: number; // For airlock transition animation
+  interiorCameraOffset?: THREE.Vector3; // Camera offset when inside
   // Smelter-specific properties
   inventory?: { rawOre: number };
   isSmelterProcessing?: boolean;
@@ -124,6 +129,103 @@ interface InventoryPanel {
 // Equipped tool
 let equippedTool: ToolType = 'repair-tool'; // Default tool
 
+// Inventory item types
+interface InventoryItem {
+  name: string;
+  type: 'resource' | 'crafted' | 'tool';
+  count: number;
+  max: number;
+}
+
+// Inventory panel runtime object
+interface InventoryPanel {
+  group: THREE.Group;
+  isVisible: boolean;
+}
+
+// 3D holographic inventory panel
+const createInventoryPanel = () => {
+  const group = new THREE.Group();
+  group.visible = false; // Hidden by default, shown when inventory is open
+
+  // Main holographic panel (semi-transparent box)
+  const panelGeometry = new THREE.BoxGeometry(6, 4, 0.1);
+  const panelMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.1,
+    side: THREE.DoubleSide,
+    wireframe: true,
+  });
+  const panel = new THREE.Mesh(panelGeometry, panelMaterial);
+  group.add(panel);
+
+  // Inner glow effect
+  const glowGeometry = new THREE.PlaneGeometry(5.8, 3.8);
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.05,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+  group.add(glow);
+
+  return group;
+};
+
+// 3D icons for inventory items
+const createInventoryIcon = (itemName: string) => {
+  let geometry: THREE.BufferGeometry;
+  const material = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true });
+
+  if (itemName === 'Raw Ore' || itemName === 'Iron Metal' || itemName === 'Titanium') {
+    // Cube for raw materials
+    geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+  } else if (itemName === 'Water Ice') {
+    // Icosahedron for ice
+    geometry = new THREE.IcosahedronGeometry(0.3, 0);
+  } else if (itemName === 'O2 Canister' || itemName === 'H2 Canister') {
+    // Cylindrical canister shape
+    geometry = new THREE.CylinderGeometry(0.3, 0.3, 0.5, 16);
+  } else if (itemName === 'Tool' || itemName.startsWith('mining-drill')) {
+    // Drill tool
+    geometry = new THREE.ConeGeometry(0.3, 0.6, 8);
+  } else {
+    // Default box
+    geometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+  }
+
+  const mesh = new THREE.Mesh(geometry, material.clone());
+  return mesh;
+};
+
+// Inventory slots for 3D display
+interface InventorySlot {
+  mesh: THREE.Mesh;
+  name: string;
+  type: string;
+  index: number;
+}
+
+const inventorySlots: InventorySlot[] = [];
+const iconSpacing = 0.7; // Space between icons
+
+// Create slots for each item in INITIAL_INVENTORY
+INITIAL_INVENTORY.forEach((item, idx) => {
+  const icon = createInventoryIcon(item.name);
+  icon.position.x = -2 + (idx % 4) * iconSpacing; // 4 items per row
+  icon.position.y = 1 - Math.floor(idx / 4) * iconSpacing; // Multiple rows
+  icon.position.z = -0.05; // Slightly in front of panel
+  icon.visible = false; // Hidden until count > 0
+
+  inventorySlots.push({ mesh: icon, name: item.name, type: item.type, index: idx });
+});
+
+// Equipped tool
+let equippedTool: ToolType = 'repair-tool'; // Default tool
+
 // Inventory items
 const INITIAL_INVENTORY: InventoryItem[] = [
   // Resources
@@ -135,7 +237,87 @@ const INITIAL_INVENTORY: InventoryItem[] = [
   { name: 'O2 Canister', type: 'crafted', count: 0, max: 10 },
   { name: 'H2 Canister', type: 'crafted', count: 0, max: 10 },
   { name: 'Tech Chips', type: 'crafted', count: 0, max: 99 },
-  // Tools (equipped, not stacked - only one can be active at a time)
+];
+
+// 3D holographic inventory panel
+const createInventoryPanel = () => {
+  const group = new THREE.Group();
+  group.visible = false; // Hidden by default, shown when inventory is open
+
+  // Main holographic panel (semi-transparent box)
+  const panelGeometry = new THREE.BoxGeometry(6, 4, 0.1);
+  const panelMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.1,
+    side: THREE.DoubleSide,
+    wireframe: true,
+  });
+  const panel = new THREE.Mesh(panelGeometry, panelMaterial);
+  group.add(panel);
+
+  // Inner glow effect
+  const glowGeometry = new THREE.PlaneGeometry(5.8, 3.8);
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.05,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+  group.add(glow);
+
+  return group;
+};
+
+// 3D icons for inventory items
+const createInventoryIcon = (itemName: string) => {
+  let geometry: THREE.BufferGeometry;
+  const material = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true });
+
+  if (itemName === 'Raw Ore' || itemName === 'Iron Metal' || itemName === 'Titanium') {
+    // Cube for raw materials
+    geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+  } else if (itemName === 'Water Ice') {
+    // Icosahedron for ice
+    geometry = new THREE.IcosahedronGeometry(0.3, 0);
+  } else if (itemName === 'O2 Canister' || itemName === 'H2 Canister') {
+    // Cylindrical canister shape
+    geometry = new THREE.CylinderGeometry(0.3, 0.3, 0.5, 16);
+  } else if (itemName === 'Tool' || itemName.startsWith('mining-drill')) {
+    // Drill tool
+    geometry = new THREE.ConeGeometry(0.3, 0.6, 8);
+  } else {
+    // Default box
+    geometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+  }
+
+  const mesh = new THREE.Mesh(geometry, material.clone());
+  return mesh;
+};
+
+// Inventory slots for 3D display
+interface InventorySlot {
+  mesh: THREE.Mesh;
+  name: string;
+  type: string;
+  index: number;
+}
+
+const inventorySlots: InventorySlot[] = [];
+const iconSpacing = 0.7; // Space between icons
+
+// Create slots for each item in INITIAL_INVENTORY
+INITIAL_INVENTORY.forEach((item, idx) => {
+  const icon = createInventoryIcon(item.name);
+  icon.position.x = -2 + (idx % 4) * iconSpacing; // 4 items per row
+  icon.position.y = 1 - Math.floor(idx / 4) * iconSpacing; // Multiple rows
+  icon.position.z = -0.05; // Slightly in front of panel
+  icon.visible = false; // Hidden until count > 0
+
+  inventorySlots.push({ mesh: icon, name: item.name, type: item.type, index: idx });
+});
   { name: 'Repair Tool', type: 'tool', count: 1, max: 1 }, // Equipped by default
   { name: 'Mining Drill Mk1', type: 'tool', count: 0, max: 1 },
   { name: 'Mining Drill Mk2', type: 'tool', count: 0, max: 1 },
@@ -759,6 +941,102 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     return nearby?.inside ?? false;
   };
 
+  // ====================== Enter/Exit Structure (Airlock) ======================
+  const enterStructure = (structure: Structure, camera: THREE.PerspectiveCamera) => {
+    // Check if already inside
+    if (structure.isInterior) return;
+
+    // Check airlock
+    if (structure.airlockOpen !== true) {
+      // Open airlock door
+      structure.airlockOpen = true;
+      structure.airlockTimer = 0;
+
+      // Animate exterior shell fading (airlock transition)
+      structure.group.traverse(child => {
+        if (child instanceof THREE.Mesh && child.userData.isExterior) {
+          (child.material as THREE.MeshStandardMaterial).transparent = true;
+          (child.material as THREE.MeshStandardMaterial).opacity = 0.4;
+        }
+      });
+    }
+
+    // Calculate camera position at airlock entrance
+    const entryPosition = structure.group.position.clone();
+    entryPosition.x += 5; // Entrance at the front of the structure
+    entryPosition.y = PLAYER_HEIGHT;
+
+    // Smoothly move player (camera) to entry position
+    const entryTime = 1.5; // seconds for airlock transition
+    const startPos = camera.position.clone();
+    const progress = { elapsed: 0 };
+
+    const animateAirlock = () => {
+      progress.elapsed += 1/60; // Approx 60fps
+
+      if (progress.elapsed < entryTime) {
+        const t = progress.elapsed / entryTime;
+        // Ease in-out cubic
+        const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+        camera.position.lerpVectors(startPos, entryPosition, ease);
+        camera.lookAt(entryPosition);
+      } else {
+        // Completed airlock transition
+        camera.position.copy(entryPosition);
+        camera.lookAt(entryPosition);
+        structure.isInterior = true;
+        structure.airlockOpen = true;
+        structure.airlockTimer = 0;
+
+        // Set camera offset for inside movement
+        structure.interiorCameraOffset = new THREE.Vector3(0, PLAYER_HEIGHT, 0);
+
+        // Update UI
+        setUiLowO2Warning(false);
+
+        console.log(`Entered ${structure.type} structure`);
+      }
+    };
+
+    // Start airlock animation
+    const airlockLoop = setInterval(() => {
+      animateAirlock();
+
+      if (progress.elapsed >= entryTime) {
+        clearInterval(airlockLoop);
+      }
+    }, 1000 / 60);
+  };
+
+  const exitStructure = (structure: Structure) => {
+    // Check if already outside
+    if (!structure.isInterior) return;
+
+    // Close airlock
+    structure.airlockOpen = false;
+    structure.isInterior = false;
+    structure.airlockTimer = 0;
+
+    // Reset camera offset
+    structure.interiorCameraOffset = undefined;
+
+    // Update ambient light
+    if (ambientLightRef.current) {
+      ambientLightRef.current.intensity = 0.6;
+    }
+
+    // Make exterior shell visible again
+    structure.group.traverse(child => {
+      if (child instanceof THREE.Mesh && child.userData.isExterior) {
+        (child.material as THREE.MeshStandardMaterial).transparent = true;
+        (child.material as THREE.MeshStandardMaterial).opacity = 0.4;
+      }
+    });
+
+    console.log(`Exited ${structure.type} structure`);
+  };
+
   // Update interior/exterior visibility based on player position
   const updateInteriorVisibility = () => {
     const camera = cameraRef.current;
@@ -1189,6 +1467,45 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     return point;
   };
 
+  // ====================== Grid placement helpers ======================
+
+  // Helper: snap coordinates to 4x4 tile grid (BUILD_GRID_SIZE units)
+  const snapToGrid = (point: THREE.Vector3): THREE.Vector3 => {
+    return new THREE.Vector3(
+      Math.round(point.x / BUILD_GRID_SIZE) * BUILD_GRID_SIZE,
+      point.y,
+      Math.round(point.z / BUILD_GRID_SIZE) * BUILD_GRID_SIZE
+    );
+  };
+
+  // Helper: check if placement is within 3m of an existing module (adjacency rule)
+  const checkAdjacency = (point: THREE.Vector3): boolean => {
+    const adjacencyDist = 3;
+    for (const structure of structuresRef.current) {
+      const dist = structure.group.position.distanceTo(point);
+      if (dist < adjacencyDist) {
+        return true; // Adjacent to existing module
+      }
+    }
+    return false; // Not adjacent to any module
+  };
+
+  // Helper: validate build placement and update preview mesh visibility/color
+  const validateBuildPlacement = (point: THREE.Vector3): { valid: boolean; message?: string } => {
+    // Check adjacency first
+    if (structuresRef.current.length === 0) {
+      // No modules yet - allow placement anywhere
+      return { valid: true, message: 'Start building your station' };
+    }
+
+    const adjacent = checkAdjacency(point);
+    if (!adjacent) {
+      return { valid: false, message: 'Module must connect to existing structure' };
+    }
+
+    return { valid: true };
+  };
+
   // ====================== Build placement ======================
   const tryPlaceStructure = (): boolean => {
     const scene = sceneRef.current;
@@ -1202,6 +1519,32 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       // Not enough resources
       return false;
     }
+
+    // Snap to grid
+    const snappedPoint = snapToGrid(point);
+    const validation = validateBuildPlacement(snappedPoint);
+    if (!validation.valid) {
+      // Show red invalid preview
+      const group = buildPreviewRef.current;
+      if (group) {
+        group.position.copy(snappedPoint);
+        group.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            const m = child.material as THREE.MeshStandardMaterial | THREE.MeshBasicMaterial;
+            if ('transparent' in m && m.transparent && 'opacity' in m) {
+              m.opacity = 0.4;
+              // Red tint for invalid
+              if (m.color) {
+                (m as any).originalColor = m.color.getHex();
+                m.color.setHex(0xff0000);
+              }
+            }
+          }
+        });
+      }
+      return false; // Don't place
+    }
+
     // Deduct resources
     r.iron -= info.costIron;
     r.ice -= info.costIce;
@@ -1209,9 +1552,9 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     setUiIron(r.iron);
     setUiIce(r.ice);
     setUiRawOre(r.rawOre);
-    // Create structure at floor point
+    // Create structure at snapped grid point
     const group = createStructureMesh(type);
-    group.position.copy(point);
+    group.position.copy(snappedPoint);
     scene.add(group);
     let structureType: BuildableStructureType = type;
     // Initialize smelter-specific state
@@ -1223,8 +1566,13 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       (group as any).smelterLastProcessTime = 0;
     }
     structuresRef.current.push({ group, type: structureType });
+    // Update airlock state if pressurized module (dome, hab, storage)
+    if (type === 'dome' || type === 'o2generator' || type === 'storage') {
+      (group as any).isInteriorVisible = false;
+      (group as any).isInterior = false;
+    }
     // Small particle puff
-    createParticles(point.clone().setY(0.5), 8, 0x00ffff);
+    createParticles(snappedPoint.clone().setY(0.5), 8, 0x00ffff);
     return true;
   };
 
@@ -1476,6 +1824,10 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
           if ('opacity' in m) {
             m.transparent = true;
             m.opacity = 0.4;
+            // Default cyan/green for valid, will be overridden to red for invalid
+            if (m.color && !('originalColor' in m)) {
+              (m as any).originalColor = m.color.getHex();
+            }
           }
         }
       });
@@ -2011,10 +2363,14 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
         }
 
         if (nearbyStructure) {
-          // Show simple interaction prompt (could be expanded to 3D UI)
-          console.log(`Interact with ${nearbyStructure.type} structure`);
-          // Could open crafting menu, place module, etc.
-          // For now, just toggle build preview on/off to indicate interaction ready
+          if (nearbyStructure.isInterior) {
+            // Exit structure
+            exitStructure(nearbyStructure);
+          } else {
+            // Enter structure
+            enterStructure(nearbyStructure, camera);
+          }
+          // Update build preview visibility to indicate interaction ready
           if (buildPreviewRef.current) {
             buildPreviewRef.current.visible = true;
           }
