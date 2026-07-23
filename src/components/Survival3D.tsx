@@ -1487,9 +1487,8 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
 
   // Helper: validate build placement and update preview mesh visibility/color
   const validateBuildPlacement = (point: THREE.Vector3): { valid: boolean; message?: string } => {
-    // Check adjacency first
+    // First module: can be placed anywhere (to start your station)
     if (structuresRef.current.length === 0) {
-      // No modules yet - allow placement anywhere
       return { valid: true, message: 'Start building your station' };
     }
 
