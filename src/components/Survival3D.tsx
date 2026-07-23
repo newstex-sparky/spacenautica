@@ -1890,6 +1890,12 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     // 3D holographic inventory panel — created once, shown/hidden
     const inventoryPanelGroup = createInventoryPanel();
     scene.add(inventoryPanelGroup);
+    
+    // Add 3D icons for inventory items to panel
+    inventorySlots.forEach((slot, idx) => {
+      inventoryPanelGroup.add(slot.mesh);
+    });
+    
     inventoryPanelRef.current = { group: inventoryPanelGroup, isVisible: false };
 
     // Make preview materials translucent holographic
@@ -2289,28 +2295,54 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
         if (moveDirection.length() > 0) {
           moveDirection.normalize().multiplyScalar(PLAYER_SPEED * dt);
           player.position.add(moveDirection);
-          // Clamp to world radius
-          const dist = Math.sqrt(player.position.x ** 2 + player.position.z ** 2);
-          if (dist > WORLD_RADIUS) {
-            player.position.x = (player.position.x / dist) * WORLD_RADIUS;
-            player.position.z = (player.position.z / dist) * WORLD_RADIUS;
-          }
         }
 
         // ===== First-person camera (keyboard + gamepad) =====
-        camera.position.set(player.position.x, PLAYER_HEIGHT, player.position.z);
-        
-        // Update interior/exterior visibility based on position
-        updateInteriorVisibility();
+        if (cameraRef.current && playerRef.current) {
+          const player = playerRef.current;
+          const camera = cameraRef.current;
 
-        const lookDir = new THREE.Vector3(
-          Math.sin(yawRef.current) * Math.cos(pitchRef.current),
-          Math.sin(pitchRef.current),
-          Math.cos(yawRef.current) * Math.cos(pitchRef.current),
-        );
-        const lookTarget = new THREE.Vector3().copy(camera.position).add(lookDir);
-        camera.lookAt(lookTarget);
-        player.rotation.y = yawRef.current;
+          // Check if inside a pressurized structure
+          const nearby = getNearbyStructure();
+          const inPressurized = nearby?.inside ?? false;
+
+          if (inPressurized && nearby.structure.isInterior) {
+            // Inside structure: camera is at structure position + offset
+            camera.position.copy(nearby.structure.group.position);
+            camera.position.add(nearby.structure.interiorCameraOffset || new THREE.Vector3(0, PLAYER_HEIGHT, 0));
+            // Look at nearby point
+            const lookDir = new THREE.Vector3(
+              Math.sin(yawRef.current) * Math.cos(pitchRef.current),
+              Math.sin(pitchRef.current),
+              Math.cos(yawRef.current) * Math.cos(pitchRef.current),
+            );
+            const lookTarget = camera.clone().add(lookDir);
+            camera.lookAt(lookTarget);
+          } else {
+            // Outside: camera follows player at world level
+            camera.position.set(player.position.x, PLAYER_HEIGHT, player.position.z);
+
+            // Clamp to world radius
+            const dist = Math.sqrt(player.position.x ** 2 + player.position.z ** 2);
+            if (dist > WORLD_RADIUS) {
+              player.position.x = (player.position.x / dist) * WORLD_RADIUS;
+              player.position.z = (player.position.z / dist) * WORLD_RADIUS;
+            }
+
+            const lookDir = new THREE.Vector3(
+              Math.sin(yawRef.current) * Math.cos(pitchRef.current),
+              Math.sin(pitchRef.current),
+              Math.cos(yawRef.current) * Math.cos(pitchRef.current),
+            );
+            const lookTarget = new THREE.Vector3().copy(camera.position).add(lookDir);
+            camera.lookAt(lookTarget);
+          }
+
+          player.rotation.y = yawRef.current;
+        }
+
+        // Update interior/exterior visibility
+        updateInteriorVisibility();
       }
 
       // ===== Asteroid rotation + respawn timers =====
