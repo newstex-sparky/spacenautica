@@ -1991,6 +1991,11 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
         depositOre();
         return;
       }
+      // G key: deposit water ice to refinery
+      if (e.code === REFINERY_DEPOSIT_KEY) {
+        depositWaterIce();
+        return;
+      }
       // 1/2/3/4/5/6/R select build type (only in build mode)
       if (buildModeRef.current) {
         if (e.code === 'Digit1') { buildTypeRef.current = 'dome';        setUiBuildType('dome');        updateBuildPreviewMesh('dome'); }
