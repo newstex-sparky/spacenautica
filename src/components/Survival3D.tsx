@@ -70,7 +70,8 @@ const BUILD_TYPES: Record<BuildableStructureType, BuildTypeInfo> = {
   o2generator: { name: 'O2 Generator',   costIron: 0,  costIce: 10, costRawOre: 0, costH2: 0, hotkey: '3', description: 'Generates O2 from H2' },
   smelter:     { name: 'Smelter',        costIron: 10, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '4', description: 'Smelts ore into metals' },
   refinery:    { name: 'Electrolysis Ref', costIron: 0, costIce: 15, costRawOre: 0, costH2: 0, hotkey: '5', description: 'Water ice → O2 + H2' },
-  storage:     { name: 'Storage Locker',  costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '6', description: 'Stores raw materials' },
+  fabricator: { name: 'Fabricator',      costIron: 15, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '6', description: 'Craft tools and upgrades' },
+  storage:     { name: 'Storage Locker',  costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '7', description: 'Stores raw materials' },
   signalrelay: { name: 'Signal Relay',   costIron: 20, costIce: 0, costRawOre: 0, costH2: 10, hotkey: 'R', description: 'Win condition - broadcast distress' },
 };
 
@@ -108,6 +109,11 @@ interface BuiltStructure {
   isRefineryProcessing?: boolean;
   refineryLastProcessTime?: number;
   refineryProcessingProgress?: number;
+  // Fabricator-specific properties
+  craftingUIOpen?: boolean;
+  craftingUIGroup?: THREE.Group;
+  selectedCraft?: string;
+  craftingStatus?: string;
 }
 
 interface Structure extends BuiltStructure {
@@ -297,6 +303,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const [uiSmelterStatus, setUiSmelterStatus] = useState<string>(''); // hovered smelter status
   const [uiLowO2Warning, setUiLowO2Warning] = useState(false); // low O2 warning state
   const [uiDeathSequence, setUiDeathSequence] = useState(false); // death sequence playing
+  const [uiCrafting, setUiCrafting] = useState(false); // crafting UI shown
 
   // Inventory UI state
   const [uiInventoryOpen, setUiInventoryOpen] = useState(false);
@@ -1372,7 +1379,195 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     if (type === 'o2generator') return createO2GeneratorMesh();
     if (type === 'smelter') return createSmelterMesh();
     if (type === 'refinery') return createRefineryMesh();
+    if (type === 'fabricator') return createFabricatorMesh();
     return new THREE.Group();
+  };
+
+  // ====================== Fabricator Module Mesh ======================
+  const createFabricatorMesh = (): THREE.Group => {
+    const group = new THREE.Group();
+
+    // Main rectangular body
+    const bodyGeo = new THREE.BoxGeometry(2, 1.5, 3);
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x444444,
+      metalness: 0.9,
+      roughness: 0.3,
+    });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.position.y = 1.25;
+    body.userData = { isExterior: true };
+    group.add(body);
+
+    // Front workbench surface
+    const surfaceGeo = new THREE.BoxGeometry(1.8, 0.1, 0.5);
+    const surfaceMat = new THREE.MeshStandardMaterial({
+      color: 0x222222,
+      metalness: 0.8,
+      roughness: 0.4,
+    });
+    const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
+    surface.position.set(0, 0.8, 1.5);
+    surface.rotation.x = -0.3; // Slight incline
+    group.add(surface);
+
+    // Holographic crafting display (3D UI in front)
+    const displayGeo = new THREE.PlaneGeometry(1.5, 1);
+    const displayMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    });
+    const display = new THREE.Mesh(displayGeo, displayMat);
+    display.position.set(0, 1.0, 1.8);
+    (group as any).craftingDisplay = display;
+    group.add(display);
+
+    // Glowing frame around display
+    const frameGeo = new THREE.EdgesGeometry(displayGeo);
+    const frameMat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.6 });
+    const frame = new THREE.LineSegments(frameGeo, frameMat);
+    frame.position.set(0, 1.0, 1.8);
+    group.add(frame);
+
+    // Control panel
+    const panelGeo = new THREE.BoxGeometry(1, 0.4, 0.3);
+    const panelMat = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      metalness: 0.8,
+      roughness: 0.3,
+    });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    panel.position.set(0, 2.0, 0);
+    group.add(panel);
+
+    // Status light
+    const lightGeo = new THREE.SphereGeometry(0.1, 8, 8);
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+    const statusLight = new THREE.Mesh(lightGeo, lightMat);
+    statusLight.position.set(0, 2.0, 0.8);
+    (group as any).statusLight = statusLight;
+    group.add(statusLight);
+
+    return group;
+  };
+
+  // ====================== Fabricator Crafting Display ======================
+  const createCraftingDisplay = (structure: BuiltStructure) => {
+    const group = new THREE.Group();
+    group.visible = false; // Hidden by default
+
+    // Background panel
+    const panelGeo = new THREE.BoxGeometry(1.6, 1.2, 0.1);
+    const panelMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.15,
+      side: THREE.DoubleSide,
+    });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    group.add(panel);
+
+    // Title
+    const titleGeo = new THREE.PlaneGeometry(1.4, 0.3);
+    const titleMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+    });
+    const title = new THREE.Mesh(titleGeo, titleMat);
+    title.position.set(0, 0.5, 0.06);
+    title.rotation.x = -0.3;
+    group.add(title);
+
+    // Item display slots
+    const recipes = [
+      { id: 'jetpack-mk1', name: 'Jetpack Mk1', cost: '5 Metals', desc: 'Slow upward thrust' },
+      { id: 'jetpack-mk2', name: 'Jetpack Mk2', cost: '10 Metals + 5 H2', desc: 'Faster thrust, longer duration' },
+      { id: 'air-tank', name: 'Air Tank', cost: '3 Metals', desc: '+50 O2 capacity (max 150)' },
+      { id: 'mining-drill-mk2', name: 'Mining Drill Mk2', cost: '5 Metals', desc: '2x mining speed' },
+      { id: 'repair-tool', name: 'Repair Tool', cost: '3 Metals', desc: 'Repair damaged modules' },
+      { id: 'scanner', name: 'Scanner', cost: '5 Metals', desc: 'Reveal asteroid types' },
+    ];
+
+    const slotSize = 0.3;
+    const slotSpacing = 0.5;
+    const startY = 0.0;
+
+    recipes.forEach((recipe, idx) => {
+      // Item icon (rotating cube representing crafted item)
+      const iconGeo = new THREE.BoxGeometry(slotSize, slotSize, slotSize);
+      const iconMat = new THREE.MeshBasicMaterial({
+        color: 0x00ff00,
+        transparent: true,
+        opacity: 0.6,
+        wireframe: true,
+      });
+      const icon = new THREE.Mesh(iconGeo, iconMat);
+      icon.position.set(-0.4, startY + (idx % 2) * slotSpacing + slotSize, 0.1);
+      icon.userData = { recipeId: recipe.id, rotate: true };
+      group.add(icon);
+
+      // Item name
+      const nameGeo = new THREE.PlaneGeometry(0.4, 0.15);
+      const nameMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.8,
+        side: THREE.DoubleSide,
+      });
+      const name = new THREE.Mesh(nameGeo, nameMat);
+      name.position.set(0, startY + (idx % 2) * slotSpacing + slotSize, 0.11);
+      name.rotation.x = -0.3;
+      name.userData = { recipeId: recipe.id, text: recipe.name };
+      group.add(name);
+
+      // Cost text
+      const costGeo = new THREE.PlaneGeometry(0.5, 0.1);
+      const costMat = new THREE.MeshBasicMaterial({
+        color: 0xffff00,
+        transparent: true,
+        opacity: 0.6,
+        side: THREE.DoubleSide,
+      });
+      const cost = new THREE.Mesh(costGeo, costMat);
+      cost.position.set(0.4, startY + (idx % 2) * slotSpacing + slotSize, 0.11);
+      cost.rotation.x = -0.3;
+      cost.userData = { recipeId: recipe.id, text: recipe.cost };
+      group.add(cost);
+
+      // Description
+      const descGeo = new THREE.PlaneGeometry(0.6, 0.1);
+      const descMat = new THREE.MeshBasicMaterial({
+        color: 0x00ffff,
+        transparent: true,
+        opacity: 0.5,
+        side: THREE.DoubleSide,
+      });
+      const desc = new THREE.Mesh(descGeo, descMat);
+      desc.position.set(0, startY + (idx % 2) * slotSpacing - slotSpacing / 2, 0.11);
+      desc.rotation.x = -0.3;
+      desc.userData = { recipeId: recipe.id, text: recipe.desc };
+      group.add(desc);
+    });
+
+    // Back button indicator
+    const backGeo = new THREE.PlaneGeometry(0.3, 0.15);
+    const backMat = new THREE.MeshBasicMaterial({
+      color: 0xff0000,
+      transparent: true,
+      opacity: 0.7,
+      side: THREE.DoubleSide,
+    });
+    const back = new THREE.Mesh(backGeo, backMat);
+    back.position.set(0, -0.6, 0.06);
+    back.rotation.x = -0.3;
+    (group as any).backButton = back;
+    group.add(back);
+
+    return group;
   };
 
   // ====================== Particles ======================
@@ -1560,8 +1755,8 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       (group as any).smelterLastProcessTime = 0;
     }
     structuresRef.current.push({ group, type: structureType });
-    // Update airlock state if pressurized module (dome, hab, storage)
-    if (type === 'dome' || type === 'o2generator' || type === 'storage') {
+    // Update airlock state if pressurized module (dome, fabricator, o2generator, storage)
+    if (type === 'dome' || type === 'fabricator' || type === 'o2generator' || type === 'storage') {
       (group as any).isInteriorVisible = false;
       (group as any).isInterior = false;
     }
@@ -1700,6 +1895,10 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       }
     });
     previewGroup.add(initPreview);
+    // Ensure fabricator preview works too
+    if (initPreview) {
+      (initPreview as any).userData.type = 'fabricator';
+    }
 
     // Resize handler
     const handleResize = () => {
@@ -1736,15 +1935,24 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
         return;
       }
       if (gameOverRef.current) return;
-      // I or Y to toggle inventory
+      // I or Y to toggle inventory or craft at fabricator
       if (e.code === 'KeyI' || e.code === 'KeyY') {
         inventoryOpenRef.current = !inventoryOpenRef.current;
         setUiInventoryOpen(inventoryOpenRef.current);
-        // Keep build mode disabled when inventory is open
         if (inventoryOpenRef.current) {
           setGameState(prev => ({ ...prev, buildMode: false }));
           setUiBuildMode(false);
           buildModeRef.current = false;
+        } else {
+          // Check if near fabricator for crafting
+          const camera = cameraRef.current;
+          if (camera) {
+            for (const structure of structuresRef.current) {
+              if (structure.type === 'fabricator' && structure.group.position.distanceTo(camera.position) <= BUILD_RANGE) {
+                setUiCrafting(true); // Show crafting UI
+              }
+            }
+          }
         }
         return;
       }
@@ -2390,36 +2598,43 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
         setUiBuildType(buildTypeRef.current);
       }
 
-      // A button: Action/Interact (enter structure, use fabricator) — only in build mode
+      // A button: Action/Interact (enter structure, use fabricator, craft items)
       if (buttonAPressedRef.current && !gameOverRef.current && buildModeRef.current) {
-        // Check for nearby structures to interact with
         const camera = cameraRef.current;
         const scene = sceneRef.current;
         if (!camera || !scene) return;
 
+        // Check for nearby fabricator to open crafting UI
+        let nearbyFabricator = null;
         let nearbyStructure = null;
         for (const structure of structuresRef.current) {
           const dist = structure.group.position.distanceTo(camera.position);
           if (dist <= BUILD_RANGE) {
-            nearbyStructure = structure;
-            break;
+            if (structure.type === 'fabricator') {
+              nearbyFabricator = structure;
+            } else {
+              nearbyStructure = structure;
+            }
           }
         }
 
-        if (nearbyStructure) {
-          if (nearbyStructure.isInterior) {
-            // Exit structure
-            exitStructure(nearbyStructure);
+        // Handle fabricator crafting UI
+        if (nearbyFabricator) {
+          const fabrication = nearbyFabricator as BuiltStructure;
+          if (!fabrication.craftingUIGroup) {
+            // Create crafting UI group
+            const craftingGroup = createCraftingDisplay(fabrication);
+            sceneRef.current?.add(craftingGroup);
+            fabrication.craftingUIGroup = craftingGroup;
+            fabrication.craftingUIOpen = true;
           } else {
-            // Enter structure
-            enterStructure(nearbyStructure, camera);
+            // Crafting UI already open, close it
+            sceneRef.current?.remove(fabrication.craftingUIGroup);
+            fabrication.craftingUIGroup.visible = false;
+            fabrication.craftingUIOpen = false;
           }
-          // Update build preview visibility to indicate interaction ready
-          if (buildPreviewRef.current) {
-            buildPreviewRef.current.visible = true;
-          }
+          return; // Done, don't also enter structure
         }
-      }
 
       // Start: Pause menu
       if (buttonAPressedRef.current && !gameOverRef.current && !buildModeRef.current) {
@@ -3050,6 +3265,13 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       {uiBuildMode && !gameState.gameOver && (
         <div style={styles.buildModeIndicator}>
           🔨 BUILD MODE — [{BUILD_TYPES[uiBuildType].hotkey}] {BUILD_TYPES[uiBuildType].name} — Click to place · B to exit
+        </div>
+      )}
+
+      {/* Crafting status — when near fabricator */}
+      {uiCrafting && !gameState.gameOver && !uiBuildMode && (
+        <div style={styles.craftingIndicator}>
+          🛠️ CRAFTING UI — Near Fabricator · Press A to open/close · Y to craft
         </div>
       )}
 
