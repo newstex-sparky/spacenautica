@@ -5,6 +5,9 @@ import * as THREE from 'three';
 const PLAYER_HEIGHT = 1.6;
 const PLAYER_SPEED = 5;
 
+// Audio context for heartbeat sound
+let audioContext: AudioContext | null = null;
+
 // Oxygen survival
 const O2_MAX = 100;
 const O2_DEPLETION_PER_SEC = 1;       // 1 O2 per second in vacuum
@@ -12,6 +15,8 @@ const O2_REFILL_CRYSTAL = 25;          // mining an oxygen crystal refills +25
 const O2_LOW_WARNING_THRESHOLD = 20;   // Warning when O2 drops below this
 const O2_RESPAWN_AMOUNT = 50;          // O2 restored on respawn
 const LOW_O2_WARNING_DURATION = 30;    // seconds of warning before hard fail
+const O2_VENT_PARTICLE_RATE = 2;       // particles per second near O2 source
+const O2_HEARTBEAT_INTERVAL = 0.8;     // seconds between heartbeat pulses
 
 // Asteroid mining
 const ASTEROID_COUNT = 40;             // 30-50 asteroids in world
@@ -2142,6 +2147,11 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
           ambientLightRef.current.intensity += (targetIntensity - ambientLightRef.current.intensity) * dt * 2;
         }
 
+        // Initialize audio context on first need
+        if (audioContext === null && o2Ref.current <= O2_LOW_WARNING_THRESHOLD && !inPressurized) {
+          audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+
         // O2 depletion only happens in vacuum
         if (!inPressurized) {
           o2Ref.current -= O2_DEPLETION_PER_SEC * dt;
@@ -2151,14 +2161,74 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
           const o2Percent = o2Ref.current / O2_MAX;
           setUiLowO2Warning(o2Percent < O2_LOW_WARNING_THRESHOLD / O2_MAX);
 
+          // Audio heartbeat when O2 < 20
+          if (audioContext !== null && o2Ref.current <= O2_LOW_WARNING_THRESHOLD) {
+            // Create pulsing heartbeat sound
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+              
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(60, audioContext.currentTime); // Low heartbeat
+            oscillator.frequency.exponentialRampToValueAtTime(50, audioContext.currentTime + 0.1);
+              
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+            gainNode.gain.linearRampToValueAtTime(0.1, audioContext.currentTime + 0.05);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+              
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+              
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.1);
+          }
+
+          // Spawn O2 vent particles near O2 sources
+          if (Math.random() < dt * O2_VENT_PARTICLE_RATE) {
+            // Find nearby O2 sources (refinery output, oxygen crystal)
+            let nearbyO2Source = null;
+            for (const asteroid of asteroidsRef.current) {
+              if (asteroid.type === 'oxygen' && asteroid.isMined) {
+                const dist = asteroid.mesh.position.distanceTo(camera.position);
+                if (dist < 20) {
+                  nearbyO2Source = asteroid.mesh.position;
+                  break;
+                }
+              }
+            }
+            if (!nearbyO2Source) {
+              // Check refinery output
+              for (const structure of structuresRef.current) {
+                if (structure.type === 'refinery' && structure.refineryInventory && structure.refineryInventory.waterIce > 0) {
+                  const dist = structure.group.position.distanceTo(camera.position);
+                  if (dist < 15) {
+                    nearbyO2Source = structure.group.position;
+                    break;
+                  }
+                }
+              }
+            }
+              
+            if (nearbyO2Source) {
+              const spawnPos = nearbyO2Source.clone().add(new THREE.Vector3(
+                (Math.random() - 0.5) * 4,
+                Math.random() * 3,
+                (Math.random() - 0.5) * 4
+              ));
+              createParticles(spawnPos, 1, 0x00ffff); // Cyan particles
+            }
+          }
+
           // Death sequence before hitting 0
-          if (o2Ref.current < LOW_O2_WARNING_DURATION && o2Ref.current > 0) {
-            // Fade to black, camera floats, SIGNAL LOST
-            cameraRef.current?.position.y = 0.5; // Float away
-            sceneRef.current?.background = new THREE.Color(0x000000); // Fade to black
+          if (o2Ref.current <= LOW_O2_WARNING_DURATION && o2Ref.current > 0) {
+            const deathProgress = 1 - (o2Ref.current / LOW_O2_WARNING_DURATION);
+            cameraRef.current?.position.y = 0.5 + Math.sin(deathProgress * Math.PI) * 0.5; // Float and drift
+            cameraRef.current?.rotation.z = deathProgress * 0.5; // Tilt camera
           }
         } else {
-          setUiO2(O2_MAX); // Inside pressurized structure, max O2
+          // In pressurized structure - stop heartbeat, restore O2 slowly
+          audioContext = null; // Stop audio
+          o2Ref.current = Math.min(O2_MAX, o2Ref.current + O2_DEPLETION_PER_SEC * dt * 0.1); // Slowly restore
+          setUiO2(o2Ref.current);
           setUiLowO2Warning(false); // No warning inside
         }
 
@@ -3324,6 +3394,32 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
           <button onClick={handleRestart} style={styles.restartButton}>
             RESTART
           </button>
+        </div>
+      )}
+
+      {/* Death sequence overlay - SIGNAL LOST */}
+      {gameState.gameOver && uiDeathSequence && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'black',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ff0000',
+            fontFamily: 'monospace',
+            fontSize: 36,
+            fontWeight: 'bold',
+            textShadow: '0 0 20px #ff0000',
+            animation: 'pulse 1s infinite',
+            zIndex: 1000,
+          }}
+        >
+          <div style={{ marginBottom: 30, fontSize: 48 }}>"SIGNAL LOST"</div>
+          <div style={{ fontSize: 20, opacity: 0.7, marginTop: 20 }}>Player drifting in void...</div>
+          <div style={{ fontSize: 16, opacity: 0.5, marginTop: 10 }}>Waiting for respawn...</div>
         </div>
       )}
 

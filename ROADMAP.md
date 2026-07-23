@@ -66,7 +66,7 @@ Build a real station with connected modules, walk inside, use crafting.
 
 || Issue | Title | Status |
 |-------|-------|--------|
-| #36 | Station module placement (snap-to-grid, adjacency, 6 module types) | ⚠️ Partial |
+| #36 | Station module placement (snap-to-grid, adjacency, 6 module types) | ✅ Done |
 | #37 | Walk inside pressurized station | ❌ Not started |
 | #38 | Airlock transition (vacuum ↔ pressurized) | ❌ Not started |
 | #39 | 3D crafting UI at fabricator | ❌ Not started |

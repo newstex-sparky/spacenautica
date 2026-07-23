@@ -5,7 +5,8 @@
   "main": "index.html",
   "scripts": {
     "dev": "python3 -m http.server 8000",
-    "serve": "npx serve"
+    "serve": "npx serve",
+    "build": "vite build"
   },
   "keywords": [
     "game",
@@ -16,6 +17,13 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^7.0.2"
+    "@types/node": "^26.1.1",
+    "@vitejs/plugin-react": "^6.0.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   }
 }

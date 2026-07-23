@@ -1,18 +1,19 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import { resolve } from 'path'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 export default defineConfig({
-  root: resolve(__dirname),
-  base: '/spacenautica/',
   plugins: [react()],
   build: {
-    outDir: resolve(__dirname, 'dist'),
-    emptyOutDir: true,
-    minify: 'esbuild',
+    outDir: 'dist',
+    sourcemap: true,
   },
   server: {
-    port: 8002,
-    open: true,
+    port: 8000,
+    host: true,
   },
-})
+  resolve: {
+    alias: {
+      '@': '/src',
+    },
+  },
+});
