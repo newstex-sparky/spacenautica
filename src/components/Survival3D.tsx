@@ -22,7 +22,7 @@ const WORLD_RADIUS = 45;               // asteroid spawn radius around origin
 
 // Build mode
 const BUILD_RANGE = 8;                 // raycast floor within 8 units
-const BUILD_GRID_SIZE = 4;             // 4x4 tile grid, 4 units per tile
+const BUILD_GRID_SIZE = 1;             // 1 meter grid, snap to 1 unit increments
 const STORAGE_LOCKER_COST = { costIron: 5, costIce: 0, costRawOre: 0 }; // 1x1 module
 
 // Asteroid types
@@ -40,8 +40,8 @@ const ASTEROID_TYPES: Record<AsteroidType, AsteroidTypeInfo> = {
   oxygen: { name: 'Oxygen Crystal',    color: 0x00ff88, yieldAmount: 1 }, // oxygen type refills O2 directly
 };
 
-// Build structure types (6 module types for M2)
-export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
+// Build structure types (7 module types for M2 — including win condition)
+export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage' | 'signalrelay';
 
 // Structure dimensions (tile-based: BUILD_GRID_SIZE = 4 units)
 const STRUCTURE_DIMENSIONS: Record<BuildableStructureType, { width: number; depth: number }> = {
@@ -51,6 +51,7 @@ const STRUCTURE_DIMENSIONS: Record<BuildableStructureType, { width: number; dept
   smelter:     { width: 2, depth: 2 },
   refinery:    { width: 2, depth: 2 },
   storage:     { width: 1, depth: 1 },
+  signalrelay: { width: 4, depth: 4 }, // Win condition structure
 };
 
 interface BuildTypeInfo {
@@ -58,16 +59,19 @@ interface BuildTypeInfo {
   costIron: number;
   costIce: number;
   costRawOre: number;
+  costH2: number;
   hotkey: string;
+  description: string;
 }
 
 const BUILD_TYPES: Record<BuildableStructureType, BuildTypeInfo> = {
-  dome:        { name: 'Habitat Dome',  costIron: 10, costIce: 0, costRawOre: 0, hotkey: '1' },
-  solar:       { name: 'Solar Panel',   costIron: 5,  costIce: 0, costRawOre: 0, hotkey: '2' },
-  o2generator: { name: 'O2 Generator',  costIron: 0,  costIce: 10, costRawOre: 0, hotkey: '3' },
-  smelter:     { name: 'Smelter',       costIron: 10, costIce: 0, costRawOre: 0, hotkey: '4' },
-  refinery:    { name: 'Electrolysis Refinery', costIron: 0, costIce: 15, costRawOre: 0, hotkey: '5' },
-  storage:     { name: 'Storage Locker', costIron: 5,  costIce: 0, costRawOre: 0, hotkey: '6' },
+  dome:        { name: 'Habitat Dome',    costIron: 10, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '1', description: 'Pressurized living space' },
+  solar:       { name: 'Solar Panel',    costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '2', description: 'Passive power generation' },
+  o2generator: { name: 'O2 Generator',   costIron: 0,  costIce: 10, costRawOre: 0, costH2: 0, hotkey: '3', description: 'Generates O2 from H2' },
+  smelter:     { name: 'Smelter',        costIron: 10, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '4', description: 'Smelts ore into metals' },
+  refinery:    { name: 'Electrolysis Ref', costIron: 0, costIce: 15, costRawOre: 0, costH2: 0, hotkey: '5', description: 'Water ice → O2 + H2' },
+  storage:     { name: 'Storage Locker',  costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '6', description: 'Stores raw materials' },
+  signalrelay: { name: 'Signal Relay',   costIron: 20, costIce: 0, costRawOre: 0, costH2: 10, hotkey: 'R', description: 'Win condition - broadcast distress' },
 };
 
 // Smelting constants
@@ -90,23 +94,29 @@ interface Asteroid {
 }
 
 // Unified structure runtime object (supports both BuiltStructure and Refinery)
-interface Structure {
+interface BuiltStructure {
   group: THREE.Group;
   type: BuildableStructureType;
+  integrity?: number;
+  // Smelter-specific properties
+  inventory?: { rawOre: number };
+  isSmelterProcessing?: boolean;
+  smelterLastProcessTime?: number;
+  smelterProcessingProgress?: number;
+  // Refinery-specific properties
+  refineryInventory?: { waterIce: number };
+  isRefineryProcessing?: boolean;
+  refineryLastProcessTime?: number;
+  refineryProcessingProgress?: number;
+}
+
+interface Structure extends BuiltStructure {
   isInteriorVisible?: boolean; // When true, show interior and hide exterior shell
   // Airlock/Interior properties
   isInterior?: boolean; // True when player is actively inside
   airlockOpen?: boolean; // Airlock door state
   airlockTimer?: number; // For airlock transition animation
   interiorCameraOffset?: THREE.Vector3; // Camera offset when inside
-  // Smelter-specific properties
-  inventory?: { rawOre: number };
-  isSmelterProcessing?: boolean;
-  smelterLastProcessTime?: number;
-  // Refinery-specific properties
-  refineryInventory?: { waterIce: number };
-  isRefineryProcessing?: boolean;
-  refineryLastProcessTime?: number;
 }
 
 // Tool types (equipped, not stacked)
@@ -212,20 +222,6 @@ interface InventorySlot {
 const inventorySlots: InventorySlot[] = [];
 const iconSpacing = 0.7; // Space between icons
 
-// Create slots for each item in INITIAL_INVENTORY
-INITIAL_INVENTORY.forEach((item, idx) => {
-  const icon = createInventoryIcon(item.name);
-  icon.position.x = -2 + (idx % 4) * iconSpacing; // 4 items per row
-  icon.position.y = 1 - Math.floor(idx / 4) * iconSpacing; // Multiple rows
-  icon.position.z = -0.05; // Slightly in front of panel
-  icon.visible = false; // Hidden until count > 0
-
-  inventorySlots.push({ mesh: icon, name: item.name, type: item.type, index: idx });
-});
-
-// Equipped tool
-let equippedTool: ToolType = 'repair-tool'; // Default tool
-
 // Inventory items
 const INITIAL_INVENTORY: InventoryItem[] = [
   // Resources
@@ -239,75 +235,6 @@ const INITIAL_INVENTORY: InventoryItem[] = [
   { name: 'Tech Chips', type: 'crafted', count: 0, max: 99 },
 ];
 
-// 3D holographic inventory panel
-const createInventoryPanel = () => {
-  const group = new THREE.Group();
-  group.visible = false; // Hidden by default, shown when inventory is open
-
-  // Main holographic panel (semi-transparent box)
-  const panelGeometry = new THREE.BoxGeometry(6, 4, 0.1);
-  const panelMaterial = new THREE.MeshBasicMaterial({
-    color: 0x00ffff,
-    transparent: true,
-    opacity: 0.1,
-    side: THREE.DoubleSide,
-    wireframe: true,
-  });
-  const panel = new THREE.Mesh(panelGeometry, panelMaterial);
-  group.add(panel);
-
-  // Inner glow effect
-  const glowGeometry = new THREE.PlaneGeometry(5.8, 3.8);
-  const glowMaterial = new THREE.MeshBasicMaterial({
-    color: 0x00ffff,
-    transparent: true,
-    opacity: 0.05,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-  });
-  const glow = new THREE.Mesh(glowGeometry, glowMaterial);
-  group.add(glow);
-
-  return group;
-};
-
-// 3D icons for inventory items
-const createInventoryIcon = (itemName: string) => {
-  let geometry: THREE.BufferGeometry;
-  const material = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true });
-
-  if (itemName === 'Raw Ore' || itemName === 'Iron Metal' || itemName === 'Titanium') {
-    // Cube for raw materials
-    geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-  } else if (itemName === 'Water Ice') {
-    // Icosahedron for ice
-    geometry = new THREE.IcosahedronGeometry(0.3, 0);
-  } else if (itemName === 'O2 Canister' || itemName === 'H2 Canister') {
-    // Cylindrical canister shape
-    geometry = new THREE.CylinderGeometry(0.3, 0.3, 0.5, 16);
-  } else if (itemName === 'Tool' || itemName.startsWith('mining-drill')) {
-    // Drill tool
-    geometry = new THREE.ConeGeometry(0.3, 0.6, 8);
-  } else {
-    // Default box
-    geometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
-  }
-
-  const mesh = new THREE.Mesh(geometry, material.clone());
-  return mesh;
-};
-
-// Inventory slots for 3D display
-interface InventorySlot {
-  mesh: THREE.Mesh;
-  name: string;
-  type: string;
-  index: number;
-}
-
-const inventorySlots: InventorySlot[] = [];
-const iconSpacing = 0.7; // Space between icons
-
 // Create slots for each item in INITIAL_INVENTORY
 INITIAL_INVENTORY.forEach((item, idx) => {
   const icon = createInventoryIcon(item.name);
@@ -318,13 +245,6 @@ INITIAL_INVENTORY.forEach((item, idx) => {
 
   inventorySlots.push({ mesh: icon, name: item.name, type: item.type, index: idx });
 });
-  { name: 'Repair Tool', type: 'tool', count: 1, max: 1 }, // Equipped by default
-  { name: 'Mining Drill Mk1', type: 'tool', count: 0, max: 1 },
-  { name: 'Mining Drill Mk2', type: 'tool', count: 0, max: 1 },
-  { name: 'Scanner', type: 'tool', count: 0, max: 1 },
-  { name: 'Jetpack Mk1', type: 'tool', count: 0, max: 1 },
-  { name: 'Jetpack Mk2', type: 'tool', count: 0, max: 1 },
-];
 
 // Particle for mining puffs
 interface Particle {
@@ -633,6 +553,79 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
 
     console.log('Save data restored successfully');
   }, []);
+
+  // Expose game state for save/load callbacks
+  useEffect(() => {
+    if (onGetState) {
+      // Build state object for saving
+      const player = playerRef.current;
+      const camera = cameraRef.current;
+      const state = {
+        player: player ? {
+          position: [player.position.x, player.position.y, player.position.z],
+          rotation: [player.rotation.x, player.rotation.y, player.rotation.z],
+          yaw: yawRef.current,
+          pitch: pitchRef.current,
+        } : null,
+        resources: {
+          iron: resourcesRef.current.iron,
+          ice: resourcesRef.current.ice,
+          oxygen: resourcesRef.current.oxygen,
+          rawOre: resourcesRef.current.rawOre,
+          h2: resourcesRef.current.h2,
+          ironMetal: resourcesRef.current.ironMetal,
+          titanium: resourcesRef.current.titanium,
+        },
+        inventory: uiInventoryItems.map(item => ({
+          name: item.name,
+          type: item.type,
+          count: item.count,
+          max: item.max,
+        })),
+        equippedTool: uiEquippedTool,
+        structures: structuresRef.current.map(structure => ({
+          type: structure.type,
+          position: [structure.group.position.x, structure.group.position.y, structure.group.position.z],
+          rotation: [structure.group.rotation.x, structure.group.rotation.y, structure.group.rotation.z],
+          integrity: structure.integrity ?? 100,
+          smelterInventory: structure.inventory
+            ? { rawOre: (structure.inventory as any).rawOre }
+            : undefined,
+          smelterProcessing: structure.smelterIsProcessing ?? false,
+          smelterLastProcessTime: structure.smelterLastProcessTime ?? 0,
+        })),
+        asteroids: asteroidsRef.current.map(asteroid => ({
+          type: asteroid.type,
+          position: [asteroid.mesh.position.x, asteroid.mesh.position.y, asteroid.mesh.position.z],
+          rotation: [asteroid.mesh.rotation.x, asteroid.mesh.rotation.y, asteroid.mesh.rotation.z],
+          scale: asteroid.currentScale,
+          respawnTimer: asteroid.respawnTimer,
+          isMined: asteroid.isMined,
+        })),
+        uiState: {
+          buildMode: buildModeRef.current,
+          buildType: buildTypeRef.current,
+          lowO2Warning: uiLowO2Warning,
+          deathSequence: uiDeathSequence,
+        },
+      };
+      onGetState(state);
+    }
+  }, [
+    uiInventoryItems,
+    uiEquippedTool,
+    uiLowO2Warning,
+    uiDeathSequence,
+    playerRef.current,
+    cameraRef.current,
+    yawRef.current,
+    pitchRef.current,
+    resourcesRef.current,
+    structuresRef.current,
+    asteroidsRef.current,
+    buildModeRef.current,
+    buildTypeRef.current,
+  ]);
 
   // ====================== Build helpers ======================
   const randomAsteroidType = (): AsteroidType => {
@@ -1205,6 +1198,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
     body.position.y = 1.25;
+    body.userData = { isExterior: true }; // Mark as exterior for airlock
     group.add(body);
     // Glowing top
     const topGeo = new THREE.SphereGeometry(0.7, 16, 12);
@@ -1299,6 +1293,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     const body = new THREE.Mesh(bodyGeo, bodyMat);
     body.rotation.z = Math.PI / 2; // Horizontal
     body.position.y = 1.5;
+    body.userData = { isExterior: true }; // Mark as exterior for airlock
     group.add(body);
     
     // Interior chamber (visible when processing)
@@ -1688,6 +1683,13 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     buildPreviewRef.current = previewGroup;
     // Initialize preview with dome mesh
     const initPreview = createStructureMesh('dome');
+
+    // 3D holographic inventory panel — created once, shown/hidden
+    const inventoryPanelGroup = createInventoryPanel();
+    scene.add(inventoryPanelGroup);
+    inventoryPanelRef.current = { group: inventoryPanelGroup, isVisible: false };
+
+    // Make preview materials translucent holographic
     // Make preview materials translucent holographic
     initPreview.traverse(child => {
       if (child instanceof THREE.Mesh) {
@@ -1715,6 +1717,23 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       // ESC to toggle pause
       if (e.code === 'Escape') {
         setGameState(prev => ({ ...prev, isPaused: !prev.isPaused }));
+        return;
+      }
+      // E key: Enter/Exit pressurized station modules
+      if (e.code === 'KeyE') {
+        const nearby = getNearbyStructure();
+        if (nearby && nearby.structure) {
+          const structure = nearby.structure;
+          if (structure.isInterior) {
+            // Exit structure
+            exitStructure(structure);
+          } else {
+            // Enter structure (only pressurized modules: dome, o2generator, storage)
+            if (structure.type === 'dome' || structure.type === 'o2generator' || structure.type === 'storage') {
+              enterStructure(structure, cameraRef.current!);
+            }
+          }
+        }
         return;
       }
       if (gameOverRef.current) return;
@@ -1750,12 +1769,15 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
         depositOre();
         return;
       }
-      // 1/2/3/4 select build type (only in build mode)
+      // 1/2/3/4/5/6/R select build type (only in build mode)
       if (buildModeRef.current) {
         if (e.code === 'Digit1') { buildTypeRef.current = 'dome';        setUiBuildType('dome');        updateBuildPreviewMesh('dome'); }
         if (e.code === 'Digit2') { buildTypeRef.current = 'solar';       setUiBuildType('solar');       updateBuildPreviewMesh('solar'); }
         if (e.code === 'Digit3') { buildTypeRef.current = 'o2generator'; setUiBuildType('o2generator'); updateBuildPreviewMesh('o2generator'); }
         if (e.code === 'Digit4') { buildTypeRef.current = 'smelter';     setUiBuildType('smelter');     updateBuildPreviewMesh('smelter'); }
+        if (e.code === 'Digit5') { buildTypeRef.current = 'refinery';    setUiBuildType('refinery');    updateBuildPreviewMesh('refinery'); }
+        if (e.code === 'Digit6') { buildTypeRef.current = 'storage';     setUiBuildType('storage');     updateBuildPreviewMesh('storage'); }
+        if (e.code === 'KeyR')   { buildTypeRef.current = 'signalrelay'; setUiBuildType('signalrelay'); updateBuildPreviewMesh('signalrelay'); }
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => { keysRef.current[e.code] = false; };
@@ -1879,6 +1901,29 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       // pause by reading from a ref we keep updated via the effect re-subscription.
       // Simpler: check a module-level paused flag.
       if (pausedRef.current) return;
+
+      // ===== Inventory panel visibility =====
+      if (inventoryPanelRef.current) {
+        const panel = inventoryPanelRef.current;
+        const shouldShow = inventoryOpenRef.current && !gameOverRef.current;
+        
+        // Update visibility
+        if (panel.isVisible !== shouldShow) {
+          panel.group.visible = shouldShow;
+          panel.isVisible = shouldShow;
+        }
+
+        // Position panel in front of player camera (3D holographic screen)
+        if (shouldShow && camera) {
+          const panelDist = 3; // Distance from camera
+          const panelX = camera.position.x - Math.sin(yawRef.current) * Math.sin(pitchRef.current) * panelDist;
+          const panelY = camera.position.y + Math.cos(pitchRef.current) * panelDist;
+          const panelZ = camera.position.z - Math.cos(yawRef.current) * Math.sin(pitchRef.current) * panelDist;
+          
+          panel.group.position.set(panelX, panelY, panelZ);
+          panel.group.lookAt(camera.position);
+        }
+      }
 
       // ===== Oxygen depletion =====
       if (!gameOverRef.current) {
@@ -2631,7 +2676,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
 
     // ====================== Inventory management ======================
     const updateInventoryUI = () => {
-      // Update inventory items from resourcesRef
+      // Update all inventory items from resourcesRef
       const items = uiInventoryItems.map(item => {
         if (item.type === 'resource') {
           let count = 0;
@@ -2641,9 +2686,21 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
           else if (item.name === 'Titanium') count = resourcesRef.current.titanium;
           return { ...item, count };
         }
-        return item; // Crafted items and tools stay the same
+        return { ...item }; // Crafted items and tools stay the same
       });
       setUiInventoryItems(items);
+
+      // Sync 3D icons to inventory
+      const panel = inventoryPanelRef.current;
+      if (panel && panel.group.visible) {
+        // Update icon visibility based on count
+        inventorySlots.forEach(slot => {
+          const item = uiInventoryItems.find(i => i.name === slot.name && i.type === slot.type);
+          slot.mesh.visible = item && item.count > 0;
+          // Update rotation for visual effect
+          slot.mesh.rotation.y += 0.02;
+        });
+      }
     };
 
     const equipTool = (toolName: string) => {
@@ -3203,8 +3260,9 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
               </span>
             </div>
           </div>
-      </div>
-  );
+          </div>
+        </div>
+      );
 
   // ====================== Helper ======================
   function clampedDtSafe(dt: number): number {
@@ -3272,9 +3330,9 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       marginBottom: 8,
     },
     hintSubtext: {
-      color: 'rgba(0, 255, 255, 0.6)',
+      color: '#00ffff',
       fontFamily: 'monospace',
-      fontSize: 13,
+      fontSize: 14,
     },
   };
 

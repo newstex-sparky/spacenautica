@@ -179,11 +179,14 @@ export function App() {
       setScreen(null);
       setShow3D(true);
       console.log('Starting game from save:', saveData);
-      // TODO: Pass save data to Survival3D component to restore state
+      // Pass save data to Survival3D component to restore state
+      if (onRestoreState) {
+        onRestoreState(saveData);
+      }
     } else {
       console.error('No save data found');
     }
-  }, [loadGame]);
+  }, [loadGame, onRestoreState]);
 
   const handleQuestComplete = () => {
     setScreen(null);
