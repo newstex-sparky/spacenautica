@@ -760,6 +760,10 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     setUiRawOre(resourcesRef.current.rawOre);
     nearbySmelter.inventory.rawOre += 1;
 
+    // Start processing if not already processing
+    nearbySmelter.isProcessing = true;
+    nearbySmelter.processingProgress = 0;
+
     // Create deposit particles at smelter intake
     createParticles(nearbySmelter.group.position.clone().add(new THREE.Vector3(0, 0.3, 0)), 5, 0x888888);
 
