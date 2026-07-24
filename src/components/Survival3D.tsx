@@ -157,6 +157,28 @@ interface InventoryPanel {
   isVisible: boolean;
 }
 
+// Inventory slot for 3D interaction
+interface InventorySlot3D {
+  mesh: THREE.Mesh;
+  iconMesh: THREE.Mesh;
+  name: string;
+  type: string;
+  index: number;
+  onClick: () => void;
+}
+
+// Canister types and effects
+interface CanisterEffect {
+  o2: number;  // O2 refill amount
+  h2: number;  // H2 refill amount
+  tool: ToolType | null;  // Tool to equip (if applicable)
+}
+
+const CANISTER_EFFECTS: Record<string, CanisterEffect> = {
+  'O2 Canister': { o2: 25, h2: 0, tool: null },
+  'H2 Canister': { o2: 0, h2: 10, tool: null },
+};
+
 // Equipped tool
 let equippedTool: ToolType = 'repair-tool'; // Default tool
 
@@ -327,7 +349,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const [uiDeathSequence, setUiDeathSequence] = useState(false); // death sequence playing
   const [uiCrafting, setUiCrafting] = useState(false); // crafting UI shown
 
-  // Inventory UI state
+  // Inventory state
   const [uiInventoryOpen, setUiInventoryOpen] = useState(false);
   const [uiInventoryItems, setUiInventoryItems] = useState<InventoryItem[]>(INITIAL_INVENTORY.slice());
   const [uiEquippedTool, setUiEquippedTool] = useState<ToolType>('repair-tool');
@@ -347,7 +369,8 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const miningBeamRef = useRef<THREE.Mesh | null>(null);    // laser beam visual while mining
   const miningRingRef = useRef<THREE.Mesh | null>(null);     // progress ring around mined asteroid
   const buildPreviewRef = useRef<THREE.Group | null>(null); // holographic build preview
-  const inventoryPanelRef = useRef<InventoryPanel | null>(null); // holographic inventory panel
+  const inventoryPanelRef = useRef<THREE.Group | null>(null); // holographic inventory panel
+  const inventoryGroupRef = useRef<THREE.Group | null>(null); // Group to hold all inventory 3D elements
 
   // Resource refs (mirrored to UI state)
   const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0, ironMetal: 0, titanium: 0 });
@@ -3603,136 +3626,6 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       )}
     </div>
   );
-
-  // ====================== Inventory Panel ======================
-  // Inventory panel — holographic 3D overlay in front of player
-  if (!uiInventoryOpen) return null;
-
-  return (
-    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 100 }}>
-        <div style={{
-          position: 'absolute',
-          top: '10%',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: '600px',
-          backgroundColor: 'rgba(0, 20, 40, 0.85)',
-          border: '4px solid #00ffff',
-          borderRadius: 16,
-          padding: 20,
-          pointerEvents: 'auto',
-          boxShadow: '0 0 20px rgba(0, 255, 255, 0.3)',
-          backdropFilter: 'blur(8px)',
-        }}>
-          <h2 style={{
-            color: '#00ffff',
-            fontSize: 24,
-            textAlign: 'center',
-            fontFamily: 'monospace',
-            textShadow: '0 0 8px #00ffff',
-            marginBottom: 10,
-          }}>
-            INVENTORY
-          </h2>
-          <div style={{ marginBottom: 10 }}>
-            <div style={{
-              color: '#ffaa00',
-              fontSize: 18,
-              fontFamily: 'monospace',
-            }}>
-              EQUIPPED: <span style={{ fontWeight: 'bold', color: '#ffffff' }}>{uiEquippedTool}</span>
-            </div>
-          </div>
-          <div style={{
-            marginBottom: 10,
-            fontSize: 12,
-            color: '#00ffff',
-            fontFamily: 'monospace',
-          }}>
-            Press ESC or click outside to close
-          </div>
-          <div style={{
-            maxHeight: '300px',
-            overflowY: 'auto',
-            border: '2px solid rgba(0, 255, 255, 0.3)',
-            borderRadius: 8,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          }}>
-            {uiInventoryItems.map((item, idx) => (
-              <div
-                key={idx}
-                onClick={() => {
-                  if (item.type === 'tool') {
-                    equipTool(item.name);
-                  } else if (item.type === 'crafted' && item.count > 0) {
-                    consumeCanister(item.name);
-                  }
-                }}
-                style={{
-                  padding: '8px 12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  cursor: 'pointer',
-                  borderBottom: idx < uiInventoryItems.length - 1 ? '1px solid rgba(0, 255, 255, 0.2)' : 'none',
-                  transition: 'background 0.15s',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = 'rgba(0, 255, 255, 0.15)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                }}
-              >
-                <span style={{ color: item.type === 'tool' ? '#ffaa00' : item.type === 'resource' ? '#00ff88' : '#aaa', fontFamily: 'monospace' }}>
-                  {item.type === 'tool' && '🔧 '}
-                  {item.type === 'crafted' && '📦 '}
-                  {item.name}
-                </span>
-                <span style={{
-                  color: item.type === 'crafted' ? '#ff6600' : '#ffffff',
-                  fontSize: 14,
-                  fontFamily: 'monospace',
-                  fontWeight: 'bold',
-                  background: item.type === 'tool' ? 'rgba(255, 170, 0, 0.2)' : 'rgba(0, 0, 0, 0.6)',
-                  padding: '2px 8px',
-                  borderRadius: 4,
-                  pointerEvents: 'none',
-                }}>
-                  {item.type === 'tool' ? (item.count === 1 ? '1' : item.count) : item.count} / {item.max}
-                </span>
-              </div>
-            ))}
-          </div>
-          {/* Resource bar */}
-          <div style={{
-            marginTop: 15,
-            padding: '10px',
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            borderRadius: 8,
-            border: '2px solid rgba(0, 255, 255, 0.2)',
-          }}>
-            <div style={{ fontSize: 12, color: '#00ffff', fontFamily: 'monospace', marginBottom: 5 }}>
-              RESOURCES
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: '#888888' }} />
-              <span style={{ color: '#ffffff', fontFamily: 'monospace', fontSize: 13 }}>
-                Raw Ore: {resourcesRef.current.rawOre} / {uiInventoryItems.find((i) => i.name === 'Raw Ore')?.count || 0}
-              </span>
-              <span style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: '#00aaff' }} />
-              <span style={{ color: '#ffffff', fontFamily: 'monospace', fontSize: 13 }}>
-                Water Ice: {resourcesRef.current.ice} / {uiInventoryItems.find((i) => i.name === 'Water Ice')?.count || 0}
-              </span>
-              <span style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: '#ffaa00' }} />
-              <span style={{ color: '#ffffff', fontFamily: 'monospace', fontSize: 13 }}>
-                Iron: {resourcesRef.current.ironMetal} / {uiInventoryItems.find((i) => i.name === 'Iron Metal')?.count || 0}
-              </span>
-            </div>
-          </div>
-          </div>
-        </div>
-      );
 
   // ====================== Helper ======================
   function clampedDtSafe(dt: number): number {
