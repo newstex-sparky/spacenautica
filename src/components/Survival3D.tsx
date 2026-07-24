@@ -1011,23 +1011,94 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   };
 
   // ====================== Enter/Exit Structure (Airlock) ======================
+  // Play airlock hiss sound for pressurization sequence
+  const playAirlockHiss = () => {
+    if (audioContext === null) {
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+
+    if (audioContext.state === 'suspended') {
+      audioContext.resume();
+    }
+
+    // Create hiss sound using noise
+    const bufferSize = audioContext.sampleRate * 0.3; // 0.3 seconds
+    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * 0.15; // Quiet hiss
+    }
+
+    const noise = audioContext.createBufferSource();
+    noise.buffer = buffer;
+    const gainNode = audioContext.createGain();
+
+    // Fade in from 0 to quiet level
+    gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.15, audioContext.currentTime + 0.1);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.25);
+
+    noise.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    noise.start(audioContext.currentTime);
+  };
+
+  // Play depressurization whoosh sound for airlock exit
+  const playDepressurize = () => {
+    if (audioContext === null) return;
+
+    // Create whoosh sound from vacuum into space
+    const bufferSize = audioContext.sampleRate * 0.5; // 0.5 seconds
+    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      // White noise with frequency sweep
+      const t = i / audioContext.sampleRate;
+      data[i] = (Math.random() * 2 - 1) * (1 - t * 0.5);
+    }
+
+    const noise = audioContext.createBufferSource();
+    noise.buffer = buffer;
+    const filter = audioContext.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(200, audioContext.currentTime);
+    filter.frequency.exponentialRampToValueAtTime(50, audioContext.currentTime + 0.4);
+
+    const gainNode = audioContext.createGain();
+    gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4);
+
+    noise.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    noise.start(audioContext.currentTime);
+  };
+
   const enterStructure = (structure: Structure, camera: THREE.PerspectiveCamera) => {
     // Check if already inside
     if (structure.isInterior) return;
 
-    // Check airlock
+    // Initialize audio context
+    if (audioContext === null) {
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+
+    // Check if airlock is closed, open it
     if (structure.airlockOpen !== true) {
-      // Open airlock door
+      // Open airlock door (animate exterior shell fading)
       structure.airlockOpen = true;
       structure.airlockTimer = 0;
 
       // Animate exterior shell fading (airlock transition) - start transparent
-      structure.group.traverse(child => {
+      structure.group.traverse((child: any) => {
         if (child instanceof THREE.Mesh && child.userData.isExterior) {
           (child.material as THREE.MeshStandardMaterial).transparent = true;
           (child.material as THREE.MeshStandardMaterial).opacity = 0.15; // More transparent at start
         }
       });
+
+      // Play airlock hiss sound
+      playAirlockHiss();
     }
 
     // Calculate camera position at airlock entrance
@@ -2291,6 +2362,9 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       if (!gameOverRef.current) {
         const inPressurized = isInsidePressurizedStructure();
 
+        // Update interior/exterior visibility based on player position
+        updateInteriorVisibility();
+
         // Adjust ambient light based on inside/outside state
         if (ambientLightRef.current) {
           const targetIntensity = inPressurized ? 0.15 : 0.6;
@@ -2330,6 +2404,26 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
               
             oscillator.start(audioContext.currentTime);
             oscillator.stop(audioContext.currentTime + 0.1);
+          }
+
+          // Airlock hiss sound when entering/pressurizing
+          if (audioContext !== null && !structureRef.current?.airlockOpen) {
+            // Very quiet hiss sound using noise
+            const bufferSize = audioContext.sampleRate * 0.5; // 0.5 seconds
+            const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+              data[i] = (Math.random() * 2 - 1) * 0.1; // Low volume noise
+            }
+            const noise = audioContext.createBufferSource();
+            noise.buffer = buffer;
+            const gainNode = audioContext.createGain();
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+            gainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.1);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4);
+            noise.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            noise.start(audioContext.currentTime);
           }
 
           // Spawn O2 vent particles near O2 sources
