@@ -438,6 +438,18 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     uiDeathSequence,
   ]);
 
+  // Expose current state via callback
+  useEffect(() => {
+    if (onGetState) {
+      try {
+        const state = buildSaveData();
+        onGetState(state);
+      } catch (e) {
+        console.error('Failed to get state:', e);
+      }
+    }
+  }, [uiInventoryItems, uiEquippedTool, uiLowO2Warning, uiDeathSequence, buildSaveData, onGetState]);
+
   const restoreSaveData = useCallback((data: any) => {
     if (!sceneRef.current || !playerRef.current) {
       console.error('Cannot restore: scene or player not initialized');
@@ -475,14 +487,16 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       resourcesRef.current.h2 = data.resources.h2 ?? 0;
       resourcesRef.current.ironMetal = data.resources.ironMetal ?? 0;
       resourcesRef.current.titanium = data.resources.titanium ?? 0;
-      setUiIron(resourcesRef.current.iron);
-      setUiIce(resourcesRef.current.ice);
-      setUiOxygen(resourcesRef.current.oxygen);
-      setUiRawOre(resourcesRef.current.rawOre);
-      setUiH2(resourcesRef.current.h2);
-      setUiIronMetal(resourcesRef.current.ironMetal);
-      setUiTitaniumMetal(resourcesRef.current.titanium);
     }
+
+    // Restore UI resource state
+    setUiIron(resourcesRef.current.iron);
+    setUiIce(resourcesRef.current.ice);
+    setUiOxygen(resourcesRef.current.oxygen);
+    setUiRawOre(resourcesRef.current.rawOre);
+    setUiH2(resourcesRef.current.h2);
+    setUiIronMetal(resourcesRef.current.ironMetal);
+    setUiTitaniumMetal(resourcesRef.current.titanium);
 
     // Restore inventory
     if (data.inventory && Array.isArray(data.inventory)) {
@@ -575,10 +589,15 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
 
     // Restore UI state
     if (data.uiState) {
-      setUiLowO2Warning(data.uiState.lowO2Warning ?? false);
-      setUiDeathSequence(data.uiState.deathSequence ?? false);
+      setGameState(prev => ({ ...prev, buildMode: data.uiState.buildMode ?? false }));
       setUiBuildMode(data.uiState.buildMode ?? false);
       setUiBuildType(data.uiState.buildType ?? 'dome');
+      setUiLowO2Warning(data.uiState.lowO2Warning ?? false);
+      setUiDeathSequence(data.uiState.deathSequence ?? false);
+      if (data.uiState.gameOver) {
+        gameOverRef.current = true;
+        setGameState(prev => ({ ...prev, gameOver: true }));
+      }
     }
 
     console.log('Save data restored successfully');
