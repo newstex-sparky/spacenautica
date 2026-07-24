@@ -45,8 +45,8 @@ const ASTEROID_TYPES: Record<AsteroidType, AsteroidTypeInfo> = {
   oxygen: { name: 'Oxygen Crystal',    color: 0x00ff88, yieldAmount: 1 }, // oxygen type refills O2 directly
 };
 
-// Build structure types (7 module types for M2 — including win condition)
-export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage' | 'signalrelay';
+// Build structure types (8 module types for M2 — including win condition)
+export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage' | 'h2tank' | 'signalrelay';
 
 // Structure dimensions (tile-based: BUILD_GRID_SIZE = 4 units)
 const STRUCTURE_DIMENSIONS: Record<BuildableStructureType, { width: number; depth: number }> = {
@@ -56,6 +56,7 @@ const STRUCTURE_DIMENSIONS: Record<BuildableStructureType, { width: number; dept
   smelter:     { width: 2, depth: 2 },
   refinery:    { width: 2, depth: 2 },
   storage:     { width: 1, depth: 1 },
+  h2tank:      { width: 1, depth: 1 },
   signalrelay: { width: 4, depth: 4 }, // Win condition structure
 };
 
@@ -71,12 +72,13 @@ interface BuildTypeInfo {
 
 const BUILD_TYPES: Record<BuildableStructureType, BuildTypeInfo> = {
   dome:        { name: 'Habitat Dome',    costIron: 10, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '1', description: 'Pressurized living space' },
-  solar:       { name: 'Solar Panel',    costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '2', description: 'Passive power generation' },
+  solar:       { name: 'Solar Panel',    costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '2', description: 'Passive H2 generation when lit' },
   o2generator: { name: 'O2 Generator',   costIron: 0,  costIce: 10, costRawOre: 0, costH2: 0, hotkey: '3', description: 'Generates O2 from H2' },
   smelter:     { name: 'Smelter',        costIron: 10, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '4', description: 'Smelts ore into metals' },
   refinery:    { name: 'Electrolysis Ref', costIron: 0, costIce: 15, costRawOre: 0, costH2: 0, hotkey: '5', description: 'Water ice → O2 + H2' },
   fabricator: { name: 'Fabricator',      costIron: 15, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '6', description: 'Craft tools and upgrades' },
   storage:     { name: 'Storage Locker',  costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '7', description: 'Stores raw materials' },
+  h2tank:      { name: 'H2 Storage Tank',  costIron: 5, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '8', description: 'Stores H2 power for station' },
   signalrelay: { name: 'Signal Relay',   costIron: 20, costIce: 0, costRawOre: 0, costH2: 10, hotkey: 'R', description: 'Win condition - broadcast distress' },
 };
 
@@ -87,6 +89,14 @@ const SMELTER_H2_CONSUMPTION = 1 / 5; // 1 H2 consumed per 5 ore processed
 const SMELTER_DEPOSIT_RANGE = 4; // Distance to deposit ore
 const SMELTER_DEPOSIT_KEY = 'KeyF'; // Deposit key
 const REFINERY_DEPOSIT_KEY = 'KeyG'; // Deposit water ice to refinery
+
+// Station power grid constants
+const H2_STORAGE_CAPACITY = 100; // Maximum H2 in storage tank
+const SOLAR_PANEL_H2_GENERATION = 1; // H2 per second when lit (daytime)
+const SMELTER_H2_CONSUMPTION = 0.2; // H2 consumed per processed ore tick
+const O2_GENERATOR_H2_CONSUMPTION = 0.5; // H2 consumed per second to generate O2
+const FABRICATOR_H2_CONSUMPTION = 1; // H2 consumed per second
+const REFINERY_H2_CONSUMPTION = 0.5; // H2 consumed per second
 
 // Asteroid runtime object
 interface Asteroid {
@@ -222,12 +232,13 @@ const createInventoryIcon = (itemName: string) => {
   return mesh;
 };
 
-// Inventory slots for 3D display
+// Inventory slot for 3D display with clickable interaction
 interface InventorySlot {
   mesh: THREE.Mesh;
   name: string;
   type: string;
   index: number;
+  onClick: () => void; // Handler for clicking the item
 }
 
 const inventorySlots: InventorySlot[] = [];
@@ -270,6 +281,12 @@ interface GameState {
   gameOver: boolean;
   buildMode: boolean;
   buildType: BuildableStructureType;
+}
+
+interface StationPower {
+  currentH2: number;  // Current H2 in storage
+  maxH2: number;      // Maximum H2 storage (default: 100)
+  isPowerDepleted: boolean;  // All modules shutdown when H2 reaches 0
 }
 
 const INITIAL_GAME_STATE: GameState = {
@@ -335,6 +352,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   // Resource refs (mirrored to UI state)
   const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0, ironMetal: 0, titanium: 0 });
   const o2Ref = useRef(O2_MAX);
+  const stationPowerRef = useRef({ currentH2: 0, maxH2: H2_STORAGE_CAPACITY, isPowerDepleted: false });
   const buildModeRef = useRef(false);
   const buildTypeRef = useRef<BuildableStructureType>('dome');
   const mouseDownRef = useRef(false);
@@ -961,11 +979,11 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       structure.airlockOpen = true;
       structure.airlockTimer = 0;
 
-      // Animate exterior shell fading (airlock transition)
+      // Animate exterior shell fading (airlock transition) - start transparent
       structure.group.traverse(child => {
         if (child instanceof THREE.Mesh && child.userData.isExterior) {
           (child.material as THREE.MeshStandardMaterial).transparent = true;
-          (child.material as THREE.MeshStandardMaterial).opacity = 0.4;
+          (child.material as THREE.MeshStandardMaterial).opacity = 0.15; // More transparent at start
         }
       });
     }
@@ -1120,9 +1138,21 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     floor.position.y = 0.05;
     group.add(floor);
 
+    // Ceiling (opaque, completes the interior enclosure)
+    const ceilingGeo = new THREE.CircleGeometry(1.8, 32);
+    const ceilingMat = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      metalness: 0.5,
+      roughness: 0.7,
+    });
+    const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.y = 3.8;
+    group.add(ceiling);
+
     // Interior light (warm, ambient)
-    const interiorLight = new THREE.PointLight(0xffaa55, 0.8, 8);
-    interiorLight.position.set(0, 2, 0);
+    const interiorLight = new THREE.PointLight(0xffaa55, 1.2, 8);
+    interiorLight.position.set(0, 3, 0);
     interiorLight.name = "domeInteriorLight";
     group.add(interiorLight);
     (group as any).interiorLight = interiorLight;
@@ -1924,7 +1954,70 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     };
     window.addEventListener('resize', handleResize);
 
+    // ====================== Mouse pointerdown handler for inventory clicks ======================
+    window.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (gameOverRef.current || !inventoryOpenRef.current) return;
+      
+      // Only handle clicks when inventory is open
+      if (inventoryPanelRef.current) {
+        raycaster.setFromCamera(
+          new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1),
+          cameraRef.current!
+        );
+        
+        // Raycast against inventory slot icons
+        const slotMeshes = inventorySlots.map(slot => slot.mesh);
+        const intersects = raycaster.intersectObjects(slotMeshes);
+        
+        if (intersects.length > 0) {
+          const clickedMesh = intersects[0].object as THREE.Mesh;
+          const clickedSlot = inventorySlots.find(slot => slot.mesh === clickedMesh);
+          
+          if (clickedSlot) {
+            // Handle click based on item type
+            handleInventoryItemClick(clickedSlot);
+          }
+        }
+      }
+    });
+
+    // ====================== Inventory click handler ======================
+    const handleInventoryItemClick = (slot: InventorySlot) => {
+      const item = uiInventoryItems.find(i => i.name === slot.name);
+      if (!item || item.count <= 0) return;
+
+      // Handle crafted items (canisters) - consume and refill
+      if (item.type === 'crafted') {
+        if (item.name === 'O2 Canister') {
+          // Consume canister to refill 25 O2
+          o2Ref.current = Math.min(O2_MAX, o2Ref.current + 25);
+          setUiO2(o2Ref.current);
+          item.count -= 1;
+          setUiInventoryItems([...uiInventoryItems]);
+        } else if (item.name === 'H2 Canister') {
+          // Consume canister to refill 10 H2
+          resourcesRef.current.h2 = Math.min(resourcesRef.current.h2 + 10, 100);
+          setUiH2(resourcesRef.current.h2);
+          item.count -= 1;
+          setUiInventoryItems([...uiInventoryItems]);
+        }
+      }
+      // Handle resources (show toast message)
+      else if (item.type === 'resource') {
+        console.log(`Selected ${item.name}: ${item.count} available`);
+      }
+      // Handle tools (equip)
+      else if (item.type === 'tool') {
+        uiEquippedTool = item.name as ToolType;
+        setUiEquippedTool(uiEquippedTool);
+        console.log(`Equipped: ${item.name}`);
+      }
+    };
+
     // ====================== Input handlers ======================
+    // Raycaster for inventory clicks
+    const raycaster = new THREE.Raycaster();
+
     const handleKeyDown = (e: KeyboardEvent) => {
       keysRef.current[e.code] = true;
       // ESC to toggle pause
