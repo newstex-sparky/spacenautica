@@ -1014,6 +1014,48 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   };
 
   // ====================== Enter/Exit Structure (Airlock) ======================
+  // Create airlock pressurization particles
+  const createPressurizeParticles = (position: THREE.Vector3) => {
+    const particleGeometry = new THREE.SphereGeometry(0.08, 4, 4);
+    const particleMaterial = new THREE.MeshBasicMaterial({ color: 0x00aaff });
+
+    for (let i = 0; i < 30; i++) {
+      const particle = new THREE.Mesh(particleGeometry, particleMaterial.clone());
+      particle.position.copy(position);
+      particle.userData = {
+        velocity: new THREE.Vector3(
+          (Math.random() - 0.5) * 2,
+          Math.random() * 1.5,
+          (Math.random() - 0.5) * 2
+        ),
+        life: 1
+      };
+      scene.add(particle);
+      particlesRef.current.push(particle);
+    }
+  };
+
+  // Create depressurization particles (outward spray)
+  const createDepressurizeParticles = (position: THREE.Vector3) => {
+    const particleGeometry = new THREE.SphereGeometry(0.06, 4, 4);
+    const particleMaterial = new THREE.MeshBasicMaterial({ color: 0x4444ff });
+
+    for (let i = 0; i < 25; i++) {
+      const particle = new THREE.Mesh(particleGeometry, particleMaterial.clone());
+      particle.position.copy(position);
+      particle.userData = {
+        velocity: new THREE.Vector3(
+          (Math.random() - 0.5) * 3,
+          Math.random() * 2,
+          (Math.random() - 0.5) * 3
+        ),
+        life: 1
+      };
+      scene.add(particle);
+      particlesRef.current.push(particle);
+    }
+  };
+
   // Play airlock hiss sound for pressurization sequence
   const playAirlockHiss = () => {
     if (audioContext === null) {
@@ -1038,8 +1080,8 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
 
     // Fade in from 0 to quiet level
     gainNode.gain.setValueAtTime(0, audioContext.currentTime);
-    gainNode.gain.linearRampToValueAtTime(0.15, audioContext.currentTime + 0.1);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.25);
+    gainNode.gain.linearRampToTimeAtTime(0.15, audioContext.currentTime + 0.1);
+    gainNode.gain.exponentialRampToTimeAtTime(0.01, audioContext.currentTime + 0.25);
 
     noise.connect(gainNode);
     gainNode.connect(audioContext.destination);
@@ -1075,8 +1117,6 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     filter.connect(gainNode);
     gainNode.connect(audioContext.destination);
     noise.start(audioContext.currentTime);
-  };
-
   const enterStructure = (structure: Structure, camera: THREE.PerspectiveCamera) => {
     // Check if already inside
     if (structure.isInterior) return;
@@ -1086,12 +1126,13 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
 
+    // Calculate camera position at airlock entrance
+    const entryPosition = structure.group.position.clone();
+    entryPosition.x += 5; // Entrance at the front of the structure
+    entryPosition.y = PLAYER_HEIGHT;
+
     // Check if airlock is closed, open it
     if (structure.airlockOpen !== true) {
-      // Open airlock door (animate exterior shell fading)
-      structure.airlockOpen = true;
-      structure.airlockTimer = 0;
-
       // Animate exterior shell fading (airlock transition) - start transparent
       structure.group.traverse((child: any) => {
         if (child instanceof THREE.Mesh && child.userData.isExterior) {
@@ -1100,14 +1141,12 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
         }
       });
 
+      // Create pressurization particles at airlock
+      createPressurizeParticles(entryPosition);
+
       // Play airlock hiss sound
       playAirlockHiss();
     }
-
-    // Calculate camera position at airlock entrance
-    const entryPosition = structure.group.position.clone();
-    entryPosition.x += 5; // Entrance at the front of the structure
-    entryPosition.y = PLAYER_HEIGHT;
 
     // Smoothly move player (camera) to entry position
     const entryTime = 1.5; // seconds for airlock transition
@@ -1124,6 +1163,13 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
 
         camera.position.lerpVectors(startPos, entryPosition, ease);
         camera.lookAt(entryPosition);
+
+        // Refill O2 during pressurization (gradual refill) — dt is constant at ~0.0167s
+        o2Ref.current = Math.min(
+          O2_MAX,
+          o2Ref.current + (O2_DEPLETION_PER_SEC * (1/60) * 0.05)
+        );
+        setUiO2(o2Ref.current);
       } else {
         // Completed airlock transition
         camera.position.copy(entryPosition);
@@ -1137,8 +1183,15 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
 
         // Update UI
         setUiLowO2Warning(false);
-
         console.log(`Entered ${structure.type} structure`);
+
+        // Reset external airlock visible state
+        structure.group.traverse((child: any) => {
+          if (child instanceof THREE.Mesh && child.userData.isExterior) {
+            (child.material as THREE.MeshStandardMaterial).transparent = false;
+            (child.material as THREE.MeshStandardMaterial).opacity = 1;
+          }
+        });
       }
     };
 
@@ -1152,9 +1205,19 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     }, 1000 / 60);
   };
 
-  const exitStructure = (structure: Structure) => {
+  const exitStructure = (structure: Structure, camera: THREE.PerspectiveCamera) => {
     // Check if already outside
     if (!structure.isInterior) return;
+
+    // Initialize audio context for depressurization sound
+    if (audioContext === null) {
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+
+    // Calculate exit position at airlock
+    const exitPosition = structure.group.position.clone();
+    exitPosition.x += 5; // Exit at the front of the structure
+    exitPosition.y = PLAYER_HEIGHT;
 
     // Close airlock
     structure.airlockOpen = false;
@@ -1164,20 +1227,27 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     // Reset camera offset
     structure.interiorCameraOffset = undefined;
 
-    // Update ambient light
+    // Update ambient light to vacuum coldness
     if (ambientLightRef.current) {
-      ambientLightRef.current.intensity = 0.6;
+      ambientLightRef.current.intensity = 0.6; // Brighter in vacuum for better visibility
     }
 
-    // Make exterior shell visible again
-    structure.group.traverse(child => {
+    // Make exterior shell visible
+    structure.group.traverse((child: any) => {
       if (child instanceof THREE.Mesh && child.userData.isExterior) {
         (child.material as THREE.MeshStandardMaterial).transparent = true;
         (child.material as THREE.MeshStandardMaterial).opacity = 0.4;
       }
     });
 
-    console.log(`Exited ${structure.type} structure`);
+    // Create depressurization particles at airlock
+    createDepressurizeParticles(exitPosition);
+
+    // Play depressurization whoosh sound
+    playDepressurize();
+
+    // Start O2 draining immediately upon exiting (vacuum mode)
+    console.log(`Exited ${structure.type} structure — O2 begins draining in vacuum`);
   };
 
   // Update interior/exterior visibility based on player position
@@ -2186,11 +2256,11 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
           const structure = nearby.structure;
           if (structure.isInterior) {
             // Exit structure
-            exitStructure(structure);
+            exitStructure(structure, cameraRef.current!);
           } else {
             // Enter structure (only pressurized modules: dome, o2generator, storage)
             if (structure.type === 'dome' || structure.type === 'o2generator' || structure.type === 'storage') {
-              enterStructure(structure, cameraRef.current!);
+              enterStructure(structure, cameraRef.current!, dt);
             }
           }
         }
