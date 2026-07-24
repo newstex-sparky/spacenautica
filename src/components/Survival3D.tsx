@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
+import { createProceduralAsteroid, createStationModule, createTool, createContainer } from '../models/img2threejs';
 
 // ====================== Game Constants ======================
 const PLAYER_HEIGHT = 1.6;
@@ -74,7 +75,7 @@ const BUILD_TYPES: Record<BuildableStructureType, BuildTypeInfo> = {
   dome:        { name: 'Habitat Dome',    costIron: 10, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '1', description: 'Pressurized living space' },
   solar:       { name: 'Solar Panel',    costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '2', description: 'Passive H2 generation when lit' },
   o2generator: { name: 'O2 Generator',   costIron: 0,  costIce: 10, costRawOre: 0, costH2: 0, hotkey: '3', description: 'Generates O2 from H2' },
-  smelter:     { name: 'Smelter',        costIron: 10, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '4', description: 'Smelts ore into metals' },
+  smelter:     { name: 'Smelter',        costIron: 0, costIce: 0, costRawOre: 5, costH2: 0, hotkey: '4', description: 'Smelts ore into metals' },
   refinery:    { name: 'Electrolysis Ref', costIron: 0, costIce: 15, costRawOre: 0, costH2: 0, hotkey: '5', description: 'Water ice → O2 + H2' },
   fabricator: { name: 'Fabricator',      costIron: 15, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '6', description: 'Craft tools and upgrades' },
   storage:     { name: 'Storage Locker',  costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '7', description: 'Stores raw materials' },
@@ -93,10 +94,12 @@ const REFINERY_DEPOSIT_KEY = 'KeyG'; // Deposit water ice to refinery
 // Station power grid constants
 const H2_STORAGE_CAPACITY = 100; // Maximum H2 in storage tank
 const SOLAR_PANEL_H2_GENERATION = 1; // H2 per second when lit (daytime)
-const SMELTER_H2_CONSUMPTION = 0.2; // H2 consumed per processed ore tick
+const SOLAR_H2_GENERATION_COOLDOWN = 2; // Seconds between generation cycles (night/eclipse)
+const SMELTER_H2_CONSUMPTION = 1 / 5; // H2 consumed per 5 ore processed
 const O2_GENERATOR_H2_CONSUMPTION = 0.5; // H2 consumed per second to generate O2
 const FABRICATOR_H2_CONSUMPTION = 1; // H2 consumed per second
 const REFINERY_H2_CONSUMPTION = 0.5; // H2 consumed per second
+const POWER_DEPLETION_WARNING_THRESHOLD = 20; // Warning when H2 reaches this level
 
 // Asteroid runtime object
 interface Asteroid {
@@ -1207,6 +1210,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const createDomeMesh = (): THREE.Group => {
     const group = new THREE.Group();
     const geo = new THREE.IcosahedronGeometry(2, 1);
+    
     // Exteriors dome shell (transparent, visible from outside)
     const exteriorMat = new THREE.MeshStandardMaterial({
       color: 0x00ff66,
@@ -1227,6 +1231,21 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     const wire = new THREE.LineSegments(wireGeo, wireMat);
     wire.position.y = 2;
     group.add(wire);
+
+    // Airlock door (visible from outside, translucent)
+    const airlockMat = new THREE.MeshStandardMaterial({
+      color: 0x666666,
+      metalness: 0.9,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    });
+    const airlockGeo = new THREE.BoxGeometry(0.8, 0.3, 0.05);
+    const airlock = new THREE.Mesh(airlockGeo, airlockMat);
+    airlock.position.set(0, 2.1, 2.02); // Front of dome, slightly raised
+    airlock.userData = { isExterior: true, isAirlock: true }; // Mark as airlock door
+    group.add(airlock);
 
     // Interior dome shell (opaque, visible from inside)
     const interiorMat = new THREE.MeshStandardMaterial({
@@ -1905,6 +1924,28 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
       (group as any).smelterIsProcessing = false;
       (group as any).smelterProcessingProgress = 0;
       (group as any).smelterLastProcessTime = 0;
+      (group as any).needsPower = true; // Requires H2 to operate
+    }
+    // Initialize refinery-specific state
+    if (type === 'refinery') {
+      structureType = 'refinery';
+      (group as any).refineryInventory = { waterIce: 0 };
+      (group as any).refineryIsProcessing = false;
+      (group as any).refineryLastProcessTime = 0;
+      (group as any).needsPower = true; // Requires H2 to operate
+    }
+    // Initialize O2 generator-specific state
+    if (type === 'o2generator') {
+      structureType = 'o2generator';
+      (group as any).o2GeneratorIsProcessing = false;
+      (group as any).o2GeneratorLastProcessTime = 0;
+      (group as any).needsPower = true; // Requires H2 to operate
+    }
+    // Initialize fabricator-specific state
+    if (type === 'fabricator') {
+      structureType = 'fabricator';
+      (group as any).fabricatorIsProcessing = false;
+      (group as any).needsPower = true; // Requires H2 to operate
     }
     structuresRef.current.push({ group, type: structureType });
     // Update airlock state if pressurized module (dome, fabricator, o2generator, storage)
@@ -2655,7 +2696,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
             // Award resources
             const info = ASTEROID_TYPES[target.type];
             const r = resourcesRef.current;
-            if (target.type === 'oxygen') {
+            } else if (target.type === 'oxygen') {
               // Oxygen crystal refills the survival O2 bar
               o2Ref.current = Math.min(O2_MAX, o2Ref.current + O2_REFILL_CRYSTAL);
               setUiO2(o2Ref.current);
@@ -2663,9 +2704,13 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
               r.oxygen += info.yieldAmount;
               setUiOxygen(r.oxygen);
             } else if (target.type === 'iron') {
+              // Iron asteroid yields raw ore (to be smelted)
+              r.rawOre += info.yieldAmount;
+              setUiRawOre(r.rawOre);
               r.iron += info.yieldAmount;
               setUiIron(r.iron);
             } else if (target.type === 'ice') {
+              // Water ice asteroids yield water ice (refined)
               r.ice += info.yieldAmount;
               setUiIce(r.ice);
             }
@@ -2792,17 +2837,21 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
             target.mesh.visible = false;
             target.respawnTimer = ASTEROID_RESPAWN_DELAY;
             // Award resources
-            const info = ASTEROID_TYPES[target.type];
-            const r = resourcesRef.current;
-            if (target.type === 'oxygen') {
+            } else if (target.type === 'oxygen') {
+              // Oxygen crystal refills the survival O2 bar
               o2Ref.current = Math.min(O2_MAX, o2Ref.current + O2_REFILL_CRYSTAL);
               setUiO2(o2Ref.current);
+              // Also add to oxygen resource counter (player can stockpile crystals)
               r.oxygen += info.yieldAmount;
               setUiOxygen(r.oxygen);
             } else if (target.type === 'iron') {
+              // Iron asteroid yields raw ore (to be smelted)
+              r.rawOre += info.yieldAmount;
+              setUiRawOre(r.rawOre);
               r.iron += info.yieldAmount;
               setUiIron(r.iron);
             } else if (target.type === 'ice') {
+              // Water ice asteroids yield water ice (refined)
               r.ice += info.yieldAmount;
               setUiIce(r.ice);
             }

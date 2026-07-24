@@ -59,17 +59,15 @@ The basic 3D first-person survival experience. Mine, breathe, build.
 **All M1 issues complete. Proceed to M2.**
 
 ### M2 — Station Building
-
+### M2 — Station Building ✅ (done)
 Build a real station with connected modules, walk inside, use crafting.
-
-**Priority order:** #36 → #37 → #38 → #39
 
 || Issue | Title | Status |
 |-------|-------|--------|
 | #36 | Station module placement (snap-to-grid, adjacency, 6 module types) | ✅ Done |
-| #37 | Walk inside pressurized station | ❌ Not started |
-| #38 | Airlock transition (vacuum ↔ pressurized) | ❌ Not started |
-| #39 | 3D crafting UI at fabricator | ❌ Not started |
+| #37 | Walk inside pressurized station | ✅ Done |
+| #38 | Airlock transition (vacuum ↔ pressurized) | ✅ Done |
+| #39 | 3D crafting UI at fabricator | ✅ Done |
 
 ### M3 — Art Pipeline
 
