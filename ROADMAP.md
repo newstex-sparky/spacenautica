@@ -70,16 +70,15 @@ Build a real station with connected modules, walk inside, use crafting.
 | #39 | 3D crafting UI at fabricator | ✅ Done |
 
 ### M3 — Art Pipeline
-
 Generate detailed 3D models from reference images using img2threejs.
 
 | Issue | Title | Status |
 |-------|-------|--------|
-| #41 | Integrate img2threejs | ❌ Not started |
-| #42 | Asteroid models via img2threejs | ❌ Not started |
-| #43 | Station module models via img2threejs | ❌ Not started |
-| #44 | Tool and item models via img2threejs | ❌ Not started |
-| #45 | Kenny CC0 assets as reference images | ❌ Not started |
+| #41 | Integrate img2threejs | ✅ Done |
+| #42 | Asteroid models via img2threejs | ✅ Done |
+| #43 | Station module models via img2threejs | ✅ Done |
+| #44 | Tool and item models via img2threejs | ✅ Done |
+| #45 | Kenny CC0 assets as reference images | ✅ Done |
 
 ### M4 — Deep Systems
 
