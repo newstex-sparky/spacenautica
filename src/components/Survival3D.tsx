@@ -395,6 +395,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const mouseDownRef = useRef(false);
   const gameOverRef = useRef(false);
   const inventoryOpenRef = useRef(false); // Track if inventory is open via I/Y key
+  const respawnAtStationRef = useRef(false); // Track if we've used station respawn flag
 
   // Input refs
   const keysRef = useRef<Record<string, boolean>>({});
@@ -4210,12 +4211,43 @@ interface BroadcastState {
       }
     }
     structuresRef.current = [];
-    // Reset player position
-    if (playerRef.current) {
-      playerRef.current.position.set(0, PLAYER_HEIGHT, 0);
+
+    // Find the nearest station to respawn player there instead of at origin
+    let respawnPosition = new THREE.Vector3(0, PLAYER_HEIGHT, 0);
+    let nearestDistance = Infinity;
+    let hasBuiltStation = false;
+
+    if (structuresRef.current.length > 0) {
+      for (const structure of structuresRef.current) {
+        const structurePos = structure.group.position;
+
+        // Check if it's a station module (dome, smelter, refinery, or storage)
+        if (['dome', 'smelter', 'refinery', 'storage'].includes(structure.type)) {
+          hasBuiltStation = true;
+          const distToStructure = structurePos.distanceTo(new THREE.Vector3(0, 0, 0));
+
+          // If we're spawning for the first time after death, use the first built dome
+          // Otherwise, use the nearest station to make respawn feel natural
+          if (!respawnAtStationRef.current) {
+            respawnPosition.copy(structurePos);
+            respawnAtStationRef.current = true;
+          } else if (distToStructure < nearestDistance) {
+            nearestDistance = distToStructure;
+            respawnPosition.copy(structurePos);
+          }
+        }
+      }
     }
+
+    // Reset player position (respawn at station if built, otherwise at origin)
+    if (playerRef.current) {
+      playerRef.current.position.copy(respawnPosition);
+    }
+
     yawRef.current = 0;
     pitchRef.current = 0;
+    respawnAtStationRef.current = false;
+
     // Reset UI
     setUiO2(O2_MAX);
     setUiIron(0);
