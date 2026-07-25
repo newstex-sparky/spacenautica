@@ -326,6 +326,8 @@ const INITIAL_GAME_STATE: GameState = {
   gameOver: false,
   buildMode: false,
   buildType: 'dome',
+  broadcasting: false,
+  broadcastComplete: false,
 };
 
 // ====================== Save/Load Callback Props ======================
@@ -358,6 +360,8 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const [uiLowO2Warning, setUiLowO2Warning] = useState(false); // low O2 warning state
   const [uiDeathSequence, setUiDeathSequence] = useState(false); // death sequence playing
   const [uiCrafting, setUiCrafting] = useState(false); // crafting UI shown
+  const [uiBroadcastText, setUiBroadcastText] = useState<string>(''); // broadcast status text
+  const [uiRescueComplete, setUiRescueComplete] = useState(false); // rescue complete screen
 
   // Inventory state
   const [uiInventoryOpen, setUiInventoryOpen] = useState(false);
@@ -398,6 +402,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const pitchRef = useRef(0);  // vertical look angle (radians)   — kept from original
   const gameLoopRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
+  const gameStateRef = useRef({ broadcasting: false, broadcastComplete: false });
   // Gamepad look sensitivity (configurable)
   const lookSensitivityRef = useRef(1.0);
 
@@ -1833,6 +1838,7 @@ const createH2StorageTankMesh = (): THREE.Group => {
     if (type === 'smelter') return createSmelterMesh();
     if (type === 'refinery') return createRefineryMesh();
     if (type === 'fabricator') return createFabricatorMesh();
+    if (type === 'signalrelay') return createSignalRelayMesh();
     return new THREE.Group();
   };
 
@@ -1905,6 +1911,96 @@ const createH2StorageTankMesh = (): THREE.Group => {
 
     return group;
   };
+
+  // ====================== Signal Relay Array Mesh (Win Condition) ======================
+  const createSignalRelayMesh = (): THREE.Group => {
+    const group = new THREE.Group();
+
+    // Main antenna dish base (tall cylindrical structure)
+    const dishBaseGeo = new THREE.CylinderGeometry(1.2, 1.5, 3, 8);
+    const dishBaseMat = new THREE.MeshStandardMaterial({
+      color: 0x4488ff,
+      metalness: 0.9,
+      roughness: 0.2,
+    });
+    const dishBase = new THREE.Mesh(dishBaseGeo, dishBaseMat);
+    dishBase.position.set(0, 1.5, 0);
+    group.add(dishBase);
+
+    // Rotating antenna dish
+    const dishGeo = new THREE.ConeGeometry(1.5, 2, 4, 1, true);
+    const dishMat = new THREE.MeshStandardMaterial({
+      color: 0x00aaff,
+      metalness: 0.9,
+      roughness: 0.2,
+      side: THREE.DoubleSide,
+    });
+    const dish = new THREE.Mesh(dishGeo, dishMat);
+    dish.position.set(0, 4.0, 0);
+    dish.rotation.x = Math.PI / 2; // Point upward
+    (group as any).antennaDish = dish;
+    group.add(dish);
+
+    // Signal beam (initially invisible, pulses when broadcasting)
+    const beamGeo = new THREE.CylinderGeometry(0.3, 0.3, 10, 8, 1, true);
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0, // Start invisible
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.position.set(0, 9.0, 0); // At top of antenna
+    beam.rotation.x = -Math.PI / 2; // Point upward
+    (group as any).signalBeam = beam;
+    group.add(beam);
+
+    // Power connection ports (requires H2)
+    const portGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.5, 8);
+    const portMat = new THREE.MeshStandardMaterial({
+      color: 0xffaa00,
+      metalness: 0.9,
+      roughness: 0.3,
+    });
+    const port1 = new THREE.Mesh(portGeo, portMat);
+    port1.rotation.z = Math.PI / 2;
+    port1.position.set(-0.8, 1.6, -1.2);
+    group.add(port1);
+
+    const port2 = new THREE.Mesh(portGeo, portMat);
+    port2.rotation.z = Math.PI / 2;
+    port2.position.set(0.8, 1.6, -1.2);
+    group.add(port2);
+
+    // Status light (red when powered, green when broadcasting)
+    const lightGeo = new THREE.SphereGeometry(0.15, 8, 8);
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0x666666 });
+    const statusLight = new THREE.Mesh(lightGeo, lightMat);
+    statusLight.position.set(0, 2.5, 0);
+    (group as any).statusLight = statusLight;
+    group.add(statusLight);
+
+    // Build state flags
+    (group as any).signalRelayPowered = false;
+    (group as any).signalRelayBroadcasting = false;
+
+    // Broadcast timer for ending sequence
+    (group as any).broadcastTimer = 0;
+    (group as any).broadcastComplete = false;
+
+    return group;
+  };
+
+// Broadcast State for Signal Relay
+interface BroadcastState {
+  powered: boolean;
+  broadcasting: boolean;
+  broadcastStartTime: number;
+  signalBeamOpacity: number;
+  antennaRotation: number;
+  rescueShip: { mesh: THREE.Group; visible: boolean; approaching: boolean; docked: boolean } | null;
+}
 
   // ====================== Fabricator Crafting Display ======================
   const createCraftingDisplay = (structure: BuiltStructure) => {
@@ -2229,6 +2325,13 @@ const createH2StorageTankMesh = (): THREE.Group => {
       (group as any).fabricatorIsProcessing = false;
       (group as any).needsPower = true; // Requires H2 to operate
     }
+    // Initialize signal relay-specific state (win condition)
+    if (type === 'signalrelay') {
+      structureType = 'signalrelay';
+      (group as any).signalRelayPowered = false;
+      (group as any).signalRelayBroadcasting = false;
+      (group as any).needsPower = true; // Requires H2 to operate
+    }
     structuresRef.current.push({ group, type: structureType });
     // Update airlock state if pressurized module (dome, fabricator, o2generator, storage)
     if (type === 'dome' || type === 'fabricator' || type === 'o2generator' || type === 'storage') {
@@ -2390,28 +2493,62 @@ const createH2StorageTankMesh = (): THREE.Group => {
     };
     window.addEventListener('resize', handleResize);
 
-    // ====================== Mouse pointerdown handler for inventory clicks ======================
+    // ====================== Mouse pointerdown handler for inventory/crafting clicks ======================
     window.addEventListener('pointerdown', (e: PointerEvent) => {
-      if (gameOverRef.current || !inventoryOpenRef.current) return;
-      
-      // Only handle clicks when inventory is open
-      if (inventoryPanelRef.current) {
-        raycaster.setFromCamera(
-          new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1),
-          cameraRef.current!
-        );
-        
-        // Raycast against inventory slot icons
-        const slotMeshes = inventorySlots.map(slot => slot.mesh);
-        const intersects = raycaster.intersectObjects(slotMeshes);
-        
-        if (intersects.length > 0) {
-          const clickedMesh = intersects[0].object as THREE.Mesh;
-          const clickedSlot = inventorySlots.find(slot => slot.mesh === clickedMesh);
-          
-          if (clickedSlot) {
-            // Handle click based on item type
-            handleInventoryItemClick(clickedSlot);
+      if (gameOverRef.current) return;
+
+      const camera = cameraRef.current;
+      if (!camera) return;
+
+      raycaster.setFromCamera(
+        new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1),
+        camera
+      );
+
+      // Check if near fabricator for crafting interaction
+      if (inventoryOpenRef.current) {
+        // Only handle clicks when main inventory is open
+        if (inventoryPanelRef.current) {
+          const slotMeshes = inventorySlots.map(slot => slot.mesh);
+          const intersects = raycaster.intersectObjects(slotMeshes);
+
+          if (intersects.length > 0) {
+            const clickedMesh = intersects[0].object as THREE.Mesh;
+            const clickedSlot = inventorySlots.find(slot => slot.mesh === clickedMesh);
+
+            if (clickedSlot) {
+              handleInventoryItemClick(clickedSlot);
+            }
+          }
+        }
+      } else {
+        // When inventory not open, check for crafting UI clicks
+        const craftingUIItems: THREE.Mesh[] = [];
+        for (const structure of structuresRef.current) {
+          if (structure.type === 'fabricator' && structure.craftingUIGroup) {
+            const group = structure.craftingUIGroup;
+
+            // Collect all meshes in crafting group that have recipeId userData
+            group.traverse(child => {
+              if (child instanceof THREE.Mesh && 'recipeId' in child.userData) {
+                craftingUIItems.push(child);
+              }
+            });
+          }
+        }
+
+        // Raycast against crafting items
+        if (craftingUIItems.length > 0) {
+          const intersects = raycaster.intersectObjects(craftingUIItems);
+          if (intersects.length > 0) {
+            const clickedMesh = intersects[0].object as THREE.Mesh;
+            const recipeId = clickedMesh.userData.recipeId as string;
+
+            if (recipeId) {
+              // Try to craft the item
+              tryCraftItem(recipeId);
+            }
+            return;
           }
         }
       }
@@ -2444,14 +2581,136 @@ const createH2StorageTankMesh = (): THREE.Group => {
       }
       // Handle tools (equip)
       else if (item.type === 'tool') {
-        uiEquippedTool = item.name as ToolType;
-        setUiEquippedTool(uiEquippedTool);
+        const tempTool = item.name as ToolType;
+        setUiEquippedTool(tempTool);
         console.log(`Equipped: ${item.name}`);
       }
     };
 
+    // ====================== Crafting item handler ======================
+    const tryCraftItem = (recipeId: string) => {
+      const camera = cameraRef.current;
+      if (!camera) return;
+
+      const craftingRecipes: Record<string, { name: string; cost: string; description: string }> = {
+        'jetpack-mk1': { name: 'Jetpack Mk1', cost: '5 Metals', description: 'Slow upward thrust' },
+        'jetpack-mk2': { name: 'Jetpack Mk2', cost: '10 Metals + 5 H2', description: 'Faster thrust, longer duration' },
+        'air-tank': { name: 'Air Tank', cost: '3 Metals', description: '+50 O2 capacity (max 150)' },
+        'mining-drill-mk2': { name: 'Mining Drill Mk2', cost: '5 Metals', description: '2x mining speed' },
+        'repair-tool': { name: 'Repair Tool', cost: '3 Metals', description: 'Repair damaged modules' },
+        'scanner': { name: 'Scanner', cost: '5 Metals', description: 'Reveal asteroid types' },
+      };
+
+      const recipe = craftingRecipes[recipeId];
+      if (!recipe) {
+        console.error('Unknown recipe ID:', recipeId);
+        return;
+      }
+
+      // Parse recipe cost (e.g., "5 Metals" or "10 Metals + 5 H2")
+      const resources = resourcesRef.current;
+      const required = {
+        iron: 0,
+        metal: 0,
+        h2: 0,
+        ice: 0,
+        rawOre: 0,
+      };
+
+      const parts = recipe.cost.split('+');
+      for (const part of parts) {
+        const trimmed = part.trim();
+        const match = trimmed.match(/(\d+)\s*(.*)/);
+        if (match) {
+          const amount = parseInt(match[1], 10);
+          const resourceType = match[2].toLowerCase();
+
+          if (resourceType.includes('metal')) {
+            required.metal += amount;
+          } else if (resourceType.includes('h2')) {
+            required.h2 += amount;
+          } else if (resourceType.includes('ore')) {
+            required.rawOre += amount;
+          } else if (resourceType.includes('ice')) {
+            required.ice += amount;
+          }
+        }
+      }
+
+      // Check if player has enough resources
+      const canAfford =
+        (required.iron <= resources.iron) &&
+        (required.metal <= resources.ironMetal) &&
+        (required.h2 <= resources.h2) &&
+        (required.rawOre <= resources.rawOre) &&
+        (required.ice <= resources.ice);
+
+      if (!canAfford) {
+        console.log('Cannot craft:', recipe.name, ' - Not enough resources');
+        // Visual feedback: show red tint on crafting panel
+        for (const structure of structuresRef.current) {
+          if (structure.type === 'fabricator' && structure.craftingUIGroup) {
+            const group = structure.craftingUIGroup;
+            group.traverse(child => {
+              if (child instanceof THREE.Mesh && 'recipeId' in child.userData) {
+                // Flash red
+                const originalColor = (child.material as THREE.MeshBasicMaterial).color.getHex();
+                (child.material as THREE.MeshBasicMaterial).color.setHex(0xff0000);
+                setTimeout(() => {
+                  (child.material as THREE.MeshBasicMaterial).color.setHex(originalColor);
+                }, 300);
+              }
+            });
+          }
+        }
+        return;
+      }
+
+      // Deduct resources and craft item
+      resources.iron -= required.iron;
+      resources.ironMetal -= required.metal;
+      resources.h2 -= required.h2;
+      resources.rawOre -= required.rawOre;
+      resources.ice -= required.ice;
+
+      // Update UI state
+      setUiIron(resources.iron);
+      setUiIronMetal(resources.ironMetal);
+      setUiH2(resources.h2);
+      setUiRawOre(resources.rawOre);
+      setUiIce(resources.ice);
+
+      // Add crafted item to inventory
+      const newItem: InventoryItem = {
+        name: recipe.name,
+        type: 'crafted',
+        count: 1,
+        max: 99,
+      };
+      setUiInventoryItems([...uiInventoryItems, newItem]);
+
+      console.log('Crafted:', recipe.name);
+
+      // Visual feedback: show green glow on crafted item
+      for (const structure of structuresRef.current) {
+        if (structure.type === 'fabricator' && structure.craftingUIGroup) {
+          const group = structure.craftingUIGroup;
+          group.traverse(child => {
+            if (child instanceof THREE.Mesh && child.userData.recipeId === recipeId) {
+              // Flash green
+              const originalColor = (child.material as THREE.MeshBasicMaterial).color.getHex();
+              (child.material as THREE.MeshBasicMaterial).color.setHex(0x00ff00);
+              setTimeout(() => {
+                (child.material as THREE.MeshBasicMaterial).color.setHex(originalColor);
+              }, 300);
+            }
+          });
+        }
+      }
+    };
+
     // ====================== Input handlers ======================
-    // Raycaster for inventory clicks
+    // Raycaster for inventory/crafting clicks
     const raycaster = new THREE.Raycaster();
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -3620,6 +3879,16 @@ const createH2StorageTankMesh = (): THREE.Group => {
           }
         }
 
+        // Signal relay consumes H2 when broadcasting
+        if (structure.type === 'signalrelay') {
+          const broadcastState = (structure.group as any).broadcastState;
+          if (broadcastState && broadcastState.powered && broadcastState.broadcasting) {
+            // Consume 2 H2/sec during broadcasting
+            resourcesRef.current.h2 -= 2 * 0.016;
+            setUiH2(resourcesRef.current.h2);
+          }
+        }
+
         // Update module visual state
         if (structure.group) {
           structure.group.traverse(child => {
@@ -3630,6 +3899,62 @@ const createH2StorageTankMesh = (): THREE.Group => {
         }
       }
     };
+
+    // ====================== Signal Relay Broadcast Sequence ======================
+    const updateBroadcastSequence = (dt: number) => {
+      if (gameStateRef.current.broadcastComplete) return;
+
+      // Check all signal relays
+      for (const structure of structuresRef.current) {
+        if (structure.type !== 'signalrelay') continue;
+
+        const group = structure.group;
+        const broadcastState = (group as any).broadcastState;
+        if (!broadcastState) continue;
+
+        // Check if relay is powered
+        broadcastState.powered = resourcesRef.current.h2 >= 2;
+        broadcastState.broadcasting = broadcastState.powered && gameStateRef.current.broadcasting;
+
+        // Update status light
+        if (group.statusLight) {
+          group.statusLight.material.color.setHex(broadcastState.powered ? (broadcastState.broadcasting ? 0x00ff00 : 0xff0000) : 0x666666);
+        }
+
+        // Start broadcast when first powered
+        if (broadcastState.powered && !broadcastState.broadcasting && !broadcastState.broadcastStartTime) {
+          broadcastState.broadcastStartTime = Date.now() / 1000;
+          setGameState(prev => ({ ...prev, broadcasting: true }));
+        }
+
+        // Broadcast sequence logic
+        if (broadcastState.broadcasting) {
+          const elapsedTime = (Date.now() / 1000) - broadcastState.broadcastStartTime;
+
+          // Stage 1: Antenna rotation (5 seconds)
+          if (elapsedTime < 5) {
+            broadcastState.antennaRotation = Math.PI * (elapsedTime / 5);
+          } else {
+            // Locked on
+            broadcastState.antennaRotation = Math.PI;
+          }
+
+          // Stage 2: Show signal beam after 5 seconds
+          if (elapsedTime >= 5 && broadcastState.signalBeamOpacity < 0.8) {
+            broadcastState.signalBeamOpacity += 0.1 * dt;
+          }
+
+          // Check win condition: continuous broadcast for 30 seconds
+          if (elapsedTime >= 30 && !gameStateRef.current.broadcastComplete) {
+            setGameState(prev => ({ ...prev, broadcastComplete: true }));
+            broadcastState.broadcasting = false;
+          }
+        }
+      }
+    };
+
+    // Update broadcast sequence
+    updateBroadcastSequence(dt);
 
     // Update power depletion status
     const isPowerDepleted = resourcesRef.current.h2 <= 0 && stationPowerRef.current.isPowerDepleted;
@@ -3712,6 +4037,34 @@ const createH2StorageTankMesh = (): THREE.Group => {
       resourcesRef.current.ironMetal,
       resourcesRef.current.titanium,
     ]);
+
+    // Sync game state from refs to React state
+    useEffect(() => {
+      gameStateRef.current = {
+        broadcasting: gameState.broadcasting,
+        broadcastComplete: gameState.broadcastComplete,
+      };
+
+      // Update signal relay visual state
+      structuresRef.current.forEach(structure => {
+        if (structure.type !== 'signalrelay') return;
+
+        const group = structure.group;
+        const broadcastState = (group as any).broadcastState;
+        if (!broadcastState) return;
+
+        // Animate antenna rotation
+        if (group.antennaDish) {
+          group.antennaDish.rotation.y = broadcastState.antennaRotation;
+        }
+
+        // Show signal beam
+        if (group.signalBeam) {
+          group.signalBeam.material.opacity = broadcastState.signalBeamOpacity;
+          group.signalBeam.visible = broadcastState.signalBeamOpacity > 0.01;
+        }
+      });
+    }, [gameState]);
 
     // Start game loop
     gameLoopRef.current = requestAnimationFrame(loop);
@@ -4020,7 +4373,10 @@ const createH2StorageTankMesh = (): THREE.Group => {
       {/* Crafting status — when near fabricator */}
       {uiCrafting && !gameState.gameOver && !uiBuildMode && (
         <div style={styles.craftingIndicator}>
-          🛠️ CRAFTING UI — Near Fabricator · Press A to open/close · Y to craft
+          <div style={{ color: '#00ffff', marginBottom: '4px' }}>🛠️ CRAFTING UI — Near Fabricator</div>
+          <div style={{ color: '#888', fontSize: '12px' }}>
+            Press A to toggle crafting UI · Click 3D holographic items to craft
+          </div>
         </div>
       )}
 
