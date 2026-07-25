@@ -101,6 +101,11 @@ const FABRICATOR_H2_CONSUMPTION = 1; // H2 consumed per second
 const REFINERY_H2_CONSUMPTION = 0.5; // H2 consumed per second
 const POWER_DEPLETION_WARNING_THRESHOLD = 20; // Warning when H2 reaches this level
 
+// Solar panel day/night cycle
+const DAY_CYCLE_DURATION = 60; // Seconds per day/night cycle
+const NIGHT_START_HOUR = 18; // 6 PM marks night start
+const NIGHT_END_HOUR = 6; // 6 AM marks night end
+
 // Asteroid runtime object
 interface Asteroid {
   mesh: THREE.Mesh;
@@ -3959,6 +3964,37 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     fontWeight: 'bold',
     textShadow: '0 0 6px #000',
     pointerEvents: 'none',
+  },
+  // H2 power bar — top center, below O2
+  h2Container: {
+    position: 'absolute',
+    top: 60,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    zIndex: 30,
+  },
+  h2Label: {
+    color: '#ffaa00',
+    fontFamily: 'monospace',
+    fontSize: 20,
+    fontWeight: 'bold',
+    textShadow: '0 0 10px #ffaa00',
+  },
+  h2BarOuter: {
+    position: 'relative',
+    width: 360,
+    height: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 10,
+    border: '2px solid #ffaa00',
+    overflow: 'hidden',
+  },
+  h2BarFill: {
+    height: '100%',
+    transition: 'width 0.1s linear, background-color 0.2s',
   },
   // Resource panel — bottom left
   resourcePanel: {

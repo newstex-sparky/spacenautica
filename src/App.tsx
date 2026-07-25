@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Survival3D } from './components/Survival3D';
 import { NarratorScene } from './components/NarratorScene';
 import { HullBreach3D } from './components/HullBreach3D';
+import { SettingsPanel } from './components/SettingsPanel';
 
 export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
 export type AsteroidType = 'iron' | 'ice' | 'oxygen';
@@ -47,11 +48,12 @@ export interface SaveData {
   };
 }
 
-type Screen = 'intro' | 'narrator' | 'hullBreach' | 'newgame' | 'continue' | null;
+type Screen = 'intro' | 'narrator' | 'hullBreach' | 'newgame' | 'continue' | 'settings' | null;
 
 export function App() {
   const [screen, setScreen] = useState<Screen>('intro');
   const [show3D, setShow3D] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [pulse, setPulse] = useState(0);
   const rafRef = useRef<number>(0);
   const saveExistsRef = useRef(false);
@@ -193,6 +195,30 @@ export function App() {
     setShow3D(true);
   };
 
+  // Handle 'Continue' with new function name to avoid collision
+  const handleContinueGame = useCallback(() => {
+    const saveData = loadGame();
+    if (saveData) {
+      setScreen(null);
+      setShow3D(true);
+      console.log('Starting game from save:', saveData);
+      if (onRestoreState) {
+        onRestoreState(saveData);
+      }
+    } else {
+      console.error('No save data found');
+    }
+  }, [loadGame, onRestoreState]);
+
+  // Handle Settings
+  const handleOpenSettings = useCallback(() => {
+    setShowSettings(true);
+  }, []);
+
+  const handleCloseSettings = useCallback(() => {
+    setShowSettings(false);
+  }, []);
+
   return (
     <div className="app">
       {/* Intro screen */}
@@ -217,6 +243,11 @@ export function App() {
           {/* Info cards */}
           <div className="intro-cards">
             <div className="intro-card">
+              <h3 className="card-title">⚙️ SETTINGS</h3>
+              <div className="card-line">ESC — Pause Menu</div>
+            </div>
+
+            <div className="intro-card">
               <h3 className="card-title">🎮 CONTROLS</h3>
               <div className="card-line">WASD — Move</div>
               <div className="card-line">Mouse — Aim</div>
@@ -234,26 +265,20 @@ export function App() {
               <div className="card-line">Build your base</div>
               <div className="card-line">Don't run out of O2</div>
             </div>
-
-            <div className="intro-card">
-              <h3 className="card-title">🪨 RESOURCES</h3>
-              <div className="card-line">Iron (gray) — structures</div>
-              <div className="card-line">Ice (cyan) — O2 generators</div>
-              <div className="card-line">O2 Crystal (green) — refills O2</div>
-              <div className="card-line">Habitat costs 10 Iron</div>
-              <div className="card-line">O2 Generator costs 10 Ice</div>
-            </div>
           </div>
 
           {/* Buttons */}
           <button className="intro-start" onClick={handleNewGame}>
-            NEW GAME
+            New Game
           </button>
           {saveExistsRef.current && (
-            <button className="intro-start-alt" onClick={handleContinue}>
-              CONTINUE
+            <button className="intro-continue" onClick={() => handleContinueGame()}>
+              Continue
             </button>
           )}
+          <button className="intro-hull-breach" onClick={() => setScreen('settings')}>
+            ⚙️ Settings
+          </button>
           <div className="intro-button-row">
             <button className="intro-start-alt" onClick={() => setScreen('narrator')}>
               Access Signal Questline
@@ -289,6 +314,9 @@ export function App() {
           </button>
         </div>
       )}
+
+      {/* Settings Panel */}
+      {showSettings && <SettingsPanel onClose={handleCloseSettings} />}
     </div>
   );
 }
