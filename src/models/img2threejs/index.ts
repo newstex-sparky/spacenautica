@@ -1,49 +1,16 @@
-/**
- * img2threejs Model Factory Index
- *
- * Central export point for all procedural 3D model generators.
- * Used by Survival3D component and other parts of the game.
- */
+// Generated from Kenny CC0 reference images (M3 Issues #42-#45)
 
-// Base interfaces
-export type ModelOptions = {
-  scale?: number;
-  position?: THREE.Vector3;
-  rotation?: THREE.Euler;
-};
+// Asteroid models (#42)
+export { createOreAsteroid, createIceAsteroid } from './generated';
 
-// Type exports from Factory.ts
-export { createProceduralAsteroid, createStationModule, createTool, createContainer } from './Factory';
-export { createFloorTexture, createAsteroidTexture, createIceTexture } from './Factory';
+// Station module models (#43)
+export { createSmelterModule, createRefineryModule, createHabitatModule, createRelayModule } from './generated';
 
-// Re-export Three.js types
-export type * from 'three';
+// Tool and item models (#44)
+export { createMiningDrill, createJetpack, createScanner } from './generated';
 
-// Model data structures
-export interface Asteroid {
-  mesh: THREE.Group;
-  type: 'iron' | 'ice' | 'oxygen';
-  health: number;
-  maxHealth: number;
-  isDestructible: boolean;
-}
+// Re-export existing procedural generators for backward compatibility
+export { createProceduralAsteroid, createStationModule, createTool, createContainer } from './generated';
 
-export interface StationModule {
-  mesh: THREE.Group;
-  type: 'dome' | 'solar' | 'smelter' | 'refinery' | 'o2generator';
-  health: number;
-  maxHealth: number;
-}
-
-export interface Tool {
-  mesh: THREE.Group;
-  type: 'laser-cutter' | 'mining-laser' | 'scanner';
-  battery: number;
-}
-
-export interface Container {
-  mesh: THREE.Group;
-  size: 'small' | 'medium' | 'large';
-  locked: boolean;
-  contents: string[];
-}
+// Texture generators (existing functionality)
+export { createFloorTexture, createAsteroidTexture, createIceTexture } from './generated';

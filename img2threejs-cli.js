@@ -51,19 +51,19 @@ console.log(`Generating ${type} model from ${refPath}...`);
 try {
   // Extract reference features from the image
   console.log('Step 1: Extracting reference features...');
-  execSync(`python3 img2threejs/scripts/extract_reference_landmarks.py "${refPath}"`, {
+  execSync(`python3 ${process.cwd()}/img2threejs/scripts/extract_reference_landmarks.py "${refPath}"`, {
     stdio: 'inherit'
   });
 
   // Run the sculpt pass orchestrator
   console.log('Step 2: Running sculpt pipeline...');
-  execSync('python3 img2threejs/scripts/sculpt_pass_orchestrator.py', {
+  execSync(`python3 ${process.cwd()}/img2threejs/scripts/sculpt_pass_orchestrator.py sync asteroid-sculpt-spec.json`, {
     stdio: 'inherit'
   });
 
   // Generate Three.js factory
   console.log('Step 3: Generating Three.js factory...');
-  execSync('python3 img2threejs/scripts/generate_threejs_factory.py', {
+  execSync(`python3 ${process.cwd()}/img2threejs/scripts/generate_threejs_factory.py asteroid-sculpt-spec.json --out src/models/img2threejs/generated.ts`, {
     stdio: 'inherit'
   });
 

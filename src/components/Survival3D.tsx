@@ -32,7 +32,7 @@ const BUILD_GRID_SIZE = 1;             // 1 meter grid, snap to 1 unit increment
 const STORAGE_LOCKER_COST = { costIron: 5, costIce: 0, costRawOre: 0 }; // 1x1 module
 
 // Asteroid types
-export type AsteroidType = 'iron' | 'ice' | 'oxygen';
+export type AsteroidType = 'iron' | 'ice' | 'oxygen' | 'titanium' | 'debris';
 
 interface AsteroidTypeInfo {
   name: string;
@@ -41,9 +41,11 @@ interface AsteroidTypeInfo {
 }
 
 const ASTEROID_TYPES: Record<AsteroidType, AsteroidTypeInfo> = {
-  iron:   { name: 'Iron Ore',         color: 0x888888, yieldAmount: 5 },
-  ice:    { name: 'Ice',               color: 0x00aaff, yieldAmount: 5 },
-  oxygen: { name: 'Oxygen Crystal',    color: 0x00ff88, yieldAmount: 1 }, // oxygen type refills O2 directly
+  iron:       { name: 'Iron Ore',         color: 0x888888, yieldAmount: 5 },
+  ice:        { name: 'Water Ice',        color: 0x00aaff, yieldAmount: 5 },
+  oxygen:     { name: 'Oxygen Crystal',    color: 0x00ff88, yieldAmount: 1 }, // oxygen type refills O2 directly
+  titanium:   { name: 'Titanium Asteroid', color: 0xffa500, yieldAmount: 8 },
+  debris:     { name: 'Debris Wreckage',  color: 0x8b4513, yieldAmount: 3 },
 };
 
 // Build structure types (8 module types for M2 — including win condition)
@@ -708,11 +710,14 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   ]);
 
   // ====================== Build helpers ======================
+  // Random asteroid type with proper distribution
   const randomAsteroidType = (): AsteroidType => {
     const r = Math.random();
-    if (r < 0.45) return 'iron';
-    if (r < 0.80) return 'ice';
-    return 'oxygen';
+    if (r < 0.30) return 'iron';       // 30% Iron Ore
+    if (r < 0.55) return 'ice';        // 25% Water Ice
+    if (r < 0.75) return 'titanium';   // 20% Titanium-rich
+    if (r < 0.90) return 'debris';     // 15% Debris
+    return 'oxygen';                   // 10% Oxygen Crystal
   };
 
   const randomAsteroidPosition = (): THREE.Vector3 => {
@@ -722,55 +727,150 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     return new THREE.Vector3(Math.cos(angle) * dist, y, Math.sin(angle) * dist);
   };
 
-  const createAsteroidMesh = (type: AsteroidType, baseScale: number): THREE.Mesh => {
+  const createAsteroidMesh = (type: AsteroidType, baseScale: number, lodLevel: number = 1): THREE.Mesh => {
     const info = ASTEROID_TYPES[type];
-    // Irregular rocky mesh using IcosahedronGeometry with noise
-    const geometry = new THREE.IcosahedronGeometry(baseScale, 1);
+    const isDebris = type === 'debris';
+
+    // Generate asteroid geometry based on type
+    const geometry: THREE.IcosahedronGeometry = new THREE.IcosahedronGeometry(baseScale, lodLevel === 1 ? 1 : (lodLevel === 0 ? 0 : 3));
+
     const positions = geometry.attributes.position as THREE.BufferAttribute;
     const v = new THREE.Vector3();
-    for (let i = 0; i < positions.count; i++) {
-      v.fromBufferAttribute(positions, i);
-      // Add noise to each vertex for irregular rocky shape
-      const noise = 0.7 + Math.random() * 0.5;
-      v.multiplyScalar(noise);
-      positions.setXYZ(i, v.x, v.y, v.z);
+    const positionsArray = positions.array as Float32Array;
+
+    // Generate unique seed for this asteroid instance
+    const seed = Math.sin(baseScale * 1000) * 10000 + type.charCodeAt(0);
+
+    // First, modify the base geometry
+    for (let i = 0; i < positionsArray.length; i += 3) {
+      v.set(positionsArray[i], positionsArray[i + 1], positionsArray[i + 2]);
+
+      // Different shapes per asteroid type
+      if (type === 'debris') {
+        // Fragmented, jagged shape for debris
+        const noise = 0.6 + Math.random() * 0.8;
+        v.multiplyScalar(noise);
+        // Add some noise spikes
+        v.x += (Math.random() - 0.5) * 0.3;
+        v.y += (Math.random() - 0.5) * 0.3;
+        v.z += (Math.random() - 0.5) * 0.3;
+      } else {
+        // Irregular but mostly spherical for other types
+        const noise = 0.7 + Math.random() * 0.5;
+        v.normalize().multiplyScalar(baseScale * noise);
+      }
+
+      positionsArray[i] = v.x;
+      positionsArray[i + 1] = v.y;
+      positionsArray[i + 2] = v.z;
     }
     geometry.computeVertexNormals();
 
-    const material = new THREE.MeshStandardMaterial({
-      color: info.color,
-      metalness: type === 'iron' ? 0.8 : 0.3,
-      roughness: type === 'iron' ? 0.4 : 0.6,
-      emissive: type === 'oxygen' ? info.color : 0x000000,
-      emissiveIntensity: type === 'oxygen' ? 0.4 : 0,
+    // Create material based on asteroid type
+    const materialParams: THREE.MeshStandardMaterialParameters = {
       flatShading: true,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true;
+      metalness: 0.3,
+      roughness: 0.6,
+    };
 
-    // Add surface veins: thin transparent mesh with same geometry, slight offset
-    const surfaceGeo = new THREE.IcosahedronGeometry(baseScale * 1.02, 1);
-    const surfacePos = surfaceGeo.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < surfacePos.count; i++) {
-      const v = new THREE.Vector3().fromBufferAttribute(surfacePos, i);
-      // Slight outward offset for surface layer
-      v.normalize().multiplyScalar(1.02);
-      surfacePos.setXYZ(i, v.x, v.y, v.z);
+    if (type === 'iron') {
+      materialParams.color = 0x888888;
+      materialParams.metalness = 0.9;
+      materialParams.roughness = 0.3;
+    } else if (type === 'ice') {
+      materialParams.color = 0x5599cc;
+      materialParams.metalness = 0.1;
+      materialParams.roughness = 0.8;
+      materialParams.transparent = true;
+      materialParams.opacity = 0.9;
+    } else if (type === 'oxygen') {
+      materialParams.color = 0x44aa66;
+      materialParams.emissive = 0x227744;
+      materialParams.emissiveIntensity = 0.3;
+      materialParams.metalness = 0.5;
+    } else if (type === 'titanium') {
+      materialParams.color = 0xdda050;
+      materialParams.metalness = 0.95;
+      materialParams.roughness = 0.4;
+    } else if (type === 'debris') {
+      materialParams.color = 0x8b4513;
+      materialParams.metalness = 0.6;
+      materialParams.roughness = 0.8;
     }
 
-    const surfaceMat = new THREE.MeshBasicMaterial({
-      color: info.color,
-      transparent: true,
-      opacity: 0.15,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    const surfaceMesh = new THREE.Mesh(surfaceGeo, surfaceMat);
-    surfaceMesh.position.y = mesh.position.y; // same position
-    surfaceMesh.userData = { isSurface: true, type };
-    mesh.add(surfaceMesh);
+    // Create mesh with geometry and material
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial(materialParams));
+    mesh.castShadow = true;
 
-    mesh.userData = { isAsteroid: true, type };
+    // Generate ore/ice veins as colored streaks on surface
+    const veinCount = type === 'debris' ? 8 : 20; // Fewer veins for debris
+    const veinMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.6, depthWrite: false });
+    const veinColor = new THREE.Color();
+
+    for (let vein = 0; vein < veinCount; vein++) {
+      // Generate a random vein path along the asteroid surface
+      const veinPoints: THREE.Vector3[] = [];
+      const veinLength = 5 + Math.random() * 5;
+      const veinStartAngle = Math.random() * Math.PI * 2;
+      const veinPolarAngle = Math.acos(2 * Math.random() - 1);
+      const veinRadius = baseScale * (0.7 + Math.random() * 0.3); // Veins generally within asteroid radius
+
+      for (let t = 0; t < veinLength; t++) {
+        const angle = veinStartAngle + (t / veinLength) * Math.PI;
+        const polar = veinPolarAngle + (Math.sin(t * 0.5 + seed) * 0.3); // Wavy path
+
+        const px = veinRadius * Math.sin(polar) * Math.cos(angle);
+        const py = veinRadius * Math.cos(polar);
+        const pz = veinRadius * Math.sin(polar) * Math.sin(angle);
+
+        // Add noise to make veins look organic
+        const noise = (Math.sin(t * 0.3 + seed) * 0.05);
+        veinPoints.push(new THREE.Vector3(px + noise, py + noise, pz + noise));
+      }
+
+      // Create vein geometry
+      if (veinPoints.length >= 2) {
+        const curve = new THREE.CatmullRomCurve3(veinPoints);
+        const tubeGeo = new THREE.TubeGeometry(curve, 12, baseScale * (0.02 + Math.random() * 0.03), 8, false);
+
+        // Set vein color based on type
+        if (type === 'iron') veinColor.setHex(0xaaaaaa);   // Gray veins for iron ore
+        else if (type === 'ice') veinColor.setHex(0x88eeff); // Cyan veins for water ice
+        else if (type === 'oxygen') veinColor.setHex(0x88ff88); // Green veins for oxygen
+        else if (type === 'titanium') veinColor.setHex(0xffcc88); // Orange veins for titanium
+        else if (type === 'debris') veinColor.setHex(0x664422); // Brownish veins for debris
+
+        const veinMesh = new THREE.Mesh(tubeGeo, veinMaterial.clone());
+        veinMesh.material.color.copy(veinColor);
+
+        // Add slight emission for oxygen crystals
+        if (type === 'oxygen') {
+          veinMesh.material.emissive = veinColor;
+          veinMesh.material.emissiveIntensity = 0.4;
+        }
+
+        mesh.add(veinMesh);
+      }
+    }
+
+    // For debris, add small jagged shards
+    if (isDebris) {
+      for (let shard = 0; shard < 8; shard++) {
+        const shardGeo = new THREE.DodecahedronGeometry(baseScale * 0.15, 0);
+        const shardPos = new THREE.Vector3(
+          (Math.random() - 0.5) * baseScale * 1.5,
+          (Math.random() - 0.5) * baseScale * 1.5,
+          (Math.random() - 0.5) * baseScale * 1.5
+        );
+        const shardMesh = new THREE.Mesh(shardGeo, materialParams);
+        shardMesh.position.copy(shardPos);
+        shardMesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+        shardMesh.scale.setScalar(0.8 + Math.random() * 0.4);
+        mesh.add(shardMesh);
+      }
+    }
+
+    mesh.userData = { isAsteroid: true, type, lodLevel };
     return mesh;
   };
 
@@ -1468,9 +1568,47 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     light.position.y = 2.6;
     group.add(light);
     return group;
-  };
+    };
 
-  const createSmelterMesh = (): THREE.Group => {
+    // ====================== H2 Storage Tank Mesh ======================
+    const createH2StorageTankMesh = (): THREE.Group => {
+     const group = new THREE.Group();
+     // Main spherical tank (vertical, stores H2)
+     const tankGeo = new THREE.SphereGeometry(1.2, 16, 16);
+     const tankMat = new THREE.MeshStandardMaterial({
+       color: 0xff6600,
+       metalness: 0.9,
+       roughness: 0.2,
+     });
+     const tank = new THREE.Mesh(tankGeo, tankMat);
+     tank.position.y = 1.2;
+     tank.userData = { isExterior: true };
+     group.add(tank);
+
+     // Top dome
+     const domeGeo = new THREE.SphereGeometry(1.0, 16, 16);
+     const dome = new THREE.Mesh(domeGeo, tankMat);
+     dome.position.y = 2.3;
+     group.add(dome);
+
+     // Bottom legs
+     const legGeo = new THREE.CylinderGeometry(0.15, 0.1, 0.5, 8);
+     const legMat = new THREE.MeshStandardMaterial({
+       color: 0x333333,
+       metalness: 0.8,
+       roughness: 0.4,
+     });
+     const leg1 = new THREE.Mesh(legGeo, legMat);
+     leg1.position.set(-0.8, 0.25, 0.8);
+     group.add(leg1);
+     const leg2 = new THREE.Mesh(legGeo, legMat);
+     leg2.position.set(0.8, 0.25, 0.8);
+     group.add(leg2);
+
+     return group;
+    };
+
+    const createSmelterMesh = (): THREE.Group => {
     const group = new THREE.Group();
     // Main chamber (cylinder)
     const chamberGeo = new THREE.CylinderGeometry(1.2, 1.2, 2.5, 12);
@@ -1534,6 +1672,75 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
     return group;
   };
 
+  // ====================== H2 Storage Tank Mesh ======================
+const createH2StorageTankMesh = (): THREE.Group => {
+    const group = new THREE.Group();
+    // Main spherical tank (vertical, stores H2)
+    const tankGeo = new THREE.SphereGeometry(1.2, 16, 16);
+    const tankMat = new THREE.MeshStandardMaterial({
+      color: 0xff6600,
+      metalness: 0.9,
+      roughness: 0.2,
+    });
+    const tank = new THREE.Mesh(tankGeo, tankMat);
+    tank.position.y = 1.2;
+    tank.userData = { isExterior: true }; // Mark as exterior for airlock
+    group.add(tank);
+
+    // Top dome
+    const domeGeo = new THREE.SphereGeometry(1.0, 16, 16);
+    const dome = new THREE.Mesh(domeGeo, tankMat);
+    dome.position.y = 2.3;
+    group.add(dome);
+
+    // H2 level indicator (inner sphere)
+    const levelGeo = new THREE.SphereGeometry(0.9, 16, 16);
+    const levelMat = new THREE.MeshBasicMaterial({
+      color: 0xffaa00,
+      transparent: true,
+      opacity: 0.6,
+    });
+    const levelSphere = new THREE.Mesh(levelGeo, levelMat);
+    levelSphere.position.y = 1.2;
+    (group as any).h2Level = levelSphere;
+
+    // Bottom legs
+    const legGeo = new THREE.CylinderGeometry(0.15, 0.1, 0.5, 8);
+    const legMat = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      metalness: 0.8,
+      roughness: 0.4,
+    });
+    const leg1 = new THREE.Mesh(legGeo, legMat);
+    leg1.position.set(-0.8, 0.25, 0.8);
+    group.add(leg1);
+    const leg2 = new THREE.Mesh(legGeo, legMat);
+    leg2.position.set(0.8, 0.25, 0.8);
+    group.add(leg2);
+
+    // Power warning light
+    const lightGeo = new THREE.SphereGeometry(0.2, 8, 8);
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+    const powerLight = new THREE.Mesh(lightGeo, lightMat);
+    powerLight.position.set(0, 2.8, 1.2);
+    powerLight.userData = { isPoweredLight: true, isOff: false };
+    group.add(powerLight);
+
+    // Label plate
+    const plateGeo = new THREE.BoxGeometry(1.4, 0.3, 0.1);
+    const plateMat = new THREE.MeshStandardMaterial({
+      color: 0x222222,
+      metalness: 0.9,
+      roughness: 0.3,
+    });
+    const plate = new THREE.Mesh(plateGeo, plateMat);
+    plate.position.set(0, 1.3, 1.2);
+    group.add(plate);
+
+    return group;
+  };
+
+  // ====================== Refinery Mesh ======================
   const createRefineryMesh = (): THREE.Group => {
     const group = new THREE.Group();
     // Main cylinder body (horizontal for refinery)
@@ -3329,9 +3536,11 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
               resourcesRef.current.o2 = Math.min(O2_MAX, resourcesRef.current.o2 + o2Output);
               setUiO2(resourcesRef.current.o2);
 
-              // H2 goes to station power storage
-              resourcesRef.current.h2 += h2Output;
-              setUiH2(resourcesRef.current.h2);
+              // H2 goes to station power storage (consumes H2 from station grid)
+              if (resourcesRef.current.h2 > 0) {
+                resourcesRef.current.h2 = Math.min(H2_STORAGE_CAPACITY, resourcesRef.current.h2 + h2Output);
+                setUiH2(resourcesRef.current.h2);
+              }
 
               // Spawn O2/H2 particles at output pipes
               const outputPipePos = new THREE.Vector3(1.8, 2.5, 0); // H2 pipe (orange)
@@ -3351,6 +3560,82 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
         }
       }
     };
+
+    // ====================== Solar panel H2 generation ======================
+    const generateSolarPower = () => {
+      for (const structure of structuresRef.current) {
+        if (structure.type !== 'solar') continue;
+
+        // Solar panels generate H2 when not in eclipse/night
+        const hourOfDay = (Date.now() % (DAY_CYCLE_DURATION * 1000)) / 1000;
+        const isDay = hourOfDay < NIGHT_START_HOUR && hourOfDay >= NIGHT_END_HOUR;
+        
+        if (isDay) {
+          // Passive H2 generation
+          resourcesRef.current.h2 = Math.min(H2_STORAGE_CAPACITY, resourcesRef.current.h2 + SOLAR_PANEL_H2_GENERATION * 0.016);
+          setUiH2(resourcesRef.current.h2);
+        }
+      }
+    };
+
+    // ====================== Module power consumption ======================
+    const consumeModulePower = () => {
+      const now = Date.now() / 1000;
+      for (const structure of structuresRef.current) {
+        let moduleActive = false;
+
+        // Smelter consumes H2 when processing ore
+        if (structure.type === 'smelter' && structure.isSmelterProcessing) {
+          if (resourcesRef.current.h2 > 0) {
+            resourcesRef.current.h2 -= SMELTER_H2_CONSUMPTION * 0.016;
+            setUiH2(resourcesRef.current.h2);
+            moduleActive = true;
+          }
+        }
+
+        // Refinery consumes H2 when processing ice
+        if (structure.type === 'refinery' && structure.isRefineryProcessing) {
+          if (resourcesRef.current.h2 > 0) {
+            resourcesRef.current.h2 -= REFINERY_H2_CONSUMPTION * 0.016;
+            setUiH2(resourcesRef.current.h2);
+            moduleActive = true;
+          }
+        }
+
+        // O2 generator consumes H2 when producing O2
+        if (structure.type === 'o2generator' && structure.o2GeneratorActive) {
+          if (resourcesRef.current.h2 > 0) {
+            resourcesRef.current.h2 -= O2_GENERATOR_H2_CONSUMPTION * 0.016;
+            setUiH2(resourcesRef.current.h2);
+            moduleActive = true;
+          }
+        }
+
+        // Fabricator consumes H2 when crafting
+        if (structure.type === 'fabricator' && structure.craftingUIOpen) {
+          if (resourcesRef.current.h2 > 0) {
+            resourcesRef.current.h2 -= FABRICATOR_H2_CONSUMPTION * 0.016;
+            setUiH2(resourcesRef.current.h2);
+            moduleActive = true;
+          }
+        }
+
+        // Update module visual state
+        if (structure.group) {
+          structure.group.traverse(child => {
+            if (child instanceof THREE.Mesh && child.userData.isPoweredLight) {
+              child.visible = moduleActive;
+            }
+          });
+        }
+      }
+    };
+
+    // Update power depletion status
+    const isPowerDepleted = resourcesRef.current.h2 <= 0 && stationPowerRef.current.isPowerDepleted;
+    if (isPowerDepleted) {
+      stationPowerRef.current.isPowerDepleted = true;
+    }
 
     // ====================== Inventory management ======================
     const updateInventoryUI = () => {
