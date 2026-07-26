@@ -48,8 +48,8 @@ const ASTEROID_TYPES: Record<AsteroidType, AsteroidTypeInfo> = {
   debris:     { name: 'Debris Wreckage',  color: 0x8b4513, yieldAmount: 3 },
 };
 
-// Build structure types (8 module types for M2 — including win condition)
-export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage' | 'h2tank' | 'signalrelay';
+// Build structure types (9 module types for M2/M4 — including shuttle bay for M4)
+export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage' | 'h2tank' | 'signalrelay' | 'shuttlebay';
 
 // Structure dimensions (tile-based: BUILD_GRID_SIZE = 4 units)
 const STRUCTURE_DIMENSIONS: Record<BuildableStructureType, { width: number; depth: number }> = {
@@ -180,6 +180,9 @@ const SHUTTLE_PODS: Record<ShuttleType, ShuttlePod> = {
   },
 };
 
+// Shuttle type
+type ShuttleType = 'shuttle-mk1' | 'shuttle-rescue';
+
 // Shuttle state (when player is in shuttle)
 interface ShuttleState {
   inShuttle: boolean;         // Are we inside the shuttle?
@@ -191,6 +194,18 @@ interface ShuttleState {
   pitchAngle: number;         // Ship pitch angle (radians)
   isEngineOn: boolean;         // Engine thruster state
   isAirbrakeOn: boolean;       // Airbrake state
+  shuttleCargo: {             // Resources held in shuttle cargo
+    iron: number;
+    ice: number;
+    rawOre: number;
+    ironMetal: number;
+    titanium: number;
+    oxygen: number;
+    h2: number;
+    canisters: number;
+  };
+  shuttleMaxH2: number;        // Max H2 in shuttle tank
+  shuttleMaxO2: number;        // Max O2 in shuttle tank
 }
 
 const SHUTTLE_SPAWN_POSITION: THREE.Vector3 = new THREE.Vector3(0, 0, 20); // Spawn position (forward from station)
@@ -446,6 +461,11 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const inventoryOpenRef = useRef(false); // Track if inventory is open via I/Y key
   const respawnAtStationRef = useRef(false); // Track if we've used station respawn flag
   const uiTechTreeOpenRef = useRef(false); // Track if tech tree is open via T key
+
+  // Shuttle state refs
+  const shuttleInShuttleRef = useRef(false); // Are we currently inside the shuttle?
+  const shuttleCargoRef = useRef<{ iron: number, ice: number, rawOre: number, ironMetal: number, titanium: number, oxygen: number, h2: number }>({ iron: 0, ice: 0, rawOre: 0, ironMetal: 0, titanium: 0, oxygen: 0, h2: 0 });
+  const currentShuttleRef = useRef<THREE.Group | null>(null); // Reference to the shuttle mesh
 
   // Input refs
   const keysRef = useRef<Record<string, boolean>>({});
@@ -1901,6 +1921,7 @@ const createH2StorageTankMesh = (): THREE.Group => {
     if (type === 'refinery') return createRefineryMesh();
     if (type === 'fabricator') return createFabricatorMesh();
     if (type === 'signalrelay') return createSignalRelayMesh();
+    if (type === 'shuttlebay') return createShuttleBayMesh();
     return new THREE.Group();
   };
 
@@ -2050,6 +2071,149 @@ const createH2StorageTankMesh = (): THREE.Group => {
     // Broadcast timer for ending sequence
     (group as any).broadcastTimer = 0;
     (group as any).broadcastComplete = false;
+
+    return group;
+  };
+
+  // ====================== Shuttle Bay Mesh ======================
+  const createShuttleBayMesh = (): THREE.Group => {
+    const group = new THREE.Group();
+
+    // Main hangar structure (open box shape)
+    const hangarGeo = new THREE.BoxGeometry(6, 5, 4);
+    const hangarMat = new THREE.MeshStandardMaterial({
+      color: 0x666666,
+      metalness: 0.7,
+      roughness: 0.4,
+      transparent: true,
+      opacity: 0.15,
+      side: THREE.DoubleSide,
+    });
+    const hangar = new THREE.Mesh(hangarGeo, hangarMat);
+    hangar.userData = { isShuttleBay: true };
+    group.add(hangar);
+
+    // Bay door frame (visible opening)
+    const doorFrameGeo = new THREE.BoxGeometry(6.1, 4.1, 0.3);
+    const doorFrameMat = new THREE.MeshStandardMaterial({
+      color: 0x888888,
+      metalness: 0.8,
+      roughness: 0.3,
+    });
+    const doorFrame = new THREE.Mesh(doorFrameGeo, doorFrameMat);
+    group.add(doorFrame);
+
+    // Floor platform
+    const floorGeo = new THREE.BoxGeometry(5, 0.1, 3);
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0x444444,
+      metalness: 0.6,
+      roughness: 0.4,
+    });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.position.y = 0.05;
+    floor.userData = { isShuttleBay: true };
+    group.add(floor);
+
+    // Holographic marker indicating shuttle bay location
+    const markerGeo = new THREE.RingGeometry(0.5, 1.5, 32);
+    const markerMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    });
+    const marker = new THREE.Mesh(markerGeo, markerMat);
+    marker.rotation.x = -Math.PI / 2;
+    marker.position.y = 0.11;
+    marker.userData = { isShuttleBay: true };
+    group.add(marker);
+
+    // Interior lighting
+    const interiorLight = new THREE.PointLight(0xffffcc, 0.5, 8);
+    interiorLight.position.set(0, 3, -1);
+    group.add(interiorLight);
+
+    return group;
+  };
+
+  // ====================== Shuttle Pod Mesh ======================
+  const createShuttleMesh = (shuttleType: ShuttleType): THREE.Group => {
+    const group = new THREE.Group();
+    const config = SHUTTLE_PODS[shuttleType];
+
+    // Shuttle body (small cylinder)
+    const bodyGeo = new THREE.CylinderGeometry(0.4, 0.5, 3, 16);
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x8899aa,
+      metalness: 0.8,
+      roughness: 0.3,
+    });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.rotation.x = Math.PI / 2;
+    group.add(body);
+
+    // Cockpit dome at front
+    const cockpitGeo = new THREE.SphereGeometry(0.35, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+    const cockpitMat = new THREE.MeshStandardMaterial({
+      color: 0xaaddff,
+      metalness: 0.7,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 0.8,
+    });
+    const cockpit = new THREE.Mesh(cockpitGeo, cockpitMat);
+    cockpit.position.set(0.8, 0, 0);
+    cockpit.userData = { isCockpit: true };
+    group.add(cockpit);
+
+    // Wings on sides
+    const wingGeo = new THREE.BoxGeometry(1.5, 0.1, 1.5);
+    const wingMat = new THREE.MeshStandardMaterial({
+      color: 0x667788,
+      metalness: 0.8,
+      roughness: 0.4,
+    });
+    const wing1 = new THREE.Mesh(wingGeo, wingMat);
+    wing1.position.set(-0.6, 0.3, 0);
+    group.add(wing1);
+
+    const wing2 = new THREE.Mesh(wingGeo, wingMat);
+    wing2.position.set(0.6, 0.3, 0);
+    group.add(wing2);
+
+    // Engine thruster
+    const engineGeo = new THREE.CylinderGeometry(0.15, 0.25, 0.6, 16);
+    const engineMat = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      metalness: 0.8,
+      roughness: 0.4,
+    });
+    const engine = new THREE.Mesh(engineGeo, engineMat);
+    engine.rotation.x = -Math.PI / 2;
+    engine.position.set(-0.8, 0, 1.5);
+    group.add(engine);
+
+    // Engine glow when thrusting
+    const glowGeo = new THREE.SphereGeometry(0.1, 8, 8);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.5,
+    });
+    const engineGlow = new THREE.Mesh(glowGeo, glowMat);
+    engineGlow.position.set(-0.8, 0, 1.8);
+    (group as any).engineGlow = engineGlow;
+    group.add(engineGlow);
+
+    // Store shuttle config
+    (group as any).currentShuttleType = shuttleType;
+    (group as any).fuel = config.currentFuel;
+    (group as any).oxygen = O2_MAX;
+    (group as any).maxSpeed = config.maxSpeed;
+    (group as any).minSpeed = config.minSpeed;
+    (group as any).acceleration = config.acceleration;
+    (group as any).maneuverability = config.maneuverability;
 
     return group;
   };
@@ -2397,6 +2561,19 @@ interface BroadcastState {
       (group as any).signalRelayPowered = false;
       (group as any).signalRelayBroadcasting = false;
       (group as any).needsPower = true; // Requires H2 to operate
+    }
+    // Initialize shuttle bay and spawn shuttle
+    if (type === 'shuttlebay') {
+      structureType = 'shuttlebay';
+      // Spawn a shuttle at the shuttle bay position
+      const shuttle = createShuttleMesh('shuttle-mk1');
+      const bayPos = snappedPoint.clone().add(SHUTTLE_BAY_OFFSET);
+      shuttle.position.copy(bayPos);
+      shuttle.rotation.y = -Math.PI / 2; // Face into the bay
+      scene.add(shuttle);
+      (currentShuttleRef.current as any) = shuttle;
+      shuttleInShuttleRef.current = false;
+      shuttleCargoRef.current = { iron: 0, ice: 0, rawOre: 0, ironMetal: 0, titanium: 0, oxygen: 0, h2: 0 };
     }
     structuresRef.current.push({ group, type: structureType });
     // Update airlock state if pressurized module (dome, fabricator, o2generator, storage)
@@ -3452,7 +3629,7 @@ interface BroadcastState {
             // Award resources
             const info = ASTEROID_TYPES[target.type];
             const r = resourcesRef.current;
-            } else if (target.type === 'oxygen') {
+            if (target.type === 'oxygen') {
               // Oxygen crystal refills the survival O2 bar
               o2Ref.current = Math.min(O2_MAX, o2Ref.current + O2_REFILL_CRYSTAL);
               setUiO2(o2Ref.current);
