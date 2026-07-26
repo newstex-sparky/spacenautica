@@ -2001,6 +2001,10 @@ interface BroadcastState {
   signalBeamOpacity: number;
   antennaRotation: number;
   rescueShip: { mesh: THREE.Group; visible: boolean; approaching: boolean; docked: boolean } | null;
+  broadcastText?: string;
+  rescueApproachStartTime?: number;
+  rescueMessageDisplayed?: boolean;
+  youSurvivedScreen?: boolean;
 }
 
   // ====================== Fabricator Crafting Display ======================
@@ -3945,10 +3949,115 @@ interface BroadcastState {
             broadcastState.signalBeamOpacity += 0.1 * dt;
           }
 
+          // Stage 3: Update broadcast text
+          if (elapsedTime >= 5 && elapsedTime < 15) {
+            broadcastState.broadcastText = 'BROADCASTING DISTRESS SIGNAL...';
+          } else if (elapsedTime >= 15 && elapsedTime < 28) {
+            broadcastState.broadcastText = 'SIGNAL TRANSMITTING...';
+            broadcastState.rescueMessageDisplayed = false;
+          } else if (elapsedTime >= 28) {
+            if (!broadcastState.rescueMessageDisplayed) {
+              broadcastState.rescueMessageDisplayed = true;
+              setUiBroadcastText('SIGNAL RECEIVED — RESCUE INBOUND');
+            }
+          }
+
           // Check win condition: continuous broadcast for 30 seconds
           if (elapsedTime >= 30 && !gameStateRef.current.broadcastComplete) {
             setGameState(prev => ({ ...prev, broadcastComplete: true }));
             broadcastState.broadcasting = false;
+            
+            // Initialize rescue ship
+            if (!broadcastState.rescueShip) {
+              broadcastState.rescueShip = { 
+                mesh: null, 
+                visible: false, 
+                approaching: false, 
+                docked: false 
+              };
+            }
+          }
+        }
+
+        // Rescue ship approach sequence
+        if (gameStateRef.current.broadcastComplete && broadcastState.rescueShip) {
+          // Check if rescue ship exists, create if not
+          if (!broadcastState.rescueShip.mesh && !gameState.uiRescueComplete) {
+            broadcastState.rescueShip.visible = true;
+            // Create rescue ship (small spacecraft)
+            const shipGroup = new THREE.Group();
+            
+            // Ship body
+            const bodyGeo = new THREE.BoxGeometry(1.5, 0.8, 0.4);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.9, roughness: 0.1 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.set(0, 0, 0);
+            shipGroup.add(body);
+
+            // Engine glow
+            const engineGeo = new THREE.SphereGeometry(0.15, 8, 8);
+            const engineMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+            const engine = new THREE.Mesh(engineGeo, engineMat);
+            engine.position.set(0.75, 0, 0);
+            (shipGroup as any).engine = engine;
+            shipGroup.add(engine);
+
+            // Wings
+            const wingGeo = new THREE.BoxGeometry(0.1, 0.4, 1.2);
+            const wingMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.8, roughness: 0.3 });
+            const wing1 = new THREE.Mesh(wingGeo, wingMat);
+            wing1.position.set(-0.5, 0.2, 0);
+            wing1.rotation.y = 0.3;
+            shipGroup.add(wing1);
+
+            const wing2 = wing1.clone();
+            wing2.position.set(-0.5, -0.2, 0);
+            wing2.rotation.y = -0.3;
+            shipGroup.add(wing2);
+
+            // Position ship far away
+            shipGroup.position.set(-40, 0, 30);
+            shipGroup.rotation.y = Math.PI / 4;
+            
+            scene.add(shipGroup);
+            broadcastState.rescueShip.mesh = shipGroup;
+          }
+
+          // Approach sequence
+          if (broadcastState.rescueShip.mesh) {
+            const ship = broadcastState.rescueShip.mesh;
+            const shipSpeed = 3 * dt;
+            
+            // Move towards player
+            ship.position.x += shipSpeed;
+            
+            // Rotate to face player
+            ship.rotation.y = Math.atan2(
+              camera.position.x - ship.position.x,
+              camera.position.z - ship.position.z
+            );
+
+            // Add engine glow animation
+            if ((shipGroup as any).engine) {
+              const glowIntensity = 0.5 + Math.random() * 0.5;
+              (shipGroup as any).engine.material.color.setHex(0xffff00 * glowIntensity);
+            }
+
+            // Check if close enough
+            const distToPlayer = ship.position.distanceTo(camera.position);
+            if (distToPlayer < 5 && !broadcastState.rescueShip.docked && !gameState.uiRescueComplete) {
+              // Dock animation
+              broadcastState.rescueShip.docked = true;
+              broadcastState.rescueShip.approaching = false;
+              
+              // Stop near player
+              ship.position.lerp(camera.position.clone().add(new THREE.Vector3(5, 0, 5)), dt);
+            }
+
+            // Show YOU SURVIVED screen
+            if (distToPlayer < 8 && !gameState.uiRescueComplete) {
+              setUiRescueComplete(true);
+            }
           }
         }
       }
@@ -4487,6 +4596,80 @@ interface BroadcastState {
           <div style={{ marginBottom: 30, fontSize: 48 }}>"SIGNAL LOST"</div>
           <div style={{ fontSize: 20, opacity: 0.7, marginTop: 20 }}>Player drifting in void...</div>
           <div style={{ fontSize: 16, opacity: 0.5, marginTop: 10 }}>Waiting for respawn...</div>
+        </div>
+      )}
+
+      {/* Broadcast text — centered overlay during broadcast sequence */}
+      {uiBroadcastText && !gameState.gameOver && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            padding: '40px 60px',
+            borderRadius: 20,
+            border: '2px solid #00ffff',
+            color: '#00ffff',
+            fontFamily: 'monospace',
+            fontSize: 32,
+            fontWeight: 'bold',
+            textShadow: '0 0 20px #00ffff',
+            zIndex: 100,
+            pointerEvents: 'none',
+            textAlign: 'center',
+          }}
+        >
+          {uiBroadcastText}
+        </div>
+      )}
+
+      {/* YOU SURVIVED screen — rescue complete */}
+      {uiRescueComplete && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.95)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#00ff88',
+            fontFamily: 'monospace',
+            fontSize: 48,
+            fontWeight: 'bold',
+            textShadow: '0 0 30px #00ff88',
+            zIndex: 1000,
+          }}
+        >
+          <div style={{ marginBottom: 20 }}>🚀 RESCUE CONFIRMED</div>
+          <div style={{ fontSize: 32, opacity: 0.9, marginBottom: 30 }}>YOU SURVIVED</div>
+          
+          <div style={{ fontSize: 20, color: '#ffffff', marginBottom: 15 }}>
+            Time Survived: {Math.floor((Date.now() - (gameStateRef.current as any).gameStartTime) / 1000)}s
+          </div>
+          
+          <div style={{ fontSize: 16, color: '#ffffff', marginBottom: 50 }}>
+            Resources Collected: {uiIron} Iron | {uiIce} Ice | {uiIronMetal} Metals | {uiTitaniumMetal} Titanium
+          </div>
+          
+          <div style={{ fontSize: 24, opacity: 0.6, marginBottom: 60 }}>
+            Continued in sandbox mode...
+          </div>
+          
+          <div style={{
+            padding: '15px 30px',
+            backgroundColor: 'rgba(0, 255, 136, 0.2)',
+            border: '2px solid #00ff88',
+            borderRadius: 10,
+            cursor: 'pointer',
+          }}
+          onClick={handleRestart}
+          >
+            PLAY AGAIN
+          </div>
         </div>
       )}
 
