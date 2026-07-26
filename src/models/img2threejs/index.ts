@@ -7,10 +7,9 @@ export { createOreAsteroid, createIceAsteroid } from './generated';
 export { createSmelterModule, createRefineryModule, createHabitatModule, createRelayModule } from './generated';
 
 // Tool and item models (#44)
-export { createMiningDrill, createJetpack, createScanner } from './generated';
+export { createRepairTool, createMiningDrillMk2, createMiningDrill, createScanner } from './generated';
+export { createRawOreItem, createWaterIceItem, createIronIngotItem, createTitaniumIngotItem, createO2CanisterItem, createH2CanisterItem, createTechChipItem } from './generated';
 
-// Re-export existing procedural generators for backward compatibility
-export { createProceduralAsteroid, createStationModule, createTool, createContainer } from './generated';
-
-// Texture generators (existing functionality)
-export { createFloorTexture, createAsteroidTexture, createIceTexture } from './generated';
+// Re-export procedural generators from Factory.ts for backward compatibility
+export { createProceduralAsteroid, createStationModule, createTool, createContainer } from './Factory';
+export { createFloorTexture, createAsteroidTexture, createIceTexture } from './Factory';
