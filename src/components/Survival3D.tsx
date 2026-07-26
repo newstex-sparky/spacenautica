@@ -153,6 +153,50 @@ interface Structure extends BuiltStructure {
 // Tool types (equipped, not stacked)
 type ToolType = 'mining-drill-mk1' | 'mining-drill-mk2' | 'repair-tool' | 'scanner' | 'jetpack-mk1' | 'jetpack-mk2';
 
+const SHUTTLE_PODS: Record<ShuttleType, ShuttlePod> = {
+  'shuttle-mk1': {
+    type: 'shuttle-mk1',
+    name: 'Shuttle MK-1',
+    maxFuel: 100,
+    currentFuel: 100,
+    maxSpeed: 15,
+    minSpeed: 5,
+    acceleration: 8,
+    deceleration: 4,
+    maneuverability: 0.03,
+    hudColor: 0x00ffff,        // Cyan
+  },
+  'shuttle-rescue': {
+    type: 'shuttle-rescue',
+    name: 'Rescue Shuttle',
+    maxFuel: 150,
+    currentFuel: 100,
+    maxSpeed: 12,
+    minSpeed: 4,
+    acceleration: 6,
+    deceleration: 3,
+    maneuverability: 0.04,
+    hudColor: 0xff6b6b,        // Red-orange
+  },
+};
+
+// Shuttle state (when player is in shuttle)
+interface ShuttleState {
+  inShuttle: boolean;         // Are we inside the shuttle?
+  currentShuttleType: ShuttleType; // What shuttle are we in?
+  shuttlePosition: [number, number, number]; // Position in world
+  shuttleVelocity: THREE.Vector3; // Current velocity vector
+  throttle: number;            // 0-1 throttle level
+  heading: number;             // Ship heading angle (radians)
+  pitchAngle: number;         // Ship pitch angle (radians)
+  isEngineOn: boolean;         // Engine thruster state
+  isAirbrakeOn: boolean;       // Airbrake state
+}
+
+const SHUTTLE_SPAWN_POSITION: THREE.Vector3 = new THREE.Vector3(0, 0, 20); // Spawn position (forward from station)
+const SHUTTLE_BAY_OFFSET = new THREE.Vector3(0, 0, 4); // Offset from station center to shuttle bay
+const SHUTTLE_BAY_MODULE_TYPE = 'shuttle-bay';
+
 // Inventory item types
 interface InventoryItem {
   name: string;
@@ -401,6 +445,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const gameOverRef = useRef(false);
   const inventoryOpenRef = useRef(false); // Track if inventory is open via I/Y key
   const respawnAtStationRef = useRef(false); // Track if we've used station respawn flag
+  const uiTechTreeOpenRef = useRef(false); // Track if tech tree is open via T key
 
   // Input refs
   const keysRef = useRef<Record<string, boolean>>({});
@@ -412,8 +457,14 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const techTreePanelRef = useRef<THREE.Group | null>(null); // holographic tech tree panel
   const techTreeGroupRef = useRef<THREE.Group | null>(null); // Group to hold all tech tree elements
   const techTreeNodesRef = useRef<THREE.Group[]>([]); // Array of node group refs
+  const techTreeBeamsRef = useRef<THREE.Line[]>([]); // Array of connection beams
   const lastTimeRef = useRef<number>(0);
   const gameStateRef = useRef({ broadcasting: false, broadcastComplete: false });
+  // Tech tree rotation control
+  const techTreeYawRef = useRef(0); // Horizontal rotation angle
+  const techTreePitchRef = useRef(0.3); // Vertical angle (upward look)
+  const techTreeZoomRef = useRef(12); // Distance from camera
+  const wasResearchingRef = useRef(false); // Track R key for research
   // Gamepad look sensitivity (configurable)
   const lookSensitivityRef = useRef(1.0);
 
@@ -1285,7 +1336,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
         camera.position.lerpVectors(startPos, entryPosition, ease);
         camera.lookAt(entryPosition);
 
-        // Refill O2 during pressurization (gradual refill) — dt is constant at ~0.0167s
+        // Refill O2 during pressurization (gradual refill)
         o2Ref.current = Math.min(
           O2_MAX,
           o2Ref.current + (O2_DEPLETION_PER_SEC * (1/60) * 0.05)
@@ -2497,6 +2548,51 @@ interface BroadcastState {
     // Ensure fabricator preview works too
     if (initPreview) {
       (initPreview as any).userData.type = 'fabricator';
+
+    // ====================== Tech Tree Initialization ======================
+    // Create holographic tech tree panel
+    const techTreePanelGroup = createTechTreePanel();
+    scene.add(techTreePanelGroup);
+    techTreePanelRef.current = techTreePanelGroup;
+    techTreeGroupRef.current = techTreePanelGroup;
+
+    // Create tech tree nodes and beams
+    const positions = calculateTechTreePositions();
+    
+    TECH_TREE_NODES.forEach(node => {
+      if (node.visible) {
+        const nodeGroup = createTechTreeNode(node.id);
+        const pos = positions[node.id] || { x: 0, y: 4, z: 0 };
+        
+        nodeGroup.position.set(pos.x, pos.y, pos.z);
+        nodeGroup.visible = false; // Hidden until tech tree opens
+        techTreeNodesRef.current.push(nodeGroup);
+        scene.add(nodeGroup);
+        
+        // Create connection beams from parent nodes
+        const parentIds = Array.from(TECH_TREE_CONNECTIONS.keys()).filter(
+          parentId => TECH_TREE_CONNECTIONS.get(parentId)?.includes(node.id)
+        );
+        
+        parentIds.forEach(parentId => {
+          const parentNodeGroup = techTreeNodesRef.current.find(n => 
+            n.children[0].userData.nodeId === parentId
+          );
+          
+          if (parentNodeGroup) {
+            const parentPos = parentNodeGroup.position;
+            const beam = createTechTreeBeam(parentPos, new THREE.Vector3(pos.x, pos.y, pos.z));
+            beam.visible = false; // Hidden until tech tree opens
+            techTreeBeamsRef.current.push(beam);
+            scene.add(beam);
+          }
+        });
+      }
+    });
+
+    // Initialize research progress from saved state (optional - would be loaded from persistence)
+    // For now, start with empty set (no research)
+    const initialResearchProgress = new Set<string>();
     }
 
     // Resize handler
@@ -2735,6 +2831,39 @@ interface BroadcastState {
         setGameState(prev => ({ ...prev, isPaused: !prev.isPaused }));
         return;
       }
+      // T key: Toggle holographic tech tree panel
+      if (e.code === 'KeyT') {
+        uiTechTreeOpenRef.current = !uiTechTreeOpenRef.current;
+        setUiTechTreeOpen(uiTechTreeOpenRef.current);
+        if (uiTechTreeOpenRef.current) {
+          // Open tech tree - enable pointer lock
+          if (document.pointerLockElement) {
+            document.exitPointerLock();
+          }
+          setGameState(prev => ({ ...prev, buildMode: false }));
+          setUiBuildMode(false);
+          buildModeRef.current = false;
+          
+          // Show tech tree nodes
+          techTreeNodesRef.current.forEach(nodeGroup => {
+            nodeGroup.visible = true;
+          });
+          techTreeBeamsRef.current.forEach(beam => {
+            beam.visible = true;
+          });
+          techTreePanelRef.current?.visible = true;
+        } else {
+          // Close tech tree - hide nodes and beams
+          techTreeNodesRef.current.forEach(nodeGroup => {
+            nodeGroup.visible = false;
+          });
+          techTreeBeamsRef.current.forEach(beam => {
+            beam.visible = false;
+          });
+          techTreePanelRef.current?.visible = false;
+        }
+        return;
+      }
       // E key: Enter/Exit pressurized station modules
       if (e.code === 'KeyE') {
         const nearby = getNearbyStructure();
@@ -2746,7 +2875,7 @@ interface BroadcastState {
           } else {
             // Enter structure (only pressurized modules: dome, o2generator, storage)
             if (structure.type === 'dome' || structure.type === 'o2generator' || structure.type === 'storage') {
-              enterStructure(structure, cameraRef.current!, dt);
+              enterStructure(structure, cameraRef.current!);
             }
           }
         }
@@ -2799,6 +2928,51 @@ interface BroadcastState {
         depositWaterIce();
         return;
       }
+      // R key: Research tech tree
+      if (e.code === 'KeyR' && uiTechTreeOpenRef.current) {
+        wasResearchingRef.current = true;
+        
+        // Try to research tech node under mouse cursor
+        const camera = cameraRef.current;
+        const scene = sceneRef.current;
+        if (camera && scene) {
+          raycaster.setFromCamera(new THREE.Vector2(0, 0), camera); // Center of screen
+          const allTechNodes: THREE.Mesh[] = [];
+          techTreeNodesRef.current.forEach(nodeGroup => {
+            if (nodeGroup.visible && nodeGroup.children.length > 0) {
+              const mesh = nodeGroup.children[0] as THREE.Mesh;
+              if (mesh.userData.isTechNode) {
+                allTechNodes.push(mesh);
+              }
+            }
+          });
+          const intersects = raycaster.intersectObjects(allTechNodes);
+          
+          if (intersects.length > 0) {
+            const clickedMesh = intersects[0].object as THREE.Mesh;
+            const nodeId = clickedMesh.userData.nodeId as string;
+            const node = TECH_TREE_NODES.find(n => n.id === nodeId);
+            
+            if (node && !uiResearchProgress.has(nodeId) && !uiResearchingNode) {
+              // Check if we can afford the research
+              if (resourcesRef.current.iron >= node.cost.iron && resourcesRef.current.h2 >= node.cost.h2) {
+                // Deduct resources
+                resourcesRef.current.iron -= node.cost.iron;
+                resourcesRef.current.h2 -= node.cost.h2;
+                setUiIron(resourcesRef.current.iron);
+                setUiH2(resourcesRef.current.h2);
+                
+                // Mark as researched
+                setUiResearchProgress(prev => new Set([...prev, nodeId]));
+                
+                // Unlock corresponding buildable modules and tools
+                unlockTechNode(nodeId);
+              }
+            }
+          }
+        }
+        return;
+      }
       // 1/2/3/4/5/6/R select build type (only in build mode)
       if (buildModeRef.current) {
         if (e.code === 'Digit1') { buildTypeRef.current = 'dome';        setUiBuildType('dome');        updateBuildPreviewMesh('dome'); }
@@ -2810,9 +2984,24 @@ interface BroadcastState {
         if (e.code === 'KeyR')   { buildTypeRef.current = 'signalrelay'; setUiBuildType('signalrelay'); updateBuildPreviewMesh('signalrelay'); }
       }
     };
-    const handleKeyUp = (e: KeyboardEvent) => { keysRef.current[e.code] = false; };
+    const handleKeyUp = (e: KeyboardEvent) => { 
+      keysRef.current[e.code] = false;
+      // Release R key to stop research check
+      if (e.code === 'KeyR') {
+        wasResearchingRef.current = false;
+      }
+    };
 
     const handleMouseMove = (e: MouseEvent) => {
+      // Tech tree rotation when open
+      if (uiTechTreeOpenRef.current && document.pointerLockElement) {
+        // Rotate tech tree view
+        techTreeYawRef.current -= e.movementX * 0.005;
+        techTreePitchRef.current -= e.movementY * 0.005;
+        // Clamp pitch to avoid flipping
+        techTreePitchRef.current = Math.max(0.1, Math.min(Math.PI / 2.5, techTreePitchRef.current));
+        return;
+      }
       // FPS mouse look — uses movementX/movementY (works with pointer lock)
       if (document.pointerLockElement) {
         yawRef.current -= e.movementX * 0.002;
@@ -2842,6 +3031,16 @@ interface BroadcastState {
       if (e.button === 0) mouseDownRef.current = false;
     };
 
+    const handleMouseWheel = (e: WheelEvent) => {
+      // Tech tree zoom when open
+      if (uiTechTreeOpenRef.current && document.pointerLockElement) {
+        techTreeZoomRef.current += e.deltaY * 0.01;
+        // Clamp zoom distance
+        techTreeZoomRef.current = Math.max(6, Math.min(20, techTreeZoomRef.current));
+        return;
+      }
+    };
+
     const handlePointerLockChange = () => {
       setPointerLocked(!!document.pointerLockElement);
     };
@@ -2851,6 +3050,7 @@ interface BroadcastState {
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('wheel', handleMouseWheel);
     document.addEventListener('pointerlockchange', handlePointerLockChange);
 
     // Helper: rebuild the build preview mesh when selection changes
@@ -5360,7 +5560,10 @@ const addTechTreeToScene = (scene: THREE.Scene, panelRef: THREE.Group, nodesRef:
   
   // Create nodes and connection beams
   TECH_TREE_NODES.forEach(node => {
-    if (node.visible) {
+    // Only add nodes that should be visible (unlocked parents + unlocked nodes)
+    const nodeVisible = checkNodeVisibility(node.id, uiResearchProgress);
+    
+    if (nodeVisible) {
       const nodeGroup = createTechTreeNode(node.id);
       const pos = positions[node.id] || { x: 0, y: 4, z: 0 };
       
@@ -5375,7 +5578,7 @@ const addTechTreeToScene = (scene: THREE.Scene, panelRef: THREE.Group, nodesRef:
       
       parentIds.forEach(parentId => {
         const parentNodeGroup = nodesRef.find(n => 
-          n.children[0].userData.nodeId === parentId
+          n.children[0]?.userData.nodeId === parentId
         );
         
         if (parentNodeGroup) {
@@ -5390,6 +5593,41 @@ const addTechTreeToScene = (scene: THREE.Scene, panelRef: THREE.Group, nodesRef:
   
   // Update panel position in front of player camera
   panel.position.copy(cameraRef.current?.position.clone().sub(new THREE.Vector3(0, 0, -4)) || new THREE.Vector3(0, 0, -4));
+};
+
+// Check if a node should be visible based on research progress
+const checkNodeVisibility = (nodeId: string, researchProgress: Set<string>): boolean => {
+  const node = TECH_TREE_NODES.find(n => n.id === nodeId);
+  if (!node) return false;
+  
+  // Tier 1 nodes with no parents are visible
+  if (node.tier === 1) {
+    // Check if this is a basic node that starts unlocked
+    const parents = Array.from(TECH_TREE_CONNECTIONS.keys()).filter(parentId => 
+      TECH_TREE_CONNECTIONS.get(parentId)?.includes(nodeId)
+    );
+    
+    // If no parents, it's visible
+    if (parents.length === 0) return true;
+    
+    // If parents are all unlocked, the node is available to research
+    const allParentsUnlocked = parents.every(parentId => researchProgress.has(parentId));
+    return allParentsUnlocked;
+  }
+  
+  // Tier 2 and 3 nodes need all parents researched to be visible
+  const parents = Array.from(TECH_TREE_CONNECTIONS.keys()).filter(parentId => 
+    TECH_TREE_CONNECTIONS.get(parentId)?.includes(nodeId)
+  );
+  
+  // If no parents defined, it's not visible (this shouldn't happen in current data)
+  if (parents.length === 0) return false;
+  
+  // Node is visible only if:
+  // 1. All parents are in research progress, AND
+  // 2. Node itself is not yet researched (otherwise it would be green)
+  const allParentsUnlocked = parents.every(parentId => researchProgress.has(parentId));
+  return allParentsUnlocked && !researchProgress.has(nodeId);
 };
 
 // Update tech tree node appearance based on research progress
@@ -5437,6 +5675,50 @@ const updateTechTreeAppearance = (
       }
     }
   });
+};
+
+// ====================== Tech Tree Unlock Functions ======================
+
+// Unlock buildable modules and tools based on researched tech node
+const unlockTechNode = (nodeId: string) => {
+  switch (nodeId) {
+    case 'mining-advanced':
+      // Unlock mining drill Mk2 and Scanner
+      console.log('Unlocking: Mining Drill Mk2, Scanner');
+      // Scanner will be added to inventory when equipped
+      break;
+      
+    case 'refining-basic':
+      // Unlock smelter and electrolysis refinery
+      // These are already in build types, but ensure they're visible
+      console.log('Unlocking: Smelter, Electrolysis Refinery');
+      break;
+      
+    case 'pressurization':
+      // Unlock airlock and O2 generator
+      console.log('Unlocking: Airlock, O2 Generator');
+      break;
+      
+    case 'power-grid':
+      // Unlock H2 storage tank and power distribution
+      console.log('Unlocking: H2 Storage Tank, Power Distribution');
+      break;
+      
+    case 'jetpack':
+      // Unlock jetpack Mk1/Mk2
+      console.log('Unlocking: Jetpack');
+      break;
+      
+    case 'fabricator':
+      // Fabricator is already in build menu
+      console.log('Unlocking: Fabricator');
+      break;
+      
+    case 'signal-tech':
+      // Unlock Signal Relay Array (win condition)
+      console.log('Unlocking: Signal Relay Array');
+      break;
+  }
 };
 
 // ====================== Tech Tree Key Handlers ======================

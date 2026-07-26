@@ -586,8 +586,8 @@
         let selectedModule = 'habitat';
         let ghostMesh = null;
 
-        // Keyboard state for builder
-        const keys = {};
+        // Keyboard state for builder (reuse existing keys object from game controls below)
+        // const keys = {};  // REMOVED — duplicate declaration, original game defines this below
 
         // =========================
         // STATION BUILDER FUNCTIONS
@@ -1172,83 +1172,11 @@ const scene = new THREE.Scene();
         console.log('Asteroids will appear. Mine them for resources and maintain your O2 level!');
         console.log('Controls: WASD movement, Mouse look, Click to mine');
 
+        // Initialize M2 Station Builder
+        initStationBuilder();
+
         animate();
     </script>
-
-    <!-- =====================
-        M2 STATION BUILDER UI
-        ===================== -->
-
-    <!-- Station Builder Menu Overlay -->
-    <div id="station-builder-menu" style="display: none;">
-        <div class="station-builder-container">
-            <!-- Header -->
-            <div class="builder-header">
-                <h1>🚀 Station Builder</h1>
-                <div class="stats">
-                    <span>⚡ Iron: <strong id="iron-display">0</strong></span>
-                    <span>❄️ Ice: <strong id="ice-display">0</strong></span>
-                </div>
-            </div>
-
-            <!-- Module Selection -->
-            <div class="module-selection">
-                <h3>Select Module:</h3>
-                <div class="module-buttons">
-                    <button class="module-select-btn" data-module="habitat" onclick="selectModule('habitat')">
-                        🏠 Habitat<br>
-                        <small>50 Iron | 30 Ice</small>
-                    </button>
-                    <button class="module-select-btn" data-module="smelter" onclick="selectModule('smelter')">
-                        🔥 Smelter<br>
-                        <small>40 Iron | 20 Ice</small>
-                    </button>
-                    <button class="module-select-btn" data-module="refinery" onclick="selectModule('refinery')">
-                        💧 Refinery<br>
-                        <small>50 Ice</small>
-                    </button>
-                    <button class="module-select-btn" data-module="solar" onclick="selectModule('solar')">
-                        ☀️ Solar Panel<br>
-                        <small>30 Iron</small>
-                    </button>
-                    <button class="module-select-btn" data-module="o2gen" onclick="selectModule('o2gen')">
-                        💚 O2 Generator<br>
-                        <small>40 Ice</small>
-                    </button>
-                    <button class="module-select-btn" data-module="comms" onclick="selectModule('comms')">
-                        📡 Comms Array<br>
-                        <small>60 Iron | 40 Ice</small>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Cost Display -->
-            <div class="cost-display">
-                <h3>Selected: <span id="cost-module-name">Habitat Module</span></h3>
-                <div id="cost-text">
-                    🏠 Habitat Module<br>
-                    Iron: 50 | Ice: 30
-                </div>
-            </div>
-
-            <!-- Feedback -->
-            <div id="placement-feedback" class="feedback">
-                <div id="placement-status">Ready to build</div>
-                <div id="tooltip-module">
-                    <h4>Instructions</h4>
-                    <p>1. Select a module (1-6 or click)</p>
-                    <p>2. Move with WASD</p>
-                    <p>3. Click to place</p>
-                </div>
-            </div>
-
-            <!-- Actions -->
-            <div class="builder-actions">
-                <button class="action-btn exit-btn" onclick="toggleBuilder()">Exit Builder [ESC]</button>
-                <button class="action-btn place-btn" onclick="placeModule()">Place Module [CLICK]</button>
-            </div>
-        </div>
-    </div>
 
 </body>
 </html>

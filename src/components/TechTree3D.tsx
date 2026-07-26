@@ -16,7 +16,7 @@ export type ResearchNode = {
   name: string;
   tier: number;
   description: string;
-  iconType: 'dome' | 'solar' | 'smelter' | 'drill' | 'jetpack' | 'fabricator' | 'relay';
+  iconType: 'dome' | 'solar' | 'smelter' | 'drill' | 'jetpack' | 'fabricator' | 'relay' | 'power';
   cost: { iron: number; h2: number };
   researchTime: number;
   dependencies: string[];
@@ -28,15 +28,17 @@ export type ResearchConnection = {
   from: string;
   to: string;
   color: number;
+  glowColor: number;
 };
 
+// Complete tech tree with all 9 nodes
 const TECH_TREE_NODES: ResearchNode[] = [
-  // Tier 1 - Starting
+  // Tier 1 - Starting (all unlocked initially)
   {
     id: 'mining-basic',
     name: 'Basic Mining',
     tier: 1,
-    description: 'Unlocks mining drill Mk1',
+    description: 'Unlocks mining drill Mk1 for asteroid mining',
     iconType: 'drill',
     cost: { iron: 0, h2: 0 },
     researchTime: 0,
@@ -48,7 +50,7 @@ const TECH_TREE_NODES: ResearchNode[] = [
     id: 'building-basic',
     name: 'Basic Building',
     tier: 1,
-    description: 'Unlocks habitat dome and solar panel',
+    description: 'Unlocks habitat dome and solar panel placement',
     iconType: 'dome',
     cost: { iron: 0, h2: 0 },
     researchTime: 0,
@@ -73,7 +75,7 @@ const TECH_TREE_NODES: ResearchNode[] = [
     id: 'mining-advanced',
     name: 'Advanced Mining',
     tier: 2,
-    description: 'Unlocks mining drill Mk2 and scanner',
+    description: 'Unlocks mining drill Mk2 and scanner for efficiency',
     iconType: 'drill',
     cost: { iron: 20, h2: 0 },
     researchTime: 30,
@@ -85,7 +87,7 @@ const TECH_TREE_NODES: ResearchNode[] = [
     id: 'pressurization',
     name: 'Pressurization',
     tier: 2,
-    description: 'Unlocks airlock and O2 generator',
+    description: 'Unlocks airlock and O2 generator for station habitation',
     iconType: 'dome',
     cost: { iron: 15, h2: 0 },
     researchTime: 25,
@@ -98,19 +100,18 @@ const TECH_TREE_NODES: ResearchNode[] = [
     name: 'Power Grid',
     tier: 2,
     description: 'Unlocks H2 storage tank and power distribution',
-    iconType: 'solar',
+    iconType: 'power',
     cost: { iron: 20, h2: 0 },
     researchTime: 30,
     dependencies: ['mining-basic'],
     unlocked: false,
     researched: false,
   },
-  // Tier 3
   {
     id: 'jetpack',
     name: 'Jetpack',
     tier: 3,
-    description: 'Unlocks jetpack Mk1/Mk2',
+    description: 'Unlocks jetpack Mk1/Mk2 for exploration',
     iconType: 'jetpack',
     cost: { iron: 30, h2: 10 },
     researchTime: 45,
@@ -134,7 +135,7 @@ const TECH_TREE_NODES: ResearchNode[] = [
     id: 'signal-tech',
     name: 'Signal Tech',
     tier: 3,
-    description: 'Unlocks Signal Relay Array',
+    description: 'Unlocks Signal Relay Array (win condition)',
     iconType: 'relay',
     cost: { iron: 40, h2: 20 },
     researchTime: 60,
@@ -144,453 +145,459 @@ const TECH_TREE_NODES: ResearchNode[] = [
   },
 ];
 
+// Connection beams between tech nodes
 const TECH_TREE_CONNECTIONS: ResearchConnection[] = [
-  { from: 'mining-basic', to: 'mining-advanced', color: 0x00ffff },
-  { from: 'building-basic', to: 'pressurization', color: 0x00ffff },
-  { from: 'mining-basic', to: 'power-grid', color: 0x00ffff },
-  { from: 'mining-advanced', to: 'jetpack', color: 0x00ff00 },
-  { from: 'power-grid', to: 'fabricator', color: 0x00ff00 },
-  { from: 'fabricator', to: 'signal-tech', color: 0x00ff00 },
+  { from: 'mining-basic', to: 'mining-advanced', color: 0x00ffff, glowColor: 0x008888 },
+  { from: 'building-basic', to: 'pressurization', color: 0x00ffff, glowColor: 0x008888 },
+  { from: 'mining-basic', to: 'power-grid', color: 0x00ffff, glowColor: 0x008888 },
+  { from: 'mining-advanced', to: 'jetpack', color: 0xff00ff, glowColor: 0x880088 },
+  { from: 'power-grid', to: 'fabricator', color: 0xff00ff, glowColor: 0x880088 },
+  { from: 'power-grid', to: 'signal-tech', color: 0xffaa00, glowColor: 0x886600 },
+  { from: 'fabricator', to: 'signal-tech', color: 0xffaa00, glowColor: 0x886600 },
 ];
 
-// ====================== Constants ======================
+// ====================== Visual Config ======================
 
-const TECH_TREE_CONTAINER_ID = 'tech-tree-container';
-const TECH_TREE_SCALE = 1.5;
-const NODE_RADIUS = 0.8;
+const NODE_RADIUS = 1;
+const HOLOGRAM_Y = 0;
+const HOLOGRAM_DIST = 8;
 
-// ====================== Research Management ======================
+// ====================== Helper Functions ======================
 
-interface PlayerResources {
-  iron: number;
-  h2: number;
+/**
+ * Creates a 3D node mesh with holographic glow
+ */
+function createTechNode(node: ResearchNode): THREE.Group {
+  const group = new THREE.Group();
+  
+  // Base platform
+  const platformGeom = new THREE.CylinderGeometry(NODE_RADIUS * 0.4, NODE_RADIUS * 0.5, 0.2, 16);
+  const platformMat = new THREE.MeshBasicMaterial({ 
+    color: node.unlocked && node.researched ? 0x00ff88 : 0x4488ff,
+    transparent: true,
+    opacity: 0.6
+  });
+  const platform = new THREE.Mesh(platformGeom, platformMat);
+  group.add(platform);
+  
+  // Icon cone (represents tech tier)
+  const iconGeom = new THREE.ConeGeometry(NODE_RADIUS * 0.6, NODE_RADIUS * 1.5, 6);
+  const iconMat = new THREE.MeshBasicMaterial({ 
+    color: node.unlocked && node.researched ? 0x00ff88 : 0x4488ff,
+    transparent: true,
+    opacity: 0.8
+  });
+  const iconMesh = new THREE.Mesh(iconGeom, iconMat);
+  iconMesh.position.y = NODE_RADIUS * 1;
+  iconMesh.rotation.x = Math.PI / 6;
+  group.add(iconMesh);
+  
+  // Tech tier number on base
+  const tierCanvas = document.createElement('canvas');
+  tierCanvas.width = 128;
+  tierCanvas.height = 128;
+  const tierCtx = tierCanvas.getContext('2d')!;
+  tierCtx.fillStyle = node.unlocked && node.researched ? '#00ff88' : '#4488ff';
+  tierCtx.font = 'bold 80px Arial';
+  tierCtx.textAlign = 'center';
+  tierCtx.textBaseline = 'middle';
+  tierCtx.fillText(`T${node.tier}`, 64, 64);
+  const tierTexture = new THREE.CanvasTexture(tierCanvas);
+  const tierSpriteMat = new THREE.SpriteMaterial({ map: tierTexture, transparent: true });
+  const tierSprite = new THREE.Sprite(tierSpriteMat);
+  tierSprite.scale.set(3, 3, 1);
+  tierSprite.position.y = NODE_RADIUS * 1.1;
+  group.add(tierSprite);
+  
+  group.userData = { node: node };
+  return group;
 }
 
-interface TechTreeState {
-  resources: PlayerResources;
-  selectedNode: ResearchNode | null;
-  researching: ResearchNode | null;
-  researchProgress: number;
+/**
+ * Creates connection beam between two nodes
+ */
+function createTechConnection(conn: ResearchConnection): THREE.Line {
+  const start = new THREE.Vector3(0, NODE_RADIUS * 1.5, 0);
+  const end = new THREE.Vector3(0, NODE_RADIUS * 1.5, 0);
+  const geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
+  const material = new THREE.LineBasicMaterial({ 
+    color: conn.color, 
+    transparent: true, 
+    opacity: 0.4 
+  });
+  return new THREE.Line(geometry, material);
 }
 
-// ====================== Component ======================
+/**
+ * Creates research progress ring
+ */
+function createResearchRing(node: ResearchNode): THREE.Group {
+  const group = new THREE.Group();
+  
+  if (node.researched) return group;
+  
+  // Outer glow
+  const glowGeom = new THREE.RingGeometry(NODE_RADIUS * 0.5, NODE_RADIUS * 1.2, 32);
+  const glowMat = new THREE.MeshBasicMaterial({ 
+    color: 0xffaa00, 
+    transparent: true, 
+    opacity: 0.3,
+    side: THREE.DoubleSide
+  });
+  const glowMesh = new THREE.Mesh(glowGeom, glowMat);
+  glowMesh.position.y = NODE_RADIUS * 1;
+  group.add(glowMesh);
+  
+  // Progress indicator (rotating arcs)
+  const progressGeom = new THREE.RingGeometry(NODE_RADIUS * 0.55, NODE_RADIUS * 1.15, 16);
+  const progressMat = new THREE.MeshBasicMaterial({ 
+    color: 0xffff00, 
+    transparent: true, 
+    opacity: 0.6,
+    side: THREE.DoubleSide
+  });
+  const progressMesh = new THREE.Mesh(progressGeom, progressMat);
+  progressMesh.position.y = NODE_RADIUS * 1;
+  progressMesh.rotation.x = Math.PI / 2;
+  group.add(progressMesh);
+  
+  group.userData = { node: node, progressMesh };
+  return group;
+}
+
+// ====================== Main Component ======================
 
 export function TechTree3D() {
-  const mountRef = useRef<HTMLDivElement>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2(0, 0));
-  const mouseRaycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
-  const [techTreeState, setTechTreeState] = useState<TechTreeState>({
-    resources: { iron: 50, h2: 50 },
-    selectedNode: null,
-    researching: null,
-    researchProgress: 0,
-  });
-
-  // Research function
-  const startResearch = useCallback(
-    (node: ResearchNode) => {
-      if (techTreeState.resources.iron >= node.cost.iron &&
-          techTreeState.resources.h2 >= node.cost.h2) {
-        setTechTreeState((prev) => ({
-          ...prev,
-          researching: node,
-          researchProgress: 0,
-        }));
-      }
-    },
-    [techTreeState.resources]
-  );
-
-  // Cancel research
-  const cancelResearch = useCallback(() => {
-    setTechTreeState((prev) => ({
-      ...prev,
-      researching: null,
-      researchProgress: 0,
-    }));
-  }, []);
-
-  // Research update (called in game loop)
-  const updateResearch = useCallback(
-    (deltaTime: number) => {
-      setTechTreeState((prev) => {
-        if (!prev.researching) return prev;
-
-        const progress = prev.researchProgress + deltaTime;
-        if (progress >= prev.researching.researchTime) {
-          // Research complete
-          const newNode = {
-            ...prev.researching,
-            researched: true,
-            unlocked: true,
-          };
-
-          // Update dependencies
-          TECH_TREE_NODES.forEach((node) => {
-            if (newNode.dependencies.includes(node.id)) {
-              TECH_TREE_NODES[node.id] = node;
-            }
-          });
-
-          return {
-            ...prev,
-            researching: null,
-            researchProgress: 0,
-            resources: {
-              iron: prev.resources.iron - newNode.cost.iron,
-              h2: prev.resources.h2 - newNode.cost.h2,
-            },
-            selectedNode: newNode,
-          };
-        }
-
-        return {
-          ...prev,
-          researchProgress: progress,
-        };
-      });
-    },
-    []
-  );
-
+  const techTreeRef = useRef<THREE.Group | null>(null);
+  const nodesGroupRef = useRef<THREE.Group[]>([]);
+  const connectionsGroupRef = useRef<THREE.Group[]>([]);
+  const researchRingsRef = useRef<THREE.Group[]>([]);
+  
+  // Pointer lock state
+  const [isPointerLocked, setIsPointerLocked] = useState(false);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [researchingNode, setResearchingNode] = useState<string | null>(null);
+  const [progressPercent, setProgressPercent] = useState(0);
+  
+  // Raycaster for mouse interaction
+  const raycaster = useRef(new THREE.Raycaster());
+  const mouse = useRef(new THREE.Vector2());
+  
+  // Pointer lock handling
+  const handlePointerLockChange = useCallback(() => {
+    setIsPointerLocked(document.pointerLockElement === techTreeRef.current);
+  }, [techTreeRef]);
+  
   // Initialize tech tree scene
   useEffect(() => {
-    if (!mountRef.current) return;
-
-    // Create scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000810); // Deep space blue
-    sceneRef.current = scene;
-
-    // Create camera
     const camera = new THREE.PerspectiveCamera(
-      60,
-      mountRef.current.clientWidth / mountRef.current.clientHeight,
+      75,
+      window.innerWidth / window.innerHeight,
       0.1,
       1000
     );
-    camera.position.set(0, 8, 12);
-    camera.lookAt(0, 0, 0);
-    cameraRef.current = camera;
-
-    // Create renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    mountRef.current.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
-
-    // Create tech tree group
-    const techTreeGroup = new THREE.Group();
-    techTreeGroup.position.set(0, 4, 0);
-    scene.add(techTreeGroup);
-
-    // Create node geometries (3D icons)
-    const nodeMeshes: Record<string, THREE.Mesh> = {};
-    const nodePositions: Record<string, THREE.Vector3> = {};
-
-    // Tier 1 nodes
-    nodePositions['mining-basic'] = new THREE.Vector3(-6, 0, 0);
-    nodePositions['building-basic'] = new THREE.Vector3(-3, 0, 0);
-    nodePositions['refining-basic'] = new THREE.Vector3(0, 0, 0);
-
-    // Tier 2 nodes
-    nodePositions['mining-advanced'] = new THREE.Vector3(-4, 0, 4);
-    nodePositions['pressurization'] = new THREE.Vector3(-7, 0, 4);
-    nodePositions['power-grid'] = new THREE.Vector3(-1, 0, 4);
-
-    // Tier 3 nodes
-    nodePositions['jetpack'] = new THREE.Vector3(-4, 0, 8);
-    nodePositions['fabricator'] = new THREE.Vector3(-7, 0, 8);
-    nodePositions['signal-tech'] = new THREE.Vector3(-1, 0, 8);
-
-    // Create node meshes with holographic appearance
-    const createNodeMesh = (
-      id: string,
-      iconType: ResearchNode['iconType'],
-      position: THREE.Vector3,
-      unlocked: boolean,
-      researched: boolean
-    ): THREE.Group => {
-      const group = new THREE.Group();
-      group.position.copy(position);
-
-      const baseColor = researched ? 0x00ff00 : unlocked ? 0x00ffff : 0x333333;
-      const emissiveColor = researched ? 0x00ff00 : 0x0044aa;
-
-      // Node base
-      const baseGeometry = new THREE.CylinderGeometry(NODE_RADIUS * 0.5, NODE_RADIUS * 0.5, 0.3, 16);
-      const baseMaterial = new THREE.MeshStandardMaterial({
-        color: baseColor,
-        emissive: emissiveColor,
-        emissiveIntensity: researched ? 0.8 : 0.4,
-        transparent: true,
-        opacity: 0.8,
-        roughness: 0.3,
-        metalness: 0.8,
-      });
-      const base = new THREE.Mesh(baseGeometry, baseMaterial);
-      base.rotation.x = Math.PI / 2;
-      base.position.y = -0.5;
-      group.add(base);
-
-      // Node icon (3D representation of tech)
-      let iconGeometry: THREE.BufferGeometry;
-      switch (iconType) {
-        case 'drill':
-          iconGeometry = new THREE.BoxGeometry(0.6, 0.6, 0.4);
-          break;
-        case 'dome':
-          iconGeometry = new THREE.SphereGeometry(0.4, 16, 8);
-          break;
-        case 'smelter':
-          iconGeometry = new THREE.CylinderGeometry(0.35, 0.35, 0.6, 8);
-          break;
-        case 'jetpack':
-          iconGeometry = new THREE.BoxGeometry(0.5, 0.8, 0.5);
-          break;
-        case 'fabricator':
-          iconGeometry = new THREE.BoxGeometry(0.6, 0.6, 0.8);
-          break;
-        case 'relay':
-          iconGeometry = new THREE.ConeGeometry(0.4, 1, 8);
-          break;
-        default:
-          iconGeometry = new THREE.BoxGeometry(0.6, 0.6, 0.6);
-      }
-
-      const iconMaterial = new THREE.MeshStandardMaterial({
-        color: baseColor,
-        emissive: emissiveColor,
-        emissiveIntensity: researched ? 1 : 0.6,
-        transparent: true,
-        opacity: 0.9,
-        roughness: 0.2,
-        metalness: 1.0,
-      });
-
-      const icon = new THREE.Mesh(iconGeometry, iconMaterial);
-      group.add(icon);
-
-      // Holographic ring around node
-      const ringGeometry = new THREE.TorusGeometry(NODE_RADIUS, 0.1, 8, 32);
-      const ringMaterial = new THREE.MeshBasicMaterial({
-        color: baseColor,
-        transparent: true,
-        opacity: 0.5,
-      });
-      const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = -0.5;
-      group.add(ring);
-
-      // Add user data for raycasting
-      (group as any).userData = {
-        id,
-        iconType,
-        type: 'node',
-      };
-
-      return group;
-    };
-
-    // Create all nodes
-    TECH_TREE_NODES.forEach((node) => {
-      const mesh = createNodeMesh(
-        node.id,
-        node.iconType,
-        nodePositions[node.id],
-        node.unlocked,
-        node.researched
-      );
-      techTreeGroup.add(mesh);
-      nodeMeshes[node.id] = mesh;
+    camera.position.set(0, HOLOGRAM_Y, HOLOGRAM_DIST);
+    camera.lookAt(0, NODE_RADIUS * 0.5, 0);
+    
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: true, 
+      alpha: true 
     });
-
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x000000, 0.8);
+    
+    const container = document.getElementById('tech-tree-container');
+    if (container) {
+      container.appendChild(renderer.domElement);
+    }
+    
+    // Lighting for hologram effect
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    
+    const pointLight = new THREE.PointLight(0x00aaff, 1, 20);
+    pointLight.position.set(0, 5, 0);
+    scene.add(pointLight);
+    
+    // Create hologram group
+    const hologramGroup = new THREE.Group();
+    
+    // Create nodes at tier-based positions
+    const nodePositions: Record<string, { x: number; z: number }> = {
+      'mining-basic': { x: -6, z: -3 },
+      'building-basic': { x: 0, z: -4 },
+      'refining-basic': { x: 6, z: -3 },
+      'mining-advanced': { x: -9, z: 0 },
+      'pressurization': { x: -3, z: -0.5 },
+      'power-grid': { x: 3, z: -0.5 },
+      'jetpack': { x: 0, z: 3 },
+      'fabricator': { x: 3, z: 2 },
+      'signal-tech': { x: 0, z: 6 },
+    };
+    
+    TECH_TREE_NODES.forEach((node, index) => {
+      const pos = nodePositions[node.id];
+      if (!pos) return;
+      
+      // Create tech node group
+      const nodeGroup = createTechNode(node);
+      nodeGroup.position.set(pos.x, HOLOGRAM_Y, pos.z);
+      hologramGroup.add(nodeGroup);
+      nodesGroupRef.current.push(nodeGroup);
+      
+      // Create research ring
+      const ringGroup = createResearchRing(node);
+      ringGroup.position.set(pos.x, HOLOGRAM_Y, pos.z);
+      hologramGroup.add(ringGroup);
+      researchRingsRef.current.push(ringGroup);
+      
+      // Create node labels
+      createNodeLabel(node, nodeGroup, pos.x, HOGLRAM_Y, pos.z);
+    });
+    
     // Create connection beams
-    const createConnection = (
-      fromId: string,
-      toId: string,
-      color: number
-    ): THREE.Line => {
-      const from = nodePositions[fromId];
-      const to = nodePositions[toId];
-
-      const points = [from, to];
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const material = new THREE.LineBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.4,
-      });
-
-      return new THREE.Line(geometry, material);
-    };
-
-    TECH_TREE_CONNECTIONS.forEach((conn) => {
-      const line = createConnection(conn.from, conn.to, conn.color);
-      line.visible = TECH_TREE_NODES[conn.from].researched;
-      techTreeGroup.add(line);
-    });
-
-    // Store node meshes and connections in userData for updates
-    (techTreeGroup as any).nodeMeshes = nodeMeshes;
-    (techTreeGroup as any).connections: { from: string; to: string; line: THREE.Line }[] =
-      TECH_TREE_CONNECTIONS.map((conn) => ({
-        from: conn.from,
-        to: conn.to,
-        line: createConnection(conn.from, conn.to, conn.color),
-      }));
-
-    // Animation loop
-    const animate = () => {
-      animationFrameRef.current = requestAnimationFrame(animate);
-
-      // Rotate tech tree slowly
-      techTreeGroup.rotation.y += 0.002;
-
-      // Animate researching node
-      if (techTreeState.researching) {
-        (techTreeGroup as any).nodeMeshes[techTreeState.researching.id].rotation.y += 0.01;
-      }
-
-      // Pulse research beam
-      TECH_TREE_CONNECTIONS.forEach((conn) => {
-        const line = (techTreeGroup as any).connections?.find(
-          (c: { from: string; to: string }) => c.from === conn.from && c.to === conn.to
-        );
-        if (line) {
-          line.line.material.opacity = 0.3 + Math.sin(Date.now() * 0.003) * 0.2;
+    TECH_TREE_CONNECTIONS.forEach(conn => {
+      const nodeA = TECH_TREE_NODES.find(n => n.id === conn.from);
+      const nodeB = TECH_TREE_NODES.find(n => n.id === conn.to);
+      
+      if (nodeA && nodeB) {
+        const posA = nodePositions[nodeA.id];
+        const posB = nodePositions[nodeB.id];
+        
+        if (posA && posB) {
+          const start = new THREE.Vector3(posA.x, HOLOGRAM_Y + NODE_RADIUS * 1.5, posA.z);
+          const end = new THREE.Vector3(posB.x, HOLOGRAM_Y + NODE_RADIUS * 1.5, posB.z);
+          const geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
+          const material = new THREE.LineBasicMaterial({ 
+            color: conn.color, 
+            transparent: true, 
+            opacity: 0.3 
+          });
+          const line = new THREE.Line(geometry, material);
+          hologramGroup.add(line);
+          connectionsGroupRef.current.push(line);
+          
+          // Add beam glow
+          const glowGeom = new THREE.BufferGeometry().setFromPoints([start, end]);
+          const glowMat = new THREE.LineBasicMaterial({ 
+            color: conn.glowColor, 
+            transparent: true, 
+            opacity: 0.1 
+          });
+          const glowLine = new THREE.Line(glowGeom, glowMat);
+          hologramGroup.add(glowLine);
+          connectionsGroupRef.current.push(glowLine);
         }
-      });
-
-      renderer.render(scene, camera);
-    };
-
-    animate();
-
-    // Handle window resize
-    const handleResize = () => {
-      if (mountRef.current && camera && renderer) {
-        camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
       }
-    };
-
-    window.addEventListener('resize', handleResize);
-
-    // Handle mouse movement for raycasting
-    const handleMouseMove = (event: MouseEvent) => {
-      const rect = mountRef.current?.getBoundingClientRect();
-      if (!rect) return;
-
-      mouseRef.current.x =
-        ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      mouseRef.current.y =
-        -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-      // Raycast to find hovered node
-      mouseRaycasterRef.current.setFromCamera(mouseRef.current, camera);
-      const intersects = mouseRaycasterRef.current.intersectObjects(
-        techTreeGroup.children,
-        true
-      );
-
-      let hoveredNode = null;
+    });
+    
+    // Add hologram platform
+    const platformGeom = new THREE.CylinderGeometry(HOLOGRAM_DIST, HOLOGRAM_DIST, 0.1, 64);
+    const platformMat = new THREE.MeshBasicMaterial({ 
+      color: 0x0044ff, 
+      transparent: true, 
+      opacity: 0.1,
+      side: THREE.DoubleSide
+    });
+    const hologramPlatform = new THREE.Mesh(platformGeom, platformMat);
+    hologramPlatform.position.y = -NODE_RADIUS * 0.5;
+    hologramGroup.add(hologramPlatform);
+    
+    // Add background grid
+    const gridHelper = new THREE.GridHelper(15, 15, 0x0044ff, 0x001133);
+    gridHelper.position.y = -NODE_RADIUS * 0.3;
+    hologramGroup.add(gridHelper);
+    
+    scene.add(hologramGroup);
+    techTreeRef.current = hologramGroup;
+    
+    // Mouse click handler
+    const handleClick = (event: MouseEvent) => {
+      if (!isPointerLocked) return;
+      
+      mouse.current.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.current.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      
+      raycaster.current.setFromCamera(mouse.current, camera);
+      const intersects = raycaster.current.intersectObjects(nodesGroupRef.current, true);
+      
       if (intersects.length > 0) {
-        const parent = intersects[0].object.parent;
-        if (parent && (parent as any).userData?.id) {
-          hoveredNode = (parent as any).userData.id;
-        } else if ((intersects[0].object as any).userData?.id) {
-          hoveredNode = (intersects[0].object as any).userData.id;
+        let clickedGroup = intersects[0].object;
+        while (clickedGroup.parent && !clickedGroup.userData.node) {
+          clickedGroup = clickedGroup.parent as THREE.Group;
+        }
+        
+        if (clickedGroup.userData.node) {
+          setSelectedNode(clickedGroup.userData.node.id);
+          
+          // Start research if unlocked and not researched
+          const node = clickedGroup.userData.node as ResearchNode;
+          if (node.unlocked && !node.researched) {
+            startResearch(node);
+          }
         }
       }
-
-      // Update cursor
-      document.body.style.cursor = hoveredNode ? 'pointer' : 'default';
     };
-
-    window.addEventListener('mousemove', handleMouseMove);
-
+    
+    document.addEventListener('mousedown', handleClick);
+    
+    // Pointer lock change listener
+    document.addEventListener('pointerlockchange', handlePointerLockChange);
+    
+    // Resize handler
+    const handleResize = () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    };
+    window.addEventListener('resize', handleResize);
+    
+    // Animation loop
+    const clock = new THREE.Clock();
+    
+    function animate() {
+      requestAnimationFrame(animate);
+      
+      const delta = clock.getDelta();
+      
+      // Rotate research rings
+      researchRingsRef.current.forEach(ringGroup => {
+        if (ringGroup.userData.progressMesh) {
+          ringGroup.userData.progressMesh.rotation.z += delta * 0.5;
+        }
+      });
+      
+      // Slight hover effect on nodes
+      nodesGroupRef.current.forEach((nodeGroup, i) => {
+        const time = Date.now() * 0.001;
+        nodeGroup.position.y = HOLOGRAM_Y + Math.sin(time + i) * 0.1;
+      });
+      
+      // Research progress animation
+      if (researchingNode && progressPercent < 100) {
+        progressPercent += delta * (100 / (TECH_TREE_NODES.find(n => n.id === researchingNode)?.researchTime || 1));
+        setProgressPercent(Math.min(100, progressPercent));
+        
+        if (progressPercent >= 100) {
+          completeResearch(researchingNode);
+        }
+      }
+      
+      renderer.render(scene, camera);
+    }
+    
+    animate();
+    
     return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('pointerlockchange', handlePointerLockChange);
       window.removeEventListener('resize', handleResize);
-      window.removeEventListener('mousemove', handleMouseMove);
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
+      if (container) {
+        container.innerHTML = '';
       }
-      if (mountRef.current && renderer) {
-        mountRef.current.removeChild(renderer.domElement);
-      }
-      if (renderer) {
-        renderer.dispose();
-      }
-      if (scene) {
-        scene.clear();
-      }
+      renderer.dispose();
     };
-  }, [techTreeState]);
-
-  // Update scene after resource changes
+  }, [isPointerLocked]);
+  
+  // Resume research progress
   useEffect(() => {
-    if (!sceneRef.current) return;
-
-    const scene = sceneRef.current;
-    const techTreeGroup = scene.getObjectByProperty('type', 'Group');
-
-    if (!techTreeGroup) return;
-
-    // Update node colors based on research state
-    TECH_TREE_NODES.forEach((node) => {
-      const mesh = (techTreeGroup as any).nodeMeshes?.[node.id];
-      if (mesh) {
-        const baseColor = node.researched ? 0x00ff00 : node.unlocked ? 0x00ffff : 0x333333;
-        const emissiveColor = node.researched ? 0x00ff00 : 0x0044aa;
-
-        mesh.children.forEach((child: THREE.Mesh) => {
-          if (child.material) {
-            child.material.color.setHex(baseColor);
-            child.material.emissive.setHex(emissiveColor);
-            child.material.emissiveIntensity = node.researched ? 1 : 0.6;
+    if (researchingNode && progressPercent < 100) {
+      const clock = new THREE.Clock();
+      function animateProgress() {
+        if (researchingNode && progressPercent < 100) {
+          progressPercent += clock.getDelta() * (100 / (TECH_TREE_NODES.find(n => n.id === researchingNode)?.researchTime || 1));
+          setProgressPercent(Math.min(100, progressPercent));
+          
+          if (progressPercent >= 100) {
+            completeResearch(researchingNode);
+          } else {
+            requestAnimationFrame(animateProgress);
           }
-        });
-
-        // Update connections
-        TECH_TREE_CONNECTIONS.forEach((conn) => {
-          if (conn.from === node.id) {
-            const connection = (techTreeGroup as any).connections?.find(
-              (c: { from: string; to: string }) => c.from === conn.from && c.to === conn.to
-            );
-            if (connection) {
-              connection.line.material.opacity = node.researched ? 1 : 0.2;
-              connection.line.visible = node.researched;
-            }
-          }
-        });
+        }
       }
-    });
-  }, [techTreeState]);
-
+      animateProgress();
+    }
+  }, [researchingNode, progressPercent]);
+  
+  const startResearch = (node: ResearchNode) => {
+    // Check if all dependencies are researched
+    const allDependenciesResearched = node.dependencies.every(
+      depId => TECH_TREE_NODES.find(n => n.id === depId)?.researched === true
+    );
+    
+    if (!allDependenciesResearched) {
+      alert(`Research ${node.name} requires all dependencies researched first!\n\nRequired: ${node.dependencies.join(', ')}`);
+      return;
+    }
+    
+    // Check resources
+    const resources = { iron: 50, h2: 20 }; // Mock resources - replace with actual resource check
+    if (node.cost.iron > resources.iron || node.cost.h2 > resources.h2) {
+      alert(`Insufficient resources for ${node.name}!\n\nRequired: ${node.cost.iron} iron, ${node.cost.h2} H2`);
+      return;
+    }
+    
+    setResearchingNode(node.id);
+    setProgressPercent(0);
+  };
+  
+  const completeResearch = (nodeId: string) => {
+    const node = TECH_TREE_NODES.find(n => n.id === nodeId);
+    if (node) {
+      node.researched = true;
+      node.unlocked = true;
+      setResearchingNode(null);
+      setProgressPercent(0);
+      alert(`${node.name} has been researched!\n\nUnlocked: ${node.description}`);
+    }
+  };
+  
   return (
-    <div
-      id={TECH_TREE_CONTAINER_ID}
-      ref={mountRef}
-      style={{
-        position: 'fixed',
-        top: '0',
-        left: '0',
-        width: '100%',
-        height: '100%',
-        display: 'none', // Hidden by default, shown with key press
-        zIndex: 1000,
-        pointerEvents: 'auto',
-      }}
-    />
+    <div id="tech-tree-container" className="fixed inset-0 bg-black z-50">
+      {!isPointerLocked && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/90">
+          <div className="text-center p-8">
+            <h2 className="text-4xl font-bold text-blue-400 mb-4">3D Tech Tree</h2>
+            <p className="text-gray-300 mb-8">Press ESC to release mouse, click to lock and navigate</p>
+            <p className="text-gray-400 text-sm">
+              WASD to move • Mouse to look • Click node to research
+            </p>
+          </div>
+        </div>
+      )}
+      
+      {researchingNode && (
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-black/80 border border-yellow-500 px-6 py-3 rounded">
+          <p className="text-yellow-400 text-sm">
+            Researching: <span className="font-bold">
+              {TECH_TREE_NODES.find(n => n.id === researchingNode)?.name}
+            </span>
+          </p>
+        </div>
+      )}
+      
+      {selectedNode && (
+        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/80 border border-cyan-500 px-6 py-3 rounded">
+          <p className="text-cyan-400 text-sm">
+            Selected: <span className="font-bold">
+              {TECH_TREE_NODES.find(n => n.id === selectedNode)?.name}
+            </span>
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
+
+// Helper for Hologram Y
+const HOGLRAM_Y = HOLOGRAM_Y;
+
+// ====================== Component Interface ======================
+
+export type {
+  ResearchNode,
+  ResearchConnection,
+};
 
 export default TechTree3D;

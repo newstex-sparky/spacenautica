@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Survival3D } from './components/Survival3D';
+import { TechTree3D } from './components/TechTree3D';
 import { NarratorScene } from './components/NarratorScene';
 import { HullBreach3D } from './components/HullBreach3D';
 import { SettingsPanel } from './components/SettingsPanel';
+import { Shuttle3D } from './components/Shuttle3D';
 
 export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
 export type AsteroidType = 'iron' | 'ice' | 'oxygen';
@@ -48,7 +50,7 @@ export interface SaveData {
   };
 }
 
-type Screen = 'intro' | 'narrator' | 'hullBreach' | 'newgame' | 'continue' | 'settings' | null;
+type Screen = 'intro' | 'narrator' | 'hullBreach' | 'newgame' | 'continue' | 'settings' | 'techtree' | null;
 
 export function App() {
   const [screen, setScreen] = useState<Screen>('intro');
@@ -286,6 +288,9 @@ export function App() {
             <button className="intro-hull-breach" onClick={() => setScreen('hullBreach')}>
               View Hull Breaches
             </button>
+            <button className="intro-start" onClick={() => setScreen('techtree')}>
+              🔬 Tech Tree
+            </button>
           </div>
 
           {/* Footer */}
@@ -301,6 +306,9 @@ export function App() {
 
       {/* Hull Breach 3D Screen */}
       {screen === 'hullBreach' && <HullBreach3D onExit={() => setScreen('intro')} />}
+
+      {/* Tech Tree 3D Screen */}
+      {screen === 'techtree' && <TechTree3D />}
 
       {/* Main 3D Survival Mode */}
       {show3D && (
