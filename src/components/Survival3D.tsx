@@ -368,6 +368,11 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const [uiInventoryItems, setUiInventoryItems] = useState<InventoryItem[]>(INITIAL_INVENTORY.slice());
   const [uiEquippedTool, setUiEquippedTool] = useState<ToolType>('repair-tool');
 
+  // Tech tree state
+  const [uiTechTreeOpen, setUiTechTreeOpen] = useState(false);
+  const [uiResearchProgress, setUiResearchProgress] = useState<Set<string>>(new Set());
+  const [uiResearchingNode, setUiResearchingNode] = useState<string>('');
+
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -402,6 +407,11 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const yawRef = useRef(0);    // horizontal look angle (radians) — kept from original
   const pitchRef = useRef(0);  // vertical look angle (radians)   — kept from original
   const gameLoopRef = useRef<number | null>(null);
+  
+  // Tech tree refs
+  const techTreePanelRef = useRef<THREE.Group | null>(null); // holographic tech tree panel
+  const techTreeGroupRef = useRef<THREE.Group | null>(null); // Group to hold all tech tree elements
+  const techTreeNodesRef = useRef<THREE.Group[]>([]); // Array of node group refs
   const lastTimeRef = useRef<number>(0);
   const gameStateRef = useRef({ broadcasting: false, broadcastComplete: false });
   // Gamepad look sensitivity (configurable)
@@ -5182,3 +5192,314 @@ interface BroadcastState {
     display: 'block',
   },
 };
+// ====================== Tech Tree Data ======================
+interface TechNode {
+  id: string;
+  name: string;
+  tier: number;
+  description: string;
+  cost: { iron: number; h2: number };
+  unlocked: boolean;
+  visible: boolean;
+}
+
+// Tech tree structure
+const TECH_TREE_NODES: TechNode[] = [
+  // Tier 1 (Starting)
+  { id: 'mining-basic', name: 'Basic Mining', tier: 1, description: 'Mining drill Mk1', cost: { iron: 0, h2: 0 }, unlocked: true, visible: true },
+  { id: 'building-basic', name: 'Basic Building', tier: 1, description: 'Habitat dome, Solar panel', cost: { iron: 0, h2: 0 }, unlocked: true, visible: true },
+  { id: 'refining-basic', name: 'Basic Refining', tier: 1, description: 'Smelter, Electrolysis refinery', cost: { iron: 10, h2: 0 }, unlocked: false, visible: true },
+  
+  // Tier 2 (requires Tier 1)
+  { id: 'mining-advanced', name: 'Advanced Mining', tier: 2, description: 'Mining drill Mk2, Scanner', cost: { iron: 20, h2: 0 }, unlocked: false, visible: false },
+  { id: 'pressurization', name: 'Pressurization', tier: 2, description: 'Airlock, O2 generator', cost: { iron: 15, h2: 0 }, unlocked: false, visible: false },
+  { id: 'power-grid', name: 'Power Grid', tier: 2, description: 'H2 storage tank, Power distribution', cost: { iron: 20, h2: 0 }, unlocked: false, visible: false },
+  
+  // Tier 3 (requires Tier 2)
+  { id: 'jetpack', name: 'Jetpack', tier: 3, description: 'Jetpack Mk1/Mk2', cost: { iron: 30, h2: 10 }, unlocked: false, visible: false },
+  { id: 'fabricator', name: 'Fabricator', tier: 3, description: 'Crafting station, Advanced tools', cost: { iron: 25, h2: 0 }, unlocked: false, visible: false },
+  { id: 'signal-tech', name: 'Signal Tech', tier: 3, description: 'Signal Relay Array (win condition)', cost: { iron: 40, h2: 20 }, unlocked: false, visible: false },
+];
+
+// Connection relationships (parent -> children)
+const TECH_TREE_CONNECTIONS: Map<string, string[]> = new Map([
+  ['mining-basic', ['mining-advanced']],
+  ['building-basic', ['pressurization']],
+  ['refining-basic', ['power-grid']],
+  ['mining-advanced', ['jetpack']],
+  ['pressurization', ['signal-tech']],
+  ['power-grid', ['signal-tech']],
+  ['fabricator', ['signal-tech']],
+]);
+
+// ====================== Tech Tree 3D Functions ======================
+
+// 3D holographic tech tree panel
+const createTechTreePanel = () => {
+  const group = new THREE.Group();
+  group.visible = false; // Hidden by default, shown when tech tree is open
+
+  // Main holographic panel (larger than inventory)
+  const panelGeometry = new THREE.BoxGeometry(10, 6, 0.1);
+  const panelMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.1,
+    side: THREE.DoubleSide,
+    wireframe: true,
+  });
+  const panel = new THREE.Mesh(panelGeometry, panelMaterial);
+  group.add(panel);
+
+  // Inner glow effect
+  const glowGeometry = new THREE.PlaneGeometry(9.8, 5.8);
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.05,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+  group.add(glow);
+
+  return group;
+};
+
+// Create tech tree node icon (3D model based on node type)
+const createTechTreeNode = (nodeId: string): THREE.Group => {
+  const group = new THREE.Group();
+  
+  // Node base geometry based on tier
+  let geometry;
+  if (nodeId.includes('mining')) {
+    geometry = new THREE.OctahedronGeometry(0.4, 0);
+  } else if (nodeId.includes('building') || nodeId.includes('pressurization') || nodeId.includes('power')) {
+    geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+  } else if (nodeId.includes('refining')) {
+    geometry = new THREE.IcosahedronGeometry(0.4, 0);
+  } else if (nodeId.includes('jetpack') || nodeId.includes('fabricator') || nodeId.includes('signal')) {
+    geometry = new THREE.TorusGeometry(0.3, 0.1, 8, 16);
+  } else {
+    geometry = new THREE.SphereGeometry(0.4, 16, 12);
+  }
+
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.7,
+    wireframe: false,
+  });
+  
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData = { nodeId, isTechNode: true };
+  group.add(mesh);
+
+  return group;
+};
+
+// Create connection beam between two nodes
+const createTechTreeBeam = (startNode: THREE.Vector3, endNode: THREE.Vector3): THREE.Line => {
+  const points = [startNode, endNode];
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.3,
+    linewidth: 2,
+  });
+  return new THREE.Line(geometry, material);
+};
+
+// Calculate node positions in a tier-based layout
+const calculateTechTreePositions = (): Record<string, {x: number, y: number, z: number}> => {
+  const positions: Record<string, {x: number, y: number, z: number}> = {};
+  
+  // Tier 1 nodes (y = 4, at varying x positions)
+  const tier1Nodes = TECH_TREE_NODES.filter(n => n.tier === 1);
+  tier1Nodes.forEach((node, index) => {
+    positions[node.id] = {
+      x: (index - 1) * 2.5,
+      y: 4,
+      z: 0,
+    };
+  });
+  
+  // Tier 2 nodes (y = 2, at varying x positions)
+  const tier2Nodes = TECH_TREE_NODES.filter(n => n.tier === 2 && n.visible);
+  tier2Nodes.forEach((node, index) => {
+    positions[node.id] = {
+      x: (index - 1) * 2.5,
+      y: 2,
+      z: 0,
+    };
+  });
+  
+  // Tier 3 nodes (y = 0, at varying x positions)
+  const tier3Nodes = TECH_TREE_NODES.filter(n => n.tier === 3 && n.visible);
+  tier3Nodes.forEach((node, index) => {
+    positions[node.id] = {
+      x: (index - 1) * 2.5,
+      y: 0,
+      z: 0,
+    };
+  });
+  
+  return positions;
+};
+
+// Add tech tree visual elements to the scene
+const addTechTreeToScene = (scene: THREE.Scene, panelRef: THREE.Group, nodesRef: THREE.Group[]) => {
+  // Create panel
+  const panel = createTechTreePanel();
+  panelRef.current = panel;
+  scene.add(panel);
+  
+  // Calculate positions
+  const positions = calculateTechTreePositions();
+  
+  // Create nodes and connection beams
+  TECH_TREE_NODES.forEach(node => {
+    if (node.visible) {
+      const nodeGroup = createTechTreeNode(node.id);
+      const pos = positions[node.id] || { x: 0, y: 4, z: 0 };
+      
+      nodeGroup.position.set(pos.x, pos.y, pos.z);
+      nodesRef.push(nodeGroup);
+      scene.add(nodeGroup);
+      
+      // Create connection beams from parent nodes
+      const parentIds = Array.from(TECH_TREE_CONNECTIONS.keys()).filter(
+        parentId => TECH_TREE_CONNECTIONS.get(parentId)?.includes(node.id)
+      );
+      
+      parentIds.forEach(parentId => {
+        const parentNodeGroup = nodesRef.find(n => 
+          n.children[0].userData.nodeId === parentId
+        );
+        
+        if (parentNodeGroup) {
+          const parentPos = parentNodeGroup.position;
+          const beam = createTechTreeBeam(parentPos, new THREE.Vector3(pos.x, pos.y, pos.z));
+          scene.add(beam);
+          nodesRef.push(beam as unknown as THREE.Group);
+        }
+      });
+    }
+  });
+  
+  // Update panel position in front of player camera
+  panel.position.copy(cameraRef.current?.position.clone().sub(new THREE.Vector3(0, 0, -4)) || new THREE.Vector3(0, 0, -4));
+};
+
+// Update tech tree node appearance based on research progress
+const updateTechTreeAppearance = (
+  scene: THREE.Scene, 
+  nodesRef: THREE.Group[], 
+  researchProgress: Set<string>
+) => {
+  nodesRef.forEach(ref => {
+    const nodeMesh = ref.children[0] as THREE.Mesh;
+    const nodeId = nodeMesh.userData.nodeId as string;
+    const techNode = TECH_TREE_NODES.find(n => n.id === nodeId);
+    
+    if (techNode) {
+      // Check if node is researched (unlocked by all parents)
+      const allParentsUnlocked = Array.from(TECH_TREE_CONNECTIONS.entries())
+        .filter(([_, children]) => children.includes(nodeId))
+        .every(([parentId]) => researchProgress.has(parentId));
+      
+      // Update appearance
+      if (allParentsUnlocked && !researchProgress.has(nodeId)) {
+        // Available to research (cyan)
+        nodeMesh.material = new THREE.MeshBasicMaterial({
+          color: 0x00ffff,
+          transparent: true,
+          opacity: 0.9,
+          wireframe: false,
+        });
+      } else if (researchProgress.has(nodeId)) {
+        // Researched (green)
+        nodeMesh.material = new THREE.MeshBasicMaterial({
+          color: 0x00ff00,
+          transparent: true,
+          opacity: 1,
+          wireframe: false,
+        });
+      } else {
+        // Locked (gray, low opacity)
+        nodeMesh.material = new THREE.MeshBasicMaterial({
+          color: 0x555555,
+          transparent: true,
+          opacity: 0.3,
+          wireframe: false,
+        });
+      }
+    }
+  });
+};
+
+// ====================== Tech Tree Key Handlers ======================
+// Add this inside the handleKeyDown function:
+// if (e.code === 'KeyT') {
+//   uiTechTreeOpenRef.current = !uiTechTreeOpenRef.current;
+//   setUiTechTreeOpen(uiTechTreeOpenRef.current);
+//   if (uiTechTreeOpenRef.current) {
+//     setGameState(prev => ({ ...prev, buildMode: false }));
+//     setUiBuildMode(false);
+//     buildModeRef.current = false;
+//   }
+//   return;
+// }
+
+// ====================== Tech Tree Research Logic ======================
+// Add this inside the game loop for research updates:
+// const currentResources = resourcesRef.current;
+// 
+// // Check for research actions
+// if (keysRef.current['KeyR'] && !wasResearchingRef.current) {
+//   wasResearchingRef.current = true;
+//   
+//   // Try to research the hovered tech node
+//   const nodeMesh = hoveredTechNodeRef.current;
+//   if (nodeMesh && nodeMesh.userData.isTechNode) {
+//     const nodeId = nodeMesh.userData.nodeId as string;
+//     const node = TECH_TREE_NODES.find(n => n.id === nodeId);
+//     
+//     if (node && !uiResearchProgress.current.has(nodeId) && !uiResearchingNode.current) {
+//       // Check if we can afford the research
+//       if (currentResources.iron >= node.cost.iron && currentResources.h2 >= node.cost.h2) {
+//         uiResearchingNode.current = nodeId;
+//         
+//         // Deduct resources
+//         resourcesRef.current.iron -= node.cost.iron;
+//         resourcesRef.current.h2 -= node.cost.h2;
+//         
+//         setUiResearchProgress(prev => new Set([...prev, nodeId]));
+//         setUiResearchingNode(nodeId);
+//       }
+//     }
+//   }
+// }
+// 
+// if (!keysRef.current['KeyR']) {
+//   wasResearchingRef.current = false;
+// }
+// 
+// // Update tech tree appearance
+// updateTechTreeAppearance(scene, techTreeNodesRef.current, uiResearchProgress.current);
+
+// ====================== Tech Tree Mouse Look ======================
+// Add mouse movement handling for tech tree rotation:
+// if (uiTechTreeOpenRef.current && keysRef.current['MouseButtonLeft']) {
+//   yawRef.current -= e.movementX * sensitivity;
+//   pitchRef.current -= e.movementY * sensitivity;
+//   pitchRef.current = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitchRef.current));
+// } else if (uiTechTreeOpenRef.current) {
+//   // Rotate tech tree group with mouse wheel
+//   if (e.deltaY > 0) {
+//     techTreeGroupRef.current?.rotation.y += 0.1;
+//   } else if (e.deltaY < 0) {
+//     techTreeGroupRef.current?.rotation.y -= 0.1;
+//   }
+// }
