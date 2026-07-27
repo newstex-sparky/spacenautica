@@ -2772,7 +2772,10 @@ interface BroadcastState {
     // Initialize research progress from saved state (optional - would be loaded from persistence)
     // For now, start with empty set (no research)
     const initialResearchProgress = new Set<string>();
-    }
+
+    // Update all tech tree nodes with correct appearance based on research progress
+    updateTechTreeAppearance(sceneRef.current!, techTreeNodesRef.current, initialResearchProgress);
+  }
 
     // Resize handler
     const handleResize = () => {
@@ -5900,18 +5903,12 @@ const unlockTechNode = (nodeId: string) => {
   }
 };
 
-// ====================== Tech Tree Key Handlers ======================
-// Add this inside the handleKeyDown function:
-// if (e.code === 'KeyT') {
-//   uiTechTreeOpenRef.current = !uiTechTreeOpenRef.current;
-//   setUiTechTreeOpen(uiTechTreeOpenRef.current);
-//   if (uiTechTreeOpenRef.current) {
-//     setGameState(prev => ({ ...prev, buildMode: false }));
-//     setUiBuildMode(false);
-//     buildModeRef.current = false;
-//   }
-//   return;
-// }
+// Update tech tree node appearance when research progress changes
+useEffect(() => {
+  if (sceneRef.current && techTreeNodesRef.current.length > 0) {
+    updateTechTreeAppearance(sceneRef.current, techTreeNodesRef.current, uiResearchProgress);
+  }
+}, [uiResearchProgress]);
 
 // ====================== Tech Tree Research Logic ======================
 // Add this inside the game loop for research updates:
