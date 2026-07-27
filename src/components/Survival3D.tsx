@@ -421,6 +421,8 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const [uiCrafting, setUiCrafting] = useState(false); // crafting UI shown
   const [uiBroadcastText, setUiBroadcastText] = useState<string>(''); // broadcast status text
   const [uiRescueComplete, setUiRescueComplete] = useState(false); // rescue complete screen
+  const [uiBroadcastAvailable, setUiBroadcastAvailable] = useState(false); // manual broadcast activation UI
+  const [uiNearSignalRelay, setUiNearSignalRelay] = useState(false); // near signal relay prompt
 
   // Inventory state
   const [uiInventoryOpen, setUiInventoryOpen] = useState(false);
