@@ -6,8 +6,50 @@ import { createProceduralAsteroid, createStationModule, createTool, createContai
 const PLAYER_HEIGHT = 1.6;
 const PLAYER_SPEED = 5;
 
-// Audio context for heartbeat sound
+// Audio context for heartbeat and distress signal
 let audioContext: AudioContext | null = null;
+
+// ====================== Audio Helper Functions ======================
+// Play distress signal - emergency beeping tone for rescue broadcast
+const playDistressSignal = () => {
+  if (audioContext === null) {
+    audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+  }
+
+  if (audioContext.state === 'suspended') {
+    audioContext.resume();
+  }
+
+  // Create a distress beeping signal
+  const duration = 5; // 5 seconds of distress signal
+  const frequency = 800; // 800Hz distress tone
+  const beepInterval = 0.4; // Beep every 0.4 seconds
+  const startTime = audioContext.currentTime;
+
+  const beep = (time: number, delay: number) => {
+    const osc = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(frequency, time);
+
+    // Envelope for beep
+    gainNode.gain.setValueAtTime(0.15, time);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, time + 0.3);
+
+    osc.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    osc.start(time);
+    osc.stop(time + 0.3);
+  };
+
+  // Play sequence of beeps
+  let beepCount = 0;
+  for (let i = 0; i < Math.ceil(duration / beepInterval); i++) {
+    beep(startTime + (i * beepInterval), 0);
+  }
+};
 
 // Oxygen survival
 const O2_MAX = 100;
@@ -2058,7 +2100,7 @@ const createH2StorageTankMesh = (): THREE.Group => {
     port2.position.set(0.8, 1.6, -1.2);
     group.add(port2);
 
-    // Status light (red when powered, green when broadcasting)
+    // Status light (red when powered, green when broadcasting, blue when no power)
     const lightGeo = new THREE.SphereGeometry(0.15, 8, 8);
     const lightMat = new THREE.MeshBasicMaterial({ color: 0x666666 });
     const statusLight = new THREE.Mesh(lightGeo, lightMat);
@@ -2066,13 +2108,79 @@ const createH2StorageTankMesh = (): THREE.Group => {
     (group as any).statusLight = statusLight;
     group.add(statusLight);
 
+    // Holographic broadcast button (3D clickable interaction)
+    const buttonGroup = new THREE.Group();
+    const buttonBaseGeo = new THREE.CylinderGeometry(0.6, 0.6, 0.05, 32);
+    const buttonBaseMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    });
+    const buttonBase = new THREE.Mesh(buttonBaseGeo, buttonBaseMat);
+    buttonBase.position.set(0, 0.5, 0);
+    buttonGroup.add(buttonBase);
+
+    // Button text (3D plane with text)
+    const textCanvas = document.createElement('canvas');
+    textCanvas.width = 64;
+    textCanvas.height = 32;
+    const ctx = textCanvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0)';
+      ctx.fillRect(0, 0, 64, 32);
+      ctx.font = '16px Arial';
+      ctx.fillStyle = '#00ff00';
+      ctx.textAlign = 'center';
+      ctx.fillText('BROADCAST', 32, 22);
+    }
+    const textTexture = new THREE.CanvasTexture(textCanvas);
+    const textGeo = new THREE.PlaneGeometry(0.8, 0.4);
+    const textMat = new THREE.MeshBasicMaterial({
+      map: textTexture,
+      transparent: true,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+    });
+    const textMesh = new THREE.Mesh(textGeo, textMat);
+    textMesh.position.set(0, 0.55, 0);
+    textMesh.rotation.x = -Math.PI / 2;
+    buttonGroup.add(textMesh);
+
+    // Button glow effect
+    const glowGeo = new THREE.RingGeometry(0.6, 0.65, 32);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: 0x00ff00,
+      transparent: true,
+      opacity: 0.2,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const glowMesh = new THREE.Mesh(glowGeo, glowMat);
+    glowMesh.position.set(0, 0.55, 0);
+    glowMesh.rotation.x = -Math.PI / 2;
+    (buttonGroup as any).buttonGlow = glowMesh;
+    buttonGroup.add(glowMesh);
+
+    buttonGroup.position.set(0, 1.5, -1.5);
+    buttonGroup.rotation.y = Math.PI / 4;
+    (buttonGroup as any).buttonMesh = buttonGroup;
+    (buttonGroup as any).buttonClickEnabled = true;
+    (buttonGroup as any).buttonBroadcasting = false;
+    group.add(buttonGroup);
+
     // Build state flags
     (group as any).signalRelayPowered = false;
     (group as any).signalRelayBroadcasting = false;
-
-    // Broadcast timer for ending sequence
-    (group as any).broadcastTimer = 0;
-    (group as any).broadcastComplete = false;
+    (group as any).broadcastStartTime = 0;
+    (group as any).audioPlayed = false;
+    (group as any).signalBeamOpacity = 0;
+    (group as any).antennaRotation = 0;
+    (group as any).broadcastText = '';
+    (group as any).rescueMessageDisplayed = false;
+    (group as any).cameraZoomed = false;
+    (group as any).cameraZoomTarget = new THREE.Vector3(0, 0, 0);
+    (group as any).cameraZoomDistance = 0;
 
     return group;
   };
@@ -2227,11 +2335,16 @@ interface BroadcastState {
   broadcastStartTime: number;
   signalBeamOpacity: number;
   antennaRotation: number;
-  rescueShip: { mesh: THREE.Group; visible: boolean; approaching: boolean; docked: boolean } | null;
   broadcastText?: string;
-  rescueApproachStartTime?: number;
   rescueMessageDisplayed?: boolean;
+  rescueShip: { mesh: THREE.Group; visible: boolean; approaching: boolean; docked: boolean } | null;
+  rescueApproachStartTime?: number;
   youSurvivedScreen?: boolean;
+  // Camera state for first-person zoom
+  cameraZoomTarget: THREE.Vector3;
+  cameraZoomDistance: number;
+  audioPlayed: boolean;      // Track if distress signal played
+  cameraZoomed: boolean;     // Track if camera zoomed to relay
 }
 
   // ====================== Fabricator Crafting Display ======================
@@ -2560,8 +2673,20 @@ interface BroadcastState {
     // Initialize signal relay-specific state (win condition)
     if (type === 'signalrelay') {
       structureType = 'signalrelay';
-      (group as any).signalRelayPowered = false;
-      (group as any).signalRelayBroadcasting = false;
+      // Create broadcast state object
+      const broadcastState: BroadcastState = {
+        powered: false,
+        broadcasting: false,
+        broadcastStartTime: 0,
+        signalBeamOpacity: 0,
+        antennaRotation: 0,
+        cameraZoomTarget: new THREE.Vector3(0, 4, 0),
+        cameraZoomDistance: 15,
+        audioPlayed: false,
+        cameraZoomed: false,
+        rescueShip: null,
+      };
+      (group as any).broadcastState = broadcastState;
       (group as any).needsPower = true; // Requires H2 to operate
     }
     // Initialize shuttle bay and spawn shuttle
@@ -3201,7 +3326,43 @@ interface BroadcastState {
       }
       if (e.button !== 0) return;
       if (gameOverRef.current) return;
+
       mouseDownRef.current = true;
+
+      // Check for 3D button interactions (signal relay broadcast button)
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), cameraRef.current!);
+
+      for (const structure of structuresRef.current) {
+        if (structure.type === 'signalrelay') {
+          const group = structure.group;
+          const buttonGroup = (group as any).buttonMesh;
+          if (buttonGroup && (buttonGroup as any).buttonClickEnabled && !gameStateRef.current.broadcasting) {
+            // Check if button is close enough and pointing at camera
+            const distance = group.position.distanceTo(cameraRef.current!.position);
+            const isFacing = raycaster.intersectObjects(buttonGroup.children, true).length > 0;
+
+            if (distance < 15 && isFacing) {
+              // Check if powered
+              const powered = resourcesRef.current.h2 >= 2;
+              if (powered) {
+                // Start broadcasting
+                const broadcastState = (group as any).broadcastState;
+                if (broadcastState && !broadcastState.broadcasting && !broadcastState.broadcastStartTime) {
+                  broadcastState.broadcastStartTime = Date.now() / 1000;
+                  setGameState(prev => ({ ...prev, broadcasting: true }));
+                }
+              } else {
+                // Not powered - show warning
+                console.log('Low H2 - need 2 H2 to broadcast');
+                setUiBroadcastText('LOW H2 POWER - NEED 2 UNIT');
+              }
+              mouseDownRef.current = false; // don't also start mining
+            }
+          }
+        }
+      }
+
       // If in build mode, attempt to place a structure on this click
       if (buildModeRef.current) {
         tryPlaceStructure();
@@ -4328,6 +4489,12 @@ interface BroadcastState {
         if (broadcastState.broadcasting) {
           const elapsedTime = (Date.now() / 1000) - broadcastState.broadcastStartTime;
 
+          // Play distress signal at start if not played
+          if (elapsedTime < 1 && !broadcastState.audioPlayed) {
+            playDistressSignal();
+            broadcastState.audioPlayed = true;
+          }
+
           // Stage 1: Antenna rotation (5 seconds)
           if (elapsedTime < 5) {
             broadcastState.antennaRotation = Math.PI * (elapsedTime / 5);
@@ -4354,6 +4521,33 @@ interface BroadcastState {
             }
           }
 
+          // Stage 4: First-person camera zoom to relay after 5 seconds (automatic)
+          if (elapsedTime >= 5 && !broadcastState.cameraZoomed) {
+            if (cameraRef.current && group) {
+              // Get broadcast state position
+              broadcastState.cameraZoomTarget.copy(group.position);
+              broadcastState.cameraZoomDistance = 8; // Zoom in to dish
+            }
+            broadcastState.cameraZoomed = true;
+          }
+
+          // Manual camera zoom when near signal relay (allows player to look at dish)
+          if (uiNearSignalRelay && cameraRef.current && group) {
+            broadcastState.cameraZoomTarget.copy(group.position);
+            broadcastState.cameraZoomDistance = 12; // Distance to dish
+          }
+
+          // Apply camera zoom smoothly
+          if (broadcastState.cameraZoomed && cameraRef.current) {
+            const targetPos = broadcastState.cameraZoomTarget;
+            const zoomDist = broadcastState.cameraZoomDistance;
+            
+            // Interpolate camera position towards target
+            cameraRef.current.position.x += (targetPos.x - cameraRef.current.position.x) * 2 * dt;
+            cameraRef.current.position.y += ((targetPos.y + zoomDist) - cameraRef.current.position.y) * 2 * dt;
+            cameraRef.current.position.z += (targetPos.z - cameraRef.current.position.z) * 2 * dt;
+          }
+
           // Check win condition: continuous broadcast for 30 seconds
           if (elapsedTime >= 30 && !gameStateRef.current.broadcastComplete) {
             setGameState(prev => ({ ...prev, broadcastComplete: true }));
@@ -4364,7 +4558,7 @@ interface BroadcastState {
               broadcastState.rescueShip = { 
                 mesh: null, 
                 visible: false, 
-                approaching: false, 
+                approaching: false,
                 docked: false 
               };
             }
@@ -4408,11 +4602,11 @@ interface BroadcastState {
             shipGroup.add(wing2);
 
             // Position ship far away
-            shipGroup.position.set(-40, 0, 30);
-            shipGroup.rotation.y = Math.PI / 4;
-            
-            scene.add(shipGroup);
-            broadcastState.rescueShip.mesh = shipGroup;
+            ship.position.set(-40, 0, 30);
+            ship.rotation.y = Math.PI / 4;
+
+            scene.add(ship);
+            broadcastState.rescueShip.mesh = ship;
           }
 
           // Approach sequence
@@ -4565,6 +4759,16 @@ interface BroadcastState {
           group.signalBeam.material.opacity = broadcastState.signalBeamOpacity;
           group.signalBeam.visible = broadcastState.signalBeamOpacity > 0.01;
         }
+
+        // Update button glow based on broadcast state
+        const buttonGroup = (group as any).buttonMesh;
+        if (buttonGroup) {
+          const buttonGlow = (buttonGroup as any).buttonGlow;
+          const buttonBroadcasting = (buttonGroup as any).buttonBroadcasting;
+          if (buttonGlow) {
+            buttonGlow.material.opacity = buttonBroadcasting ? 0.5 : 0.2;
+          }
+        }
       });
     }, [gameState]);
 
@@ -4683,6 +4887,16 @@ interface BroadcastState {
       }
     }
   }, [uiH2, uiIron, uiIce, uiOxygen, uiRawOre]);
+
+  // ====================== Broadcast handler ======================
+  const handleStartBroadcast = () => {
+    if (!uiBroadcastAvailable || uiH2 < 10) return;
+    
+    // Set broadcast state
+    const currentGameState = gameStateRef.current;
+    currentGameState.broadcasting = true;
+    setGameState(prev => ({ ...prev, broadcasting: true }));
+  };
 
   // ====================== Restart handler ======================
   const handleRestart = () => {
@@ -5062,6 +5276,38 @@ interface BroadcastState {
           >
             PLAY AGAIN
           </div>
+        </div>
+      )}
+
+      {/* BROADCAST BUTTON — appears when near signal relay */}
+      {uiNearSignalRelay && !gameState.gameOver && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '70%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            padding: '20px 40px',
+            borderRadius: 15,
+            border: '2px solid #00ffff',
+            color: '#00ffff',
+            fontFamily: 'monospace',
+            fontSize: 20,
+            fontWeight: 'bold',
+            textShadow: '0 0 10px #00ffff',
+            cursor: 'pointer',
+            zIndex: 50,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 15,
+          }}
+          onClick={handleStartBroadcast}
+        >
+          📡 ACTIVATE SIGNAL RELAY
+          <span style={{ fontSize: 14, color: '#ffaa00' }}>
+            ({Math.floor(uiH2)} H2 available)
+          </span>
         </div>
       )}
 
