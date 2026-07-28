@@ -465,6 +465,12 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const [uiRescueComplete, setUiRescueComplete] = useState(false); // rescue complete screen
   const [uiBroadcastAvailable, setUiBroadcastAvailable] = useState(false); // manual broadcast activation UI
   const [uiNearSignalRelay, setUiNearSignalRelay] = useState(false); // near signal relay prompt
+  const [dialogueSequence, setDialogueSequence] = useState(false); // dialogue cutscene active
+  const [dialogueText, setDialogueText] = useState(''); // current typewriter text
+  const [uiNearSignalRelay, setUiNearSignalRelay] = useState(false); // near signal relay prompt
+  const [dialogueSequence, setDialogueSequence] = useState(false); // dialogue cutscene active
+  const [dialogueText, setDialogueText] = useState(''); // current typewriter text
+  const [dialogueIndex, setDialogueIndex] = useState(0); // current dialogue message index
 
   // Inventory state
   const [uiInventoryOpen, setUiInventoryOpen] = useState(false);

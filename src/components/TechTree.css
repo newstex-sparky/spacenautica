@@ -1,0 +1,99 @@
+.tech-tree-container {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  background: radial-gradient(circle at center, #001a33 0%, #000510 100%);
+}
+
+.tech-tree-overlay {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  right: 20px;
+  background: rgba(0, 20, 40, 0.85);
+  border: 1px solid #00ffff;
+  border-radius: 10px;
+  padding: 20px;
+  color: white;
+  backdrop-filter: blur(10px);
+  max-height: 300px;
+  overflow-y: auto;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.3), inset 0 0 20px rgba(0, 255, 255, 0.1);
+}
+
+.tech-tree-overlay h2 {
+  color: #00ffff;
+  margin: 0 0 15px 0;
+  font-size: 24px;
+  text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff;
+}
+
+.tech-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tech-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  padding: 8px;
+  background: rgba(0, 255, 255, 0.1);
+  border-radius: 5px;
+  border-left: 3px solid #00ffff;
+}
+
+.tech-stat .tech-label {
+  font-weight: bold;
+  color: #00ffff;
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.tech-controls {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(0, 255, 255, 0.3);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.tech-controls div {
+  margin: 4px 0;
+  display: flex;
+}
+
+.tech-controls strong {
+  color: #00ffff;
+  margin-right: 10px;
+}
+
+/* Scrollbar styling */
+.tech-tree-overlay::-webkit-scrollbar {
+  width: 8px;
+}
+
+.tech-tree-overlay::-webkit-scrollbar-track {
+  background: rgba(0, 20, 40, 0.5);
+  border-radius: 4px;
+}
+
+.tech-tree-overlay::-webkit-scrollbar-thumb {
+  background: #00ffff;
+  border-radius: 4px;
+}
+
+.tech-tree-overlay::-webkit-scrollbar-thumb:hover {
+  background: #00bfff;
+}
+
+/* Glow effects for nodes in UI */
+.tech-stat:hover {
+  background: rgba(0, 255, 255, 0.2);
+  transform: translateX(5px);
+  transition: all 0.2s ease;
+}
