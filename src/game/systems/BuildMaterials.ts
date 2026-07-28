@@ -99,8 +99,8 @@ function generateHull(
       }
 
       // Micro grain + dents.
-      const grain = noise.fbm2(u * 46, v * 46, 4) * 0.06;
-      const dent = Math.max(0, noise.warpedFbm2(u * 5.5 + 11, v * 5.5 - 4, 1.4, 4)) * -0.28 * opts.wear;
+      const grain = noise.fbm2(u * 46, v * 46, 3) * 0.06;
+      const dent = Math.max(0, noise.fbm2(u * 5.5 + 11, v * 5.5 - 4, 3)) * -0.28 * opts.wear;
 
       height[y * size + x] = plate - seam * 0.55 + bead + rivet + grain + dent;
     }
@@ -117,11 +117,11 @@ function generateHull(
       // Vertical salt/rust streaks: advect a noise field downward.
       const streak = Math.max(
         0,
-        noise.fbm2(u * 22, v * 2.4, 4) * 0.5 + 0.5 - 0.52,
+        noise.fbm2(u * 22, v * 2.4, 3) * 0.5 + 0.5 - 0.52,
       ) * (0.4 + 0.6 * (1 - v)) * 1.8;
       // Biofilm settles in the recesses.
       const film = Math.max(0, -h) * 2.2 * opts.biofilm +
-        Math.max(0, noise.fbm2(u * 7.5 - 3, v * 7.5 + 9, 3)) * 0.35 * opts.biofilm;
+        Math.max(0, noise.fbm2(u * 7.5 - 3, v * 7.5 + 9, 2)) * 0.35 * opts.biofilm;
       const grime = THREE.MathUtils.clamp(streak * opts.wear + film, 0, 1);
 
       // Paint chipping exposes bare metal on the proud edges.
@@ -413,7 +413,9 @@ export class BuildMaterials {
 
   constructor(ctx: GameContext) {
     const tier = ctx.settings.graphics.tier;
-    const size = tier === 'low' ? 256 : tier === 'medium' ? 384 : 512;
+    // Map budget: generation is CPU-bound noise, so keep it modest and lean on
+    // the world-space macro/micro layers for apparent resolution.
+    const size = tier === 'low' ? 192 : tier === 'medium' ? 256 : tier === 'high' ? 384 : 512;
     const noise = new Noise(0x5eab07);
     const aniso = Math.min(
       ctx.settings.graphics.anisotropy,

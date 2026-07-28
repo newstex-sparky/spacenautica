@@ -48,7 +48,23 @@ vec2 bk_grad(vec2 cell, vec2 per){
   return vec2(cos(a), sin(a));
 }
 
+/**
+ * Snaps a requested period to the nearest integer and returns the matching
+ * rescale factor for the sample position. Call sites are written as
+ * bk_perlin(uv * C, C) with C a *cell count*; when C is fractional (e.g. a
+ * derived C * 0.7) the lattice would no longer wrap at uv + 1 and the map would
+ * show a seam. Rounding the period and rescaling p by the same ratio keeps the
+ * relationship p == uv * period exact, so every call site tiles whatever it is
+ * handed. The feature scale shifts by at most half a cell, which is invisible.
+ */
+vec2 bk_snapPeriod(inout vec2 p, vec2 per){
+  vec2 q = max(floor(per + 0.5), vec2(1.0));
+  p *= q / max(per, vec2(1e-4));
+  return q;
+}
+
 float bk_perlin(vec2 p, vec2 per){
+  per = bk_snapPeriod(p, per);
   vec2 i = floor(p);
   vec2 f = p - i;
   vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
@@ -111,6 +127,7 @@ vec2 bk_warp(vec2 p, vec2 per, float amt){
  *   .z = cell hash id  .w = second-nearest cell hash id
  * ---------------------------------------------------------------- */
 vec4 bk_voronoi(vec2 p, vec2 per, float jitter){
+  per = bk_snapPeriod(p, per);
   vec2 ip = floor(p);
   vec2 fp = p - ip;
   float f1 = 8.0, f2 = 8.0, id1 = 0.0, id2 = 0.0;
@@ -151,6 +168,7 @@ float bk_worleyFbm(vec2 p, vec2 per, int oct, float jitter){
 
 /** Sparse bright glints: returns 0..1, 'density' in 0..1 controls coverage. */
 float bk_sparkle(vec2 p, vec2 per, float density){
+  per = bk_snapPeriod(p, per);
   vec2 ip = floor(p);
   vec3 h = bk_h23(mod(ip, per) + 3.7);
   vec2 c = h.xy;
@@ -187,10 +205,15 @@ float bk_ripple(vec2 uv, vec2 k, float wobble, vec2 per, float sharp){
   return pow(0.5 + 0.5 * sin(phase), sharp);
 }
 
-/** Square-ish periodic pulse train, for panel lines / laminations / veins. */
+/**
+ * Periodic pulse train, for panel lines / laminations / hazard stripes / seams.
+ * 'duty' is the pulse width as a fraction of the period; the pulse is centred on
+ * the period boundary so it never notches at t = 0.
+ */
 float bk_stripe(vec2 uv, vec2 k, float duty, float soft, float wobble, vec2 per){
   float t = fract(dot(uv, k) + bk_fbm(uv * per, per, 3, 0.5) * wobble);
-  return smoothstep(duty - soft, duty + soft, t) * (1.0 - smoothstep(1.0 - soft, 1.0, t));
+  float d = min(t, 1.0 - t);
+  return 1.0 - smoothstep(duty * 0.5, duty * 0.5 + soft, d);
 }
 
 /** Linear-space luminance. */

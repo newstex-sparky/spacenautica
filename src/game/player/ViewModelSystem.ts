@@ -293,7 +293,8 @@ export class ViewModelSystem implements GameSystem {
       _eye.copy(ctx.camera.position);
       ctx.camera.getWorldDirection(_dir);
       // Bubbles leave the regulator just below and in front of the mask.
-      _eye.addScaledVector(_dir, 0.16).y -= 0.12;
+      _eye.addScaledVector(_dir, 0.16);
+      _eye.y -= 0.12;
       this.fx.update(dt, ctx, _eye, p.breathPhase, p.submerged);
       if (p.surfaceCrossings !== this.lastCross) {
         this.lastCross = p.surfaceCrossings;
@@ -404,7 +405,7 @@ export class ViewModelSystem implements GameSystem {
       this.applyIdleHandPose();
       if (this.lampOn) this.flashlight?.attach(this.group);
     }
-    void ctx;
+    ctx.bus.emit('debug:log', { text: `viewmodel: ${id}` });
   }
 
   private applyIdleHandPose(): void {

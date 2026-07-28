@@ -244,7 +244,8 @@ export class GradePass extends PostPass {
     (u.uResolution.value as THREE.Vector2).set(frame.width, frame.height);
 
     // Blue noise is a small tiling texture; scale so one texel maps to one pixel.
-    const noiseSize = frame.noise.image?.width ?? 128;
+    const noiseImage = frame.noise.image as { width?: number } | undefined;
+    const noiseSize = noiseImage?.width ?? 128;
     (u.uNoiseScale.value as THREE.Vector2).set(
       frame.width / noiseSize,
       frame.height / noiseSize,

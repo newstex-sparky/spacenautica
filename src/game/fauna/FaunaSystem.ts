@@ -235,6 +235,14 @@ export class FaunaSystem implements GameSystem {
 
     const textures = ctx.tryGet<TexturesLike>('assets.textures');
     const caustics = this.water?.causticsTexture ?? null;
+    // uwCausticsParams.y is the caustics tile size in metres. Reading it keeps
+    // the dapple on a fish the same scale as the dapple on the sand under it.
+    const causticParams = this.sharedUniforms.uwCausticsParams?.value as
+      | { y?: number }
+      | undefined;
+    const causticTile = typeof causticParams?.y === 'number' && causticParams.y > 1
+      ? causticParams.y
+      : 24;
 
     /* --- agent pool ------------------------------------------------ */
     // Sized for the ultra budget so a runtime quality change never reallocates.
@@ -259,6 +267,7 @@ export class FaunaSystem implements GameSystem {
         maps,
         shared: this.sharedUniforms,
         caustics,
+        causticTile,
         halfWidth: base.halfWidth,
         shadows: def.shadow && ctx.settings.at('high'),
       });
@@ -926,6 +935,10 @@ export class FaunaSystem implements GameSystem {
       roughness: 0.58,
       fog: false,
     });
+    mat.name = 'fauna.salvage';
+    // We apply applyUnderwater ourselves — opt out of the water auto-patcher.
+    mat.userData.underwater = true;
+    mat.userData.waterAware = true;
     const shared = this.sharedUniforms;
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, shared);

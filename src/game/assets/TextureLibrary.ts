@@ -32,7 +32,7 @@ export interface PbrMaps {
 
 interface CacheEntry {
   maps: PbrMaps;
-  target: THREE.WebGLRenderTarget<THREE.Texture[]>;
+  target: THREE.WebGLRenderTarget;
 }
 
 const TIER_SCALE: Record<QualityTier, number> = {
@@ -346,7 +346,9 @@ function detectSoftwareRenderer(renderer: THREE.WebGLRenderer): boolean {
     const dbg = gl.getExtension('WEBGL_debug_renderer_info');
     if (!dbg) return false;
     const s = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)).toLowerCase();
-    return /swiftshader|software|llvmpipe|basic render|mesa offscreen|angle \(google/.test(s);
+    // Deliberately narrow: matching something like "ANGLE (Google, ...)" would
+    // false-positive on real mobile GPUs and halve their texture budget.
+    return /swiftshader|softwarerasterizer|llvmpipe|basic render|mesa offscreen/.test(s);
   } catch {
     return false;
   }

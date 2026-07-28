@@ -36,7 +36,8 @@ vec3 waterSkyColor(vec3 dir) {
   c += uSunColorSky * uSunDisc * (disc * 26.0 + glow) * storm;
 
   // Faint cloud banding so a mirror-flat sea still has something to reflect.
-  float cl = fbm(d.xz / max(abs(up) + 0.06, 0.06) * 0.55 + vec2(uwTime * 0.004, 0.0), 4);
+  vec2 cuv = d.xz / max(abs(up) + 0.06, 0.06) * 0.55 + vec2(uwTime * 0.004, 0.0);
+  float cl = wnFbm(cuv, 4);
   float cover = smoothstep(0.06, 0.62, cl * (0.45 + 0.75 * uStorm));
   vec3 cloudLit = mix(vec3(0.30, 0.34, 0.40), uSunColorSky * 0.9, 0.45) * (0.55 + 0.9 * uSunDisc * 0.25);
   c = mix(c, cloudLit, cover * 0.55 * smoothstep(0.0, 0.28, up));

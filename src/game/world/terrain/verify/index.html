@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>terrain verify</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      #wrap { position: fixed; inset: 0; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #loading { position: fixed; inset: 0; display: grid; place-items: center; color: #8ecfe0;
+        font: 13px/1.4 monospace; background: #04080b; transition: opacity .4s; }
+      #loading.done { opacity: 0; pointer-events: none; }
+      #hud { position: fixed; left: 8px; top: 8px; color: #a8e0ee; font: 12px/1.5 monospace;
+        white-space: pre; text-shadow: 0 1px 2px #000; }
+    </style>
+  </head>
+  <body>
+    <div id="wrap"><canvas id="game-canvas"></canvas></div>
+    <div id="hud"></div>
+    <div id="loading"><span id="loading-label">boot</span><span id="loading-bar"></span></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

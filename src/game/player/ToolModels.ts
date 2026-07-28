@@ -502,7 +502,6 @@ function buildFlashlight(pool: VmAssetPool): FlashlightTool {
     twoHanded: false,
     right: pistolGrip(handle, 1),
     left: null,
-    left: null,
     holdPos: new THREE.Vector3(0.16, -0.18, -0.3),
     holdRot: new THREE.Euler(0.02, -0.12, 0.04),
     gripAmount: 0.86,

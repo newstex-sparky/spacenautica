@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { NOISE_GLSL } from '../../core/Noise';
+import { WATER_NOISE_GLSL } from './WaterNoise';
 
 /**
  * Procedural caustics by photon gathering.
@@ -44,7 +44,7 @@ uniform vec2  uEta;             // (base eta, chromatic spread)
 
 varying vec2 vUv;
 
-${NOISE_GLSL}
+${WATER_NOISE_GLSL}
 
 /** Analytic surface height + normal of the periodic ripple bank. */
 void surf(vec2 p, out float h, out vec3 n) {
@@ -110,7 +110,7 @@ void main() {
 
   // Micro layer: cell-edge ridges from a seamless voronoi (integer scale keeps
   // the tile joint invisible) add the fine crawling structure between filaments.
-  vec3 vo = voronoi(vUv * 12.0 + vec2(uTime * 0.05, uTime * -0.037));
+  vec3 vo = wnVoronoiTiled(vUv * 12.0 + vec2(uTime * 0.05, uTime * -0.037), 12.0);
   float ridge = smoothstep(0.0, 0.32, vo.y - vo.x);
   c *= 0.82 + 0.42 * ridge;
 

@@ -151,6 +151,8 @@ export class BuildSystem implements GameSystem {
   private simAccum = 0;
   private state: GameState | null = null;
   private bus: GameContext['bus'] | null = null;
+  /** Retained so scripted spawns can build meshes outside the update loop. */
+  private lastCtx: GameContext | null = null;
   /** Palette of piece ids currently unlocked, refreshed lazily. */
   private palette: string[] = [];
   private paletteIndex = 0;
@@ -170,6 +172,7 @@ export class BuildSystem implements GameSystem {
     ctx.scene.add(this.ghostGroup);
     this.mats = new BuildMaterials(ctx);
     this.state = ctx.tryGet<GameState>('game.state') ?? null;
+    this.lastCtx = ctx;
 
     ctx.bus.on('ui:screen', (e) => {
       // Any modal screen closes build mode so clicks are unambiguous.
@@ -301,6 +304,27 @@ export class BuildSystem implements GameSystem {
     return p ? this.bases.find((b) => b.id === p.baseId) : undefined;
   }
 
+  /**
+   * Places a piece directly, bypassing ghosting, cost and validity. Used for
+   * scripted prefabs (the wrecked lifepod's dock), save loading and tests.
+   * Returns the new piece's uid.
+   */
+  spawnAt(defId: string, position: THREE.Vector3, quaternion?: THREE.Quaternion, seed?: number): number {
+    const def = BUILD_PIECES.get(defId);
+    const ctx = this.lastCtx;
+    if (!def || !ctx) return 0;
+    const piece = this.spawn(
+      def,
+      position,
+      quaternion ?? _q0.identity(),
+      seed ?? ((Math.random() * 1e6) | 0),
+      ctx,
+    );
+    this.linkConnectors(piece);
+    this.rebuildBases(ctx);
+    return piece.uid;
+  }
+
   /** Repair tool entry point: heals a piece and re-seals a breach. */
   repair(uid: number, amount: number): boolean {
     const p = this.pieces.find((x) => x.uid === uid);
@@ -332,9 +356,18 @@ export class BuildSystem implements GameSystem {
    * ---------------------------------------------------------------- */
 
   update(dt: number, ctx: GameContext): void {
+    this.lastCtx = ctx;
     this.mats?.update(ctx);
 
-    if (ctx.input.pressed('build')) this.setBuildMode(!this.buildMode);
+    if (ctx.input.pressed('build')) {
+      const hasTool =
+        ctx.settings.gameplay.mode === 'creative' ||
+        (this.state?.inventory.countOf('habitat_builder') ?? 0) > 0;
+      if (hasTool) this.setBuildMode(!this.buildMode);
+      else if (!this.buildMode) {
+        this.bus?.emit('ui:notify', { text: 'You need a habitat builder.', kind: 'warn', ttl: 3 });
+      }
+    }
 
     if (this.buildMode) {
       if (ctx.input.wheel !== 0) this.cyclePiece(ctx.input.wheel > 0 ? 1 : -1);
@@ -436,10 +469,19 @@ export class BuildSystem implements GameSystem {
     const local = this.dockingConnector(def, snap.kind);
 
     if (snap.kind === 'ground' || snap.kind === 'floor') {
-      // Sits on top of a surface: keep it upright, user controls yaw.
+      // Sits on a surface: stays upright, user controls yaw. Pieces that declare
+      // their own ground/floor socket align by it (so foundations tile flush);
+      // everything else rests on the bottom of its own bounding box.
       this.ghostQuat.setFromAxisAngle(UP, this.ghostYaw);
-      this.ghostPos.copy(snap.pos);
-      this.ghostPos.y += -bounds.min.y;
+      // 'ground' means "the ground plane continues here", so the piece aligns by
+      // its own ground socket and tiles flush. 'floor' means "a deck to stand
+      // on", so the piece simply rests its bounding box on it.
+      const own = snap.kind === 'ground'
+        ? def.connectors.find((c) => c.kind === 'ground' || c.kind === 'floor')
+        : undefined;
+      _v2.set(own ? own.pos[0] : 0, own ? own.pos[1] : bounds.min.y, own ? own.pos[2] : 0)
+        .applyQuaternion(this.ghostQuat);
+      this.ghostPos.copy(snap.pos).sub(_v2);
       return;
     }
 
@@ -462,8 +504,10 @@ export class BuildSystem implements GameSystem {
     const corridor = def.connectors.find((c) => c.kind === 'corridor' || c.kind === 'hatch');
     if (corridor) return corridor;
     if (def.connectors.length) return def.connectors[0];
-    // Wall-mounted pieces (windows, lockers): dock their -Z face.
-    return { pos: [0, 0, -def.extents[2]], dir: [0, 0, -1] };
+    // Wall-mounted pieces (windows, lockers, bulkheads) have no sockets: their
+    // back is -Z and their face is +Z, so docking the *face* against the wall's
+    // inward direction leaves the back flush with the hull.
+    return { pos: [0, 0, 0], dir: [0, 0, 1] };
   }
 
   private findSnap(def: BuildPieceDef, aim: THREE.Vector3): WorldConnector | null {

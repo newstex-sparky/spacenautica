@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { NOISE_GLSL } from '../../core/Noise';
+import { WATER_NOISE_GLSL } from './WaterNoise';
 import { GERSTNER_GLSL, RIPPLE_GLSL } from './WaterSpectrum';
 import { ANALYTIC_SKY_GLSL } from './AnalyticSky';
 import {
@@ -105,7 +105,7 @@ varying float vDist;
 
 ${UNDERWATER_UNIFORMS_GLSL}
 ${UNDERWATER_CAUSTICS_UNIFORMS_GLSL}
-${NOISE_GLSL}
+${WATER_NOISE_GLSL}
 ${UNDERWATER_FUNCS_GLSL}
 ${UNDERWATER_CAUSTICS_GLSL}
 ${RIPPLE_GLSL}
@@ -152,11 +152,12 @@ void main() {
 
   // --- foam from the horizontal Jacobian: crests that pinch throw white water.
   float foam = 1.0 - smoothstep(uFoam.x, uFoam.y, vJac);
-  vec3 vo = voronoi(vWorld.xz * 1.9 + vec2(uTime * 0.21, uTime * -0.13));
+  vec3 vo = wnVoronoi(vWorld.xz * 1.9 + vec2(uTime * 0.21, uTime * -0.13));
   float bubbles = smoothstep(0.62, 0.04, vo.x);
   // Streaks stretched along the wind: foam never appears as isotropic blobs.
-  float streak = fbm(vec2(dot(vWorld.xz, uWindDir) * 0.35,
-                          dot(vWorld.xz, vec2(-uWindDir.y, uWindDir.x)) * 1.9) + uTime * 0.06, 3);
+  vec2 fuv = vec2(dot(vWorld.xz, uWindDir) * 0.35,
+                  dot(vWorld.xz, vec2(-uWindDir.y, uWindDir.x)) * 1.9) + uTime * 0.06;
+  float streak = wnFbm(fuv, 3);
   foam *= (0.30 + 0.95 * bubbles) * (0.55 + 0.75 * (streak * 0.5 + 0.5));
   foam = clamp(foam * uFoamAmount, 0.0, 1.0) * (1.0 - smoothstep(300.0, 1100.0, dist));
 

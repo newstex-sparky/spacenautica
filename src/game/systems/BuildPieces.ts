@@ -83,10 +83,17 @@ const PIECES: BuildPieceDef[] = [
     cost: [g('titanium', 2)], extents: [3, 0.35, 3],
     integrity: 3, ground: true, maxSlope: 22,
     connectors: [
-      { kind: 'ground', pos: [0, 0.35, 0], dir: [0, 1, 0] },
+      // Own deck surface — corridors, rooms and machines sit here.
       { kind: 'floor', pos: [0, 0.35, 0], dir: [0, 1, 0] },
+      { kind: 'floor', pos: [1.6, 0.35, 1.6], dir: [0, 1, 0] },
+      { kind: 'floor', pos: [-1.6, 0.35, -1.6], dir: [0, 1, 0] },
+      // Tiling sockets: a neighbouring foundation docks its own centre here.
+      { kind: 'ground', pos: [6, 0.35, 0], dir: [1, 0, 0] },
+      { kind: 'ground', pos: [-6, 0.35, 0], dir: [-1, 0, 0] },
+      { kind: 'ground', pos: [0, 0.35, 6], dir: [0, 0, 1] },
+      { kind: 'ground', pos: [0, 0.35, -6], dir: [0, 0, -1] },
     ],
-    snapTo: ['ground', 'floor'],
+    snapTo: ['ground'],
     buildTime: 3,
     description:
       'A six-metre pressure-spreading slab with four screw piles. Adds three points ' +
@@ -113,6 +120,8 @@ const PIECES: BuildPieceDef[] = [
       { kind: 'wall', pos: [CORRIDOR_RADIUS, 0, 0], dir: [1, 0, 0] },
       { kind: 'wall', pos: [-CORRIDOR_RADIUS, 0, 0], dir: [-1, 0, 0] },
       { kind: 'hatch', pos: [0, CORRIDOR_RADIUS, 0], dir: [0, 1, 0] },
+      { kind: 'floor', pos: [0, -CORRIDOR_RADIUS + 0.47, 1.4], dir: [0, 1, 0] },
+      { kind: 'floor', pos: [0, -CORRIDOR_RADIUS + 0.47, -1.4], dir: [0, 1, 0] },
     ],
     snapTo: ['corridor', 'room', 'floor'], buildTime: 4,
     description:
@@ -173,7 +182,12 @@ const PIECES: BuildPieceDef[] = [
       { kind: 'wall', pos: [0, 0.2, ROOM_RADIUS - 0.1], dir: [0, 0, 1] },
       { kind: 'wall', pos: [ROOM_RADIUS - 0.1, 0.2, 0], dir: [1, 0, 0] },
       { kind: 'wall', pos: [-ROOM_RADIUS + 0.1, 0.2, 0], dir: [-1, 0, 0] },
-      { kind: 'floor', pos: [0, -ROOM_HEIGHT / 2 + 0.1, 0], dir: [0, 1, 0] },
+      { kind: 'wall', pos: [0, 0.2, -ROOM_RADIUS + 0.1], dir: [0, 0, -1] },
+      { kind: 'floor', pos: [0, -ROOM_HEIGHT / 2 + 0.24, 0], dir: [0, 1, 0] },
+      { kind: 'floor', pos: [1.5, -ROOM_HEIGHT / 2 + 0.24, 0], dir: [0, 1, 0] },
+      { kind: 'floor', pos: [-1.5, -ROOM_HEIGHT / 2 + 0.24, 0], dir: [0, 1, 0] },
+      { kind: 'floor', pos: [0, -ROOM_HEIGHT / 2 + 0.24, 1.5], dir: [0, 1, 0] },
+      { kind: 'floor', pos: [0, -ROOM_HEIGHT / 2 + 0.24, -1.5], dir: [0, 1, 0] },
     ],
     snapTo: ['corridor', 'room', 'floor'], buildTime: 8,
     description:
@@ -225,7 +239,7 @@ const PIECES: BuildPieceDef[] = [
     integrity: 0, power: 75, capacity: 75, ground: true, maxSlope: 30,
     requiresTech: 'tech.solar',
     connectors: [{ kind: 'ground', pos: [0, 0, 0], dir: [0, 1, 0] }],
-    snapTo: ['ground', 'floor'], buildTime: 5,
+    snapTo: ['floor'], buildTime: 5,
     description:
       'Seventy-five watts at the surface, four at eighty metres. Sunlight is a ' +
       'shallow-water luxury and this panel will remind you daily.',
@@ -236,7 +250,7 @@ const PIECES: BuildPieceDef[] = [
     extents: [1.8, 3.2, 1.8], integrity: 0, power: 150, capacity: 250,
     ground: true, maxSlope: 26, requiresTech: 'tech.thermal_plant',
     connectors: [{ kind: 'ground', pos: [0, 0, 0], dir: [0, 1, 0] }],
-    snapTo: ['ground'], buildTime: 9,
+    snapTo: ['floor'], buildTime: 9,
     description:
       'A Stirling stack that drinks the temperature gradient. Output scales with how ' +
       'unpleasant the surroundings are, which on this planet is a reliable business model.',

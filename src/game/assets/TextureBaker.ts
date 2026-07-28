@@ -33,7 +33,7 @@ const FAMILY_GLSL: Record<MaterialFamily, string> = {
 };
 
 export interface BakeResult {
-  target: THREE.WebGLRenderTarget<THREE.Texture[]>;
+  target: THREE.WebGLRenderTarget;
   albedo: THREE.Texture;
   normal: THREE.Texture;
   /** Packed ORM: r = AO, g = roughness, b = metalness, a = family aux. */
@@ -114,7 +114,7 @@ export class TextureBaker {
     const displace = def.displace === true;
     const count = displace ? 4 : 3;
 
-    const target = new THREE.WebGLRenderTarget<THREE.Texture[]>(size, size, {
+    const target = new THREE.WebGLRenderTarget(size, size, {
       count,
       format: THREE.RGBAFormat,
       type: THREE.UnsignedByteType,

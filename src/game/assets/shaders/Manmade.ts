@@ -82,13 +82,18 @@ float mmRustStreak(vec2 uv){
   return clamp(acc, 0.0, 1.0);
 }
 
-/** Layered fine scratches at three integer-sheared angles (still tileable). */
+/**
+ * Layered fine scratches. Three wave trains with coprime integer wave-number
+ * pairs run obliquely (and therefore tile); a very high crest exponent turns
+ * each train into thin lines, and a coarse noise mask breaks the lines into
+ * finite-length scratches instead of infinite stripes.
+ */
 float mmScratches(vec2 uv, vec2 uC, float density){
   float s = 0.0;
-  s = max(s, bk_ripple(bk_shear(uv, 3.0, 0.0), vec2(0.0, uC.y * 1.5), 2.2, uC, 34.0));
-  s = max(s, bk_ripple(bk_shear(uv, -2.0, 0.0), vec2(0.0, uC.y * 2.3), 2.8, uC, 46.0) * 0.8);
-  s = max(s, bk_ripple(bk_shear(uv, 0.0, 5.0), vec2(uC.x * 1.1, 0.0), 3.1, uC, 40.0) * 0.6);
-  // break the lines into finite-length scratches
+  s = max(s, bk_ripple(uv, vec2(37.0, 13.0), 2.2, uC, 34.0));
+  s = max(s, bk_ripple(uv, vec2(-23.0, 41.0), 2.8, uC, 46.0) * 0.8);
+  s = max(s, bk_ripple(uv, vec2(53.0, -19.0), 3.1, uC, 40.0) * 0.6);
+  s = max(s, bk_ripple(uv, vec2(11.0, 67.0), 2.4, uC, 52.0) * 0.5);
   float breakUp = smoothstep(0.30, 0.75, 0.5 + 0.5 * bk_fbm(uv * uC * 0.4, uC * 0.4, 3, 0.6));
   return s * breakUp * density;
 }
@@ -316,7 +321,7 @@ void matSurface(MatCtx c, inout MatOut o){
     float scr = mmScratches(uv, uC, uP[5].w);
     vec4 sv = bk_voronoi(uv * dC * 1.5, dC * 1.5, 1.0);
     float salt = step(0.80, sv.z) * (1.0 - smoothstep(0.10, 0.24, sv.x));
-    float swirl = bk_ripple(bk_shear(uv, 2.0, 0.0), vec2(0.0, uC.y * 0.5), 3.0, uC, 6.0);
+    float swirl = bk_ripple(uv, vec2(23.0, 11.0), 3.0, uC, 6.0);
     albedo = mix(uColA, uColB, salt);
     metal = 0.0;
     rough = uP[6].x + swirl * 0.05 + scr * 0.35 + salt * 0.5;

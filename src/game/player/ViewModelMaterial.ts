@@ -266,15 +266,20 @@ export interface VmMaterial extends THREE.MeshStandardMaterial {
   vmUniforms: Record<string, THREE.IUniform>;
 }
 
-const WHITE_1PX = (() => {
-  const t = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
-  t.needsUpdate = true;
-  return t;
-})();
+/** 1x1 white stand-in used until the water system publishes its caustics. */
+let whiteFallback: THREE.DataTexture | null = null;
+function white1px(): THREE.DataTexture {
+  if (!whiteFallback) {
+    whiteFallback = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
+    whiteFallback.needsUpdate = true;
+  }
+  return whiteFallback;
+}
 
-/** Disposes the fallback caustics texture. Called by the view-model system. */
+/** Disposes the shared fallback texture. Called by the view-model system. */
 export function disposeViewModelShared(): void {
-  WHITE_1PX.dispose();
+  whiteFallback?.dispose();
+  whiteFallback = null;
 }
 
 export function createViewModelMaterial(style: VmStyle, opts: VmMaterialOptions = {}): VmMaterial {
@@ -305,7 +310,7 @@ export function createViewModelMaterial(style: VmStyle, opts: VmMaterialOptions 
     uVmCaustics: { value: opts.caustics ?? 0.55 },
     uVmFogDist: { value: 2.6 },
     uVmCausticsTexMix: { value: 0 },
-    uVmCausticsTex: { value: WHITE_1PX },
+    uVmCausticsTex: { value: white1px() },
     uVmWetness: { value: 1 },
   };
   mat.vmUniforms = uniforms;

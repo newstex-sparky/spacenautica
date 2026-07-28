@@ -410,8 +410,15 @@ const ICO_FACES: number[][] = [
   [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
 ];
 
-/** Unit-sphere triangle soup at the requested subdivision level. */
+const ICO_CACHE = new Map<number, THREE.Vector3[][]>();
+
+/**
+ * Unit-sphere triangle soup at the requested subdivision level. Cached and
+ * read-only: `blob` never mutates the returned directions.
+ */
 export function icoTriangles(subdiv: number): THREE.Vector3[][] {
+  const cached = ICO_CACHE.get(subdiv);
+  if (cached) return cached;
   let tris: THREE.Vector3[][] = ICO_FACES.map((f) =>
     f.map((i) => new THREE.Vector3(ICO_VERTS[i][0], ICO_VERTS[i][1], ICO_VERTS[i][2]).normalize()),
   );
@@ -425,6 +432,7 @@ export function icoTriangles(subdiv: number): THREE.Vector3[][] {
     }
     tris = next;
   }
+  ICO_CACHE.set(subdiv, tris);
   return tris;
 }
 
@@ -452,14 +460,23 @@ export interface BlobOpts {
  * stays valid — a per-vertex choice would produce garbage tangents on the
  * triangles that straddle a plane boundary.
  */
+const UNIT_SCALE = new THREE.Vector3(1, 1, 1);
+const B_PTS = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+const B_NRM = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+const B_FN = new THREE.Vector3();
+const B_E1 = new THREE.Vector3();
+const B_E2 = new THREE.Vector3();
+const B_OUT = new THREE.Vector3();
+const B_IDS = [0, 0, 0];
+
 export function blob(mb: FloraMeshBuilder, o: BlobOpts): void {
   const tris = icoTriangles(o.subdiv);
-  const scale = o.scale ?? V_E.set(1, 1, 1);
-  const pts: THREE.Vector3[] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
-  const nrm: THREE.Vector3[] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
-  const fn = new THREE.Vector3();
-  const e1 = new THREE.Vector3();
-  const e2 = new THREE.Vector3();
+  const scale = o.scale ?? UNIT_SCALE;
+  const pts = B_PTS;
+  const nrm = B_NRM;
+  const fn = B_FN;
+  const e1 = B_E1;
+  const e2 = B_E2;
 
   for (const tri of tris) {
     for (let k = 0; k < 3; k++) {
@@ -478,7 +495,6 @@ export function blob(mb: FloraMeshBuilder, o: BlobOpts): void {
     const ax = Math.abs(fn.x);
     const ay = Math.abs(fn.y);
     const az = Math.abs(fn.z);
-    const ids: number[] = [];
     for (let k = 0; k < 3; k++) {
       const p = pts[k];
       let u: number;
@@ -494,19 +510,18 @@ export function blob(mb: FloraMeshBuilder, o: BlobOpts): void {
         v = p.y;
       }
       const d = tri[k];
-      ids.push(
-        mb.vert(p, nrm[k].clone().lerp(fn, 0.45), u * o.uvScale, v * o.uvScale, {
-          t: o.tOf(p),
-          blade: o.blade ?? 0,
-          phase: o.phase ?? 0,
-          ao: o.ao ? o.ao(d, p) : 1,
-          emit: o.emit ? o.emit(d, p) : 0,
-          thick: o.thick ?? 0.08,
-          twist: o.twistWeight ?? 1,
-        }),
-      );
+      B_OUT.copy(nrm[k]).lerp(fn, 0.45);
+      B_IDS[k] = mb.vert(p, B_OUT, u * o.uvScale, v * o.uvScale, {
+        t: o.tOf(p),
+        blade: o.blade ?? 0,
+        phase: o.phase ?? 0,
+        ao: o.ao ? o.ao(d, p) : 1,
+        emit: o.emit ? o.emit(d, p) : 0,
+        thick: o.thick ?? 0.08,
+        twist: o.twistWeight ?? 1,
+      });
     }
-    mb.tri(ids[0], ids[1], ids[2]);
+    mb.tri(B_IDS[0], B_IDS[1], B_IDS[2]);
   }
 }
 

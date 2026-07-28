@@ -51,11 +51,11 @@ function profileFor(tier: QualityTier): TierProfile {
     case 'low':
       return { skyViewW: 96, skyViewH: 48, skyViewSteps: 14, cloudSteps: 0, cloudLightSteps: 0, envCube: 32, envInterval: 1.6, rainCount: 0, starBrightness: 0.85 };
     case 'medium':
-      return { skyViewW: 128, skyViewH: 64, skyViewSteps: 20, cloudSteps: 14, cloudLightSteps: 3, envCube: 48, envInterval: 0.9, rainCount: 2600, starBrightness: 0.95 };
+      return { skyViewW: 128, skyViewH: 64, skyViewSteps: 20, cloudSteps: 12, cloudLightSteps: 3, envCube: 48, envInterval: 0.9, rainCount: 2600, starBrightness: 0.95 };
     case 'high':
-      return { skyViewW: 176, skyViewH: 88, skyViewSteps: 28, cloudSteps: 22, cloudLightSteps: 5, envCube: 64, envInterval: 0.4, rainCount: 5200, starBrightness: 1.0 };
+      return { skyViewW: 176, skyViewH: 88, skyViewSteps: 28, cloudSteps: 20, cloudLightSteps: 4, envCube: 64, envInterval: 0.4, rainCount: 5200, starBrightness: 1.0 };
     default:
-      return { skyViewW: 224, skyViewH: 112, skyViewSteps: 40, cloudSteps: 32, cloudLightSteps: 6, envCube: 64, envInterval: 0.28, rainCount: 9000, starBrightness: 1.05 };
+      return { skyViewW: 224, skyViewH: 112, skyViewSteps: 36, cloudSteps: 28, cloudLightSteps: 5, envCube: 64, envInterval: 0.28, rainCount: 9000, starBrightness: 1.05 };
   }
 }
 
@@ -191,7 +191,9 @@ export class SkySystem implements GameSystem {
     const texLib = ctx.tryGet<GameSystem & { blueNoise?: THREE.Texture }>('assets.textures');
     const bn = texLib?.blueNoise ?? makeFallbackNoise();
     u.uBlueNoise.value = bn;
-    (u.uBlueNoiseSize.value as THREE.Vector2).set(bn.image?.width ?? 128, bn.image?.height ?? 128);
+    // `Texture.image` is typed as `{}`; every source we use here is sized.
+    const bnImg = bn.image as { width?: number; height?: number } | undefined;
+    (u.uBlueNoiseSize.value as THREE.Vector2).set(bnImg?.width ?? 128, bnImg?.height ?? 128);
 
     ctx.scene.add(this.dome.mesh);
 
@@ -514,7 +516,11 @@ export class SkySystem implements GameSystem {
     const bounce = 1 + 0.45 * cov * Math.max(0, this.sunDirection.y) * this.sunOcclusion;
     sAmbient.multiplyScalar(bounce);
     const grey = 0.2126 * sAmbient.r + 0.7152 * sAmbient.g + 0.0722 * sAmbient.b;
-    sAmbient.lerp(sColor2.setRGB(grey * 1.02, grey * 1.04, grey * 1.1), storm * 0.55);
+    // Single scattering over-saturates the blue; real multiple scattering whitens
+    // skylight considerably, so pull a fixed share toward neutral, then more
+    // again under a storm deck.
+    sColor2.setRGB(grey, grey, grey);
+    sAmbient.lerp(sColor2, 0.34 + 0.34 * storm);
 
     // Moonlight + airglow floor so the night is blue, not black.
     const moonUp = Math.max(0, this.moonDirection.y);

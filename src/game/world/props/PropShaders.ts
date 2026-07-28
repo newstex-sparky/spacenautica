@@ -19,8 +19,24 @@
  * final colour is pushed through `applyUnderwater()` from
  * `world/water/UnderwaterFog.ts` exactly once, at `opaque_fragment`.
  */
-import { COMMON_GLSL, NOISE_GLSL } from '../../core/Noise';
+import { NOISE_GLSL } from '../../core/Noise';
 import { UNDERWATER_GLSL } from '../water/UnderwaterFog';
+
+/**
+ * Two compatibility shims for the shared chunks, both verified against a real
+ * GLSL compile (see FINAL REPORT → INTEGRATION REQUESTS):
+ *
+ *  1. `core/Noise.ts`'s `NOISE_GLSL` calls `sn_permute(vec3)` inside
+ *     `snoise(vec2)` but only declares the `vec4` overload, so *any* shader
+ *     that includes the chunk fails to compile. Declaring the missing overload
+ *     ahead of the chunk fixes it without touching `core/`.
+ *  2. `COMMON_GLSL` declares `float luminance(vec3)`, which collides with the
+ *     `float luminance(const in vec3)` that three's own fragment prefix emits
+ *     for tone mapping. We simply do not include `COMMON_GLSL`.
+ */
+export const NOISE_COMPAT_GLSL = /* glsl */ `
+vec3 sn_permute(vec3 x){ return mod(((x * 34.0) + 1.0) * x, 289.0); }
+`;
 
 /** Material families. Each compiles to its own program via a `#define`. */
 export type PropMatKind = 'rock' | 'metal' | 'alien' | 'crystal' | 'organic';
@@ -504,7 +520,7 @@ export const PROP_UNDERWATER_FRAG = /* glsl */ `
 
 /** Fragment declarations for a given family. */
 export function propFragPars(kind: PropMatKind): string {
-  return `${NOISE_GLSL}\n${COMMON_GLSL}\n${UNDERWATER_GLSL}\n${PROP_LIB}\n// kind: ${kind}\n`;
+  return `${NOISE_COMPAT_GLSL}\n${NOISE_GLSL}\n${UNDERWATER_GLSL}\n${PROP_LIB}\n// kind: ${kind}\n`;
 }
 
 export function propSurfaceBlock(kind: PropMatKind): string {

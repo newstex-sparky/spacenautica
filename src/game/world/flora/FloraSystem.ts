@@ -275,6 +275,7 @@ export class FloraSystem implements GameSystem {
             alphaTest: card ? 0.33 : sp.alphaTest,
             card,
             depthWrite: true,
+            name: `flora.${sp.id}.lod${lod}`,
           },
           this.globals,
           this.waterUniforms,

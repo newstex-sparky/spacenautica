@@ -17,7 +17,7 @@
 import * as THREE from 'three';
 import { mulberry32 } from '../../core/Noise';
 import type { GameContext, QualityTier } from '../../core/Types';
-import { PLUME_FRAG, PLUME_VERT } from './PropShaders';
+import { NOISE_COMPAT_GLSL, PLUME_FRAG, PLUME_VERT } from './PropShaders';
 import { NOISE_GLSL } from '../../core/Noise';
 import { makeVentChimney } from './RockGen';
 import type { PropMaterialLibrary } from './PropMaterials';
@@ -51,6 +51,7 @@ const SHIMMER_VERT_PARS = /* glsl */ `
 varying vec3 vShimObj;
 `;
 const SHIMMER_FRAG_PARS = /* glsl */ `
+${NOISE_COMPAT_GLSL}
 ${NOISE_GLSL}
 varying vec3 vShimObj;
 uniform float uShimTime;

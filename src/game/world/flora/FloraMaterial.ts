@@ -32,7 +32,12 @@
  *   - `applyUnderwater()` last, always.
  */
 import * as THREE from 'three';
-import { UNDERWATER_FUNCS_GLSL, UNDERWATER_UNIFORMS_GLSL } from '../water/UnderwaterFog';
+import {
+  UNDERWATER_CAUSTICS_GLSL,
+  UNDERWATER_CAUSTICS_UNIFORMS_GLSL,
+  UNDERWATER_FUNCS_GLSL,
+  UNDERWATER_UNIFORMS_GLSL,
+} from '../water/UnderwaterFog';
 
 /** Uniforms shared by every flora material — written once per frame. */
 export interface FloraGlobals {
@@ -123,6 +128,8 @@ export interface FloraMaterialParams {
   alphaTest: number;
   card: boolean;
   depthWrite: boolean;
+  /** Debug/label name. */
+  name: string;
 }
 
 export interface FloraMaterial extends THREE.MeshStandardMaterial {
@@ -275,6 +282,11 @@ void floraDeform(inout vec3 P, inout vec3 N) {
 }
 `;
 
+const FLORA_FRAG_PARS_CAUSTICS = /* glsl */ `
+${UNDERWATER_CAUSTICS_UNIFORMS_GLSL}
+${UNDERWATER_CAUSTICS_GLSL}
+`;
+
 const FLORA_FRAG_PARS = /* glsl */ `
 uniform float uTime;
 uniform sampler2D uBlueNoise;
@@ -361,13 +373,26 @@ const FLORA_SHADE = /* glsl */ `
     dot(viewMatrix[1].xyz, normal),
     dot(viewMatrix[2].xyz, normal)));
   vec3 fL = normalize(uwSunDir);
+  vec3 fNg = normalize(vFloraNormalW) * (gl_FrontFacing ? 1.0 : -1.0);
 
-  // Wavelength-dependent downwelling: red is gone by ~5 m, blue survives.
-  vec3 fDown = exp(-uwExtinction * max(0.0, uwSurfaceY - vFloraWorld.y) * uwDensity * 0.55);
+  // Wavelength-dependent downwelling from the shared water model: red is gone
+  // by ~5 m, blue survives — so backlit blades read warm-green near the surface
+  // and cyan at depth, exactly as they should.
+  float fDepth = max(0.0, uwSurfaceY - vFloraWorld.y);
+  vec3 fDown = waterDownwelling(fDepth);
+
+  // ---- caustic dapple across the foliage ----
+#ifdef FLORA_CAUSTICS
+  if (uwCausticsParams.w > 0.5 && vFloraWorld.y < uwSurfaceY) {
+    gl_FragColor.rgb += waterCaustics(vFloraWorld, fNg) * uwSunColor * fDown * 0.75;
+  }
+#endif
 
   // ---- back-scatter: sunlight travelling THROUGH the lamina ----
   float back = pow(clamp(dot(-fL, fV), 0.0, 1.0), uTransPower);
-  float wrapped = clamp(0.5 - 0.5 * dot(fN, fL), 0.0, 1.0);
+  // Wrapped diffuse from the *geometric* normal: the normal-mapped one is too
+  // noisy for a term this soft and would sparkle as the blade flexes.
+  float wrapped = clamp(0.5 - 0.5 * dot(fNg, fL), 0.0, 1.0);
   float rim = 1.0 - abs(dot(fN, fV)) * 0.45;
   vec3 trans = uTransColor * diffuseColor.rgb * uwSunColor * fDown;
   gl_FragColor.rgb += trans * (back * (0.30 + 0.70 * wrapped) * vFloraThick * rim * uTransStrength);
@@ -444,17 +469,29 @@ export function createFloraMaterial(
   }) as FloraMaterial;
   if (mat.normalMap) mat.normalScale.set(p.normalScale, p.normalScale);
   mat.floraUniforms = own;
+  mat.name = p.name;
+  // Opt out of `world/water/MaterialPatch`: this material already mixes in
+  // `sharedUniforms` and calls `applyUnderwater()` itself, and a second
+  // injection would redeclare the whole chunk and fail to compile.
+  mat.userData.underwater = true;
+  mat.userData.waterAware = true;
+
+  const caustics = water.uwCausticsMap !== undefined && water.uwCausticsParams !== undefined;
 
   const defines: Record<string, string> = {};
   if (p.alphaMode === 'blade') defines.FLORA_ALPHA_BLADE = '1';
   if (p.alphaMode === 'card') defines.FLORA_ALPHA_CARD = '1';
   if (p.ditherInvert) defines.FLORA_DITHER_INVERT = '1';
   if (p.card) defines.FLORA_CARD = '1';
+  if (caustics) defines.FLORA_CAUSTICS = '1';
   mat.defines = { ...(mat.defines ?? {}), ...defines };
 
   const key = `flora|${Object.keys(defines).sort().join(',')}|${p.alphaMode}|${materialSerial++}`;
   mat.customProgramCacheKey = () => key;
 
+  // Keep the literal marker that `MaterialPatch.isWaterAware` looks for inside
+  // this closure's own source, belt-and-braces with the userData flags above:
+  // applyUnderwater / uwExtinction.
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, water, globals, own);
 
@@ -467,7 +504,10 @@ export function createFloraMaterial(
       .replace('#include <begin_vertex>', '\tvec3 transformed = floraPos;');
 
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n${FLORA_FRAG_PARS}`)
+      .replace(
+        '#include <common>',
+        `#include <common>\n${FLORA_FRAG_PARS}${caustics ? FLORA_FRAG_PARS_CAUSTICS : ''}`,
+      )
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>\n${FLORA_DITHER}`)
       .replace('#include <map_fragment>', FLORA_MAP)
       .replace('#include <alphatest_fragment>', FLORA_ALPHATEST)

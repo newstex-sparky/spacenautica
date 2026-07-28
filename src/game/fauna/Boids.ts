@@ -125,9 +125,14 @@ export function steerSchool(
   if (pd2 < shy * shy) {
     const d = Math.sqrt(Math.max(pd2, 0.04));
     _v.subVectors(a.pos, env.playerPos).multiplyScalar(1 / d);
-    // Bias sideways so the school parts around the diver rather than reversing.
-    _v.x += -_v.z * 0.6;
-    _v.z += _v.x * 0.6;
+    // Add a tangential component so the school parts and streams around the
+    // diver instead of bunching up and reversing into itself. The side is
+    // chosen from the individual's hash, which is what makes a school split.
+    const tx = -_v.z;
+    const tz = _v.x;
+    const side = a.hash > 0.5 ? 0.85 : -0.85;
+    _v.x += tx * side;
+    _v.z += tz * side;
     acc.addScaledVector(_v.normalize(), (1 - d / shy) * 5.5);
     flee = Math.max(flee, (1 - d / shy) * 0.9);
   }

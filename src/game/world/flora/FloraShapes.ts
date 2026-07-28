@@ -64,7 +64,7 @@ function buildKelp(seed: number, lod: number, o: KelpOpts): THREE.BufferGeometry
   const hi = lod === 0;
 
   const H = lerp(o.height[0], o.height[1], rnd());
-  const segs = hi ? Math.max(10, Math.round(H * 1.5)) : Math.max(6, Math.round(H * 0.55));
+  const segs = hi ? Math.min(30, Math.max(10, Math.round(H * 1.15))) : Math.max(6, Math.round(H * 0.5));
   const radial = hi ? 6 : 4;
   const r0 = lerp(o.stipeRadius[0], o.stipeRadius[1], rnd());
   const twistDir = rnd() < 0.5 ? -1 : 1;
@@ -111,7 +111,7 @@ function buildKelp(seed: number, lod: number, o: KelpOpts): THREE.BufferGeometry
       center: new THREE.Vector3(Math.cos(a) * r0 * 1.5, r0 * (0.3 + rnd() * 0.6), Math.sin(a) * r0 * 1.5),
       radius: (d) => rr * (0.7 + 0.5 * Math.abs(d.y) + 0.25 * Math.sin(d.x * 9 + d.z * 7)),
       scale: new THREE.Vector3(1, 0.65, 1),
-      subdiv: hi ? 1 : 0,
+      subdiv: 0,
       uvScale: 7,
       tOf: () => 0.02,
       ao: () => 0.18,
@@ -136,7 +136,7 @@ function buildKelp(seed: number, lod: number, o: KelpOpts): THREE.BufferGeometry
     const len = lerp(o.bladeLength[0], o.bladeLength[1], rnd()) * scaleK * (0.75 + 0.5 * ease(u));
     const hw = lerp(o.bladeWidth[0], o.bladeWidth[1], rnd()) * scaleK;
     const droop = o.droop * (0.6 + rnd() * 0.9);
-    const bSegs = Math.max(3, Math.round(bladeSegs * (0.6 + 0.6 * (len / 3))));
+    const bSegs = Math.min(bladeSegs, Math.max(3, Math.round(bladeSegs * (0.6 + 0.6 * (len / 3)))));
     const wiggle = 0.05 + rnd() * 0.12;
     const wigglePhase = rnd() * TAU;
     const cupSign = rnd() < 0.5 ? 1 : -1;
@@ -172,14 +172,16 @@ function buildKelp(seed: number, lod: number, o: KelpOpts): THREE.BufferGeometry
       twistWeight: 1,
     });
 
-    if (o.perBladeBladder > 0) {
-      const br = o.perBladeBladder * scaleK * (0.7 + rnd() * 0.7);
-      const podLit = rnd() < 0.45 ? 1 : 0.25;
+    // Pneumatocysts on roughly every third insertion: enough to read, cheap
+    // enough that a 25 m kelp still fits the vertex budget.
+    if (o.perBladeBladder > 0 && bi % 3 === 0) {
+      const br = o.perBladeBladder * scaleK * (0.7 + rnd() * 0.7) * 1.5;
+      const podLit = rnd() < 0.55 ? 1 : 0.25;
       blob(mb, {
         center: start.clone().addScaledVector(outDir, br * 0.6),
         radius: (d) => br * (1 + 0.14 * Math.sin(d.y * 8 + d.x * 5)),
         scale: new THREE.Vector3(0.85, 1.5, 0.85),
-        subdiv: hi ? 1 : 0,
+        subdiv: 0,
         uvScale: 9,
         tOf: () => Math.min(1, tBase + 0.05),
         ao: () => 0.55 + 0.45 * ease(tBase),
@@ -197,7 +199,7 @@ function buildKelp(seed: number, lod: number, o: KelpOpts): THREE.BufferGeometry
       center: top.clone().add(new THREE.Vector3(0, br * 0.7, 0)),
       radius: (d) => br * (1 + 0.10 * Math.sin(d.x * 7 + d.z * 6) + 0.07 * d.y),
       scale: new THREE.Vector3(1, 1.35, 1),
-      subdiv: hi ? 2 : 1,
+      subdiv: hi ? 1 : 0,
       uvScale: 6,
       tOf: () => 1,
       ao: () => 1,
@@ -214,7 +216,7 @@ export const buildGiantKelp: ShapeBuilder = (seed, lod) =>
   buildKelp(seed, lod, {
     height: [11, 26],
     stipeRadius: [0.045, 0.075],
-    blades: [15, 30],
+    blades: [13, 24],
     bladeLength: [1.4, 3.4],
     bladeWidth: [0.10, 0.20],
     firstBlade: 0.14,
@@ -481,8 +483,8 @@ export const buildTubeCoral: ShapeBuilder = (seed, lod) => {
     const base = mb.count;
     lathe(mb, {
       profile,
-      rows: hi ? 16 : 8,
-      radial: hi ? 12 : 6,
+      rows: hi ? 13 : 7,
+      radial: hi ? 10 : 6,
       wobble: (v, ang) => 0.06 * Math.sin(ang * ridges + v * 4) * (1 - v * 0.4) + 0.03 * Math.sin(v * 19),
       ao: (v) => (v < 0.84 ? 0.30 + 0.70 * ease(Math.min(1, v * 1.5)) : 0.20 + 0.2 * (1 - v)),
       tOf: (v) => Math.min(1, v * 0.55),
@@ -525,7 +527,7 @@ export const buildFanCoral: ShapeBuilder = (seed, lod) => {
   const mb = new FloraMeshBuilder();
   const hi = lod === 0;
   const H = 0.55 + rnd() * 1.85;
-  const levels = hi ? 4 : 3;
+  const levels = hi ? 3 : 2;
 
   const branches = lsystem({
     rnd,
@@ -739,7 +741,7 @@ export const buildBioStalk: ShapeBuilder = (seed, lod) => {
   const rnd = mulberry32(seed >>> 0);
   const mb = new FloraMeshBuilder();
   const hi = lod === 0;
-  const n = hi ? 2 + Math.floor(rnd() * 5) : 2;
+  const n = hi ? 2 + Math.floor(rnd() * 4) : 2;
   const maxH = 0.5 + rnd() * 2.3;
 
   for (let i = 0; i < n; i++) {
@@ -760,10 +762,10 @@ export const buildBioStalk: ShapeBuilder = (seed, lod) => {
       },
     );
 
-    const beadCount = hi ? 3 + Math.floor(rnd() * 4) : 0;
+    const beadCount = hi ? 2 + Math.floor(rnd() * 3) : 0;
     tube(mb, frames, {
       radius: (u) => r0 * (1.4 - 0.7 * u) * (1 + 0.22 * Math.sin(u * 13)),
-      radial: hi ? 7 : 4,
+      radial: hi ? 6 : 4,
       wobble: (u, ang) => 0.10 * Math.sin(ang * 3 + u * 20),
       ao: (u) => 0.25 + 0.75 * ease(Math.min(1, u * 1.4)),
       emit: (u) => 0.10 + 0.22 * u,
@@ -782,7 +784,7 @@ export const buildBioStalk: ShapeBuilder = (seed, lod) => {
       center: tip.p.clone().addScaledVector(tip.t, br * 0.75),
       radius: (d) => br * (1 + 0.16 * Math.sin(d.x * 7 + d.z * 6) + 0.10 * d.y),
       scale: new THREE.Vector3(1, 1.25 + rnd() * 0.4, 1),
-      subdiv: hi ? 2 : 1,
+      subdiv: hi ? 1 : 0,
       uvScale: 8,
       tOf: () => 1,
       ao: () => 1,

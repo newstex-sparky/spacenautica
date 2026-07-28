@@ -230,6 +230,8 @@ uniform float uMacroAmt;
 uniform float uDetailAmt;
 uniform float uRippleAmt;
 uniform float uCausticAmt;
+uniform float uCausticTile;
+uniform float uCausticFall;
 uniform float uWetness;
 uniform float uTerrainTime;
 uniform vec3  uRockTint;
@@ -492,10 +494,26 @@ export function createTerrainMaterial(opts: TerrainMaterialOptions): TerrainMate
     uDetailAmt: { value: 0.85 },
     uRippleAmt: { value: 0.85 },
     uCausticAmt: { value: 0.9 },
+    uCausticTile: { value: 48 },
+    uCausticFall: { value: 0.02 },
     uWetness: { value: 0.5 },
     uTerrainTime: { value: 0 },
     uRockTint: { value: opts.rockTint.clone() },
   };
+  // Sensible standalone defaults for the frozen underwater block, so the terrain
+  // renders correctly even if the ocean system is absent (verification harness,
+  // or a boot where `world.water` failed to init).
+  const waterDefaults: Record<string, THREE.IUniform> = {
+    uwExtinction: { value: new THREE.Vector3(0.42, 0.09, 0.045) },
+    uwInscatter: { value: new THREE.Color(0.06, 0.3, 0.38) },
+    uwSurfaceY: { value: 0 },
+    uwDensity: { value: 1 },
+    uwSunDir: { value: new THREE.Vector3(0.3, 0.9, 0.3).normalize() },
+    uwSunColor: { value: new THREE.Color(1, 0.97, 0.9) },
+    uwTime: { value: 0 },
+    uwCameraDepth: { value: 0 },
+  };
+  for (const key of Object.keys(waterDefaults)) uniforms[key] = waterDefaults[key];
   // Water uniforms are shared *by reference* so the ocean owns water colour.
   for (const key of Object.keys(opts.waterUniforms)) uniforms[key] = opts.waterUniforms[key];
 
@@ -508,6 +526,11 @@ export function createTerrainMaterial(opts: TerrainMaterialOptions): TerrainMate
     side: THREE.FrontSide,
   });
   material.fog = false;
+  // Tells `world/water/MaterialPatch.ts` that we already apply the scattering
+  // ourselves — without this it would inject a second copy and the shader would
+  // fail to link on redefinition.
+  material.userData.underwater = true;
+  material.userData.waterAware = true;
 
   material.onBeforeCompile = (shader) => {
     for (const key of Object.keys(uniforms)) shader.uniforms[key] = uniforms[key];
@@ -563,17 +586,22 @@ export function createTerrainMaterial(opts: TerrainMaterialOptions): TerrainMate
           float ao = splatAOFinal;
           reflectedLight.indirectDiffuse *= ao;
           reflectedLight.indirectSpecular *= ao;
-          // Caustic dapple: two scrolling layers, gated by depth, upward-facing
-          // surfaces and how much sun is actually reaching this depth.
+          // Caustic dapple. Two rotated samples of the seamless tile are
+          // multiplied and mean-removed, which leaves the bright filament
+          // network and destroys any trace of the repeat. Gated by depth, by
+          // how much the surface faces up, and by how much sun is left.
           float cDepth = max(0.0, uwSurfaceY - vTWorld.y);
-          float cAtt = exp(-cDepth * 0.016) * clamp(splatNormal.y, 0.0, 1.0);
-          vec2 cUv = vTWorld.xz * 0.045;
-          float c1 = texture2D(tCaustics, cUv + vec2(uTerrainTime * 0.009, uTerrainTime * -0.006)).r;
-          float c2 = texture2D(tCaustics, cUv * 1.73 + vec2(uTerrainTime * -0.013, uTerrainTime * 0.008)).r;
-          float caust = pow(clamp(c1 * 0.6 + c2 * 0.6, 0.0, 1.0), 2.2);
+          float cAtt = exp(-cDepth * uCausticFall) * clamp(splatNormal.y * 0.85 + 0.15, 0.0, 1.0);
+          vec2 cUv = vTWorld.xz / max(uCausticTile, 1.0);
+          vec2 cUvA = cUv + vec2(uTerrainTime * 0.0035, uTerrainTime * -0.0026);
+          vec2 cUvB = vec2(cUv.x * 0.7986 - cUv.y * 0.6018, cUv.x * 0.6018 + cUv.y * 0.7986) * 1.73
+                      + vec2(uTerrainTime * -0.0042, uTerrainTime * 0.0031);
+          float c1 = texture2D(tCaustics, cUvA).r;
+          float c2 = texture2D(tCaustics, cUvB).r;
+          float caust = max(c1 * c2 * 2.4 - 0.42, 0.0);
           float cAmt = uCausticAmt * cAtt * (1.0 - smoothstep(0.55, 0.95, roughnessFactor) * 0.25);
-          reflectedLight.directDiffuse *= 1.0 + caust * cAmt * 2.2;
-          reflectedLight.directDiffuse += uwSunColor * caust * cAmt * 0.09;
+          reflectedLight.directDiffuse *= 1.0 + caust * cAmt * 1.9;
+          reflectedLight.directDiffuse += uwSunColor * caust * cAmt * 0.10;
         }
         `,
       )
@@ -590,6 +618,8 @@ export function createTerrainMaterial(opts: TerrainMaterialOptions): TerrainMate
   /* ---- matching depth material so shadows morph identically ---------- */
   // Matches three's internal shadow depth material (BasicDepthPacking).
   const depthMaterial = new THREE.MeshDepthMaterial();
+  depthMaterial.userData.underwater = true;
+  depthMaterial.userData.waterAware = true;
   depthMaterial.onBeforeCompile = (shader) => {
     shader.vertexShader =
       /* glsl */ `

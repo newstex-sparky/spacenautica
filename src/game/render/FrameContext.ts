@@ -160,7 +160,7 @@ export function makeTarget(
   h: number,
   opts: {
     type?: THREE.TextureDataType;
-    format?: THREE.AnyPixelFormat;
+    format?: THREE.PixelFormat;
     filter?: THREE.MagnificationTextureFilter;
     name?: string;
     count?: number;

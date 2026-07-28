@@ -60,7 +60,9 @@ export class AtmosphereCpu {
     const H = Math.sqrt(ATMO.topR * ATMO.topR - ATMO.groundR * ATMO.groundR);
     const od = new Float64Array(3);
     for (let y = 0; y < TH; y++) {
-      const vy = TH === 1 ? 0 : y / (TH - 1);
+      // Guard is against a degenerate one-row table; TH is a literal type, so it
+      // needs widening for the comparison to typecheck.
+      const vy = (TH as number) === 1 ? 0 : y / (TH - 1);
       const rho = vy * H;
       const r = Math.sqrt(rho * rho + ATMO.groundR * ATMO.groundR);
       const dMin = ATMO.topR - r;

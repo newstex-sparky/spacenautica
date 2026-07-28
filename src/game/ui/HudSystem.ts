@@ -139,7 +139,11 @@ export class HudSystem implements GameSystem {
       this.menus.show('main', ctx);
       this.freezeSurvival(ctx);
     } else {
-      this.hud.notify('Automated capture mode — menus suppressed.', 'info', 3);
+      // Capture runs teleport the camera around for ~20 s. Suspend the survival
+      // drains (never persisted) so a drowning death screen cannot land on top
+      // of another agent's reference frames, and drop the onboarding prompt.
+      this.freezeSurvival(ctx);
+      this.onboardTimer = 0;
     }
 
     // Expose a small handle for debugging and e2e without touching main.ts.
@@ -260,6 +264,7 @@ export class HudSystem implements GameSystem {
     on('player:died', (p) => {
       this.deaths++;
       this.pda.pushLog(`Died: ${p.cause}`, 'danger', this.timeOfDay());
+      if (this.automated) return;
       if (this.ctx) this.menus.show('dead', this.ctx, this.causeText(p.cause));
     });
 

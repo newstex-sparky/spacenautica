@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { NOISE_GLSL } from '../../core/Noise';
+import { WATER_NOISE_GLSL } from './WaterNoise';
 import { ScreenGrab } from './ScreenGrab';
 
 /**
@@ -39,7 +39,7 @@ uniform float uBlur;
 
 varying vec2 vUv;
 
-${NOISE_GLSL}
+${WATER_NOISE_GLSL}
 
 vec3 grab(vec2 uv) {
   return texture2D(uGrab, clamp(uv, vec2(0.0015), vec2(0.9985))).rgb;
@@ -52,7 +52,7 @@ void main() {
   vec2 duv = vec2(vUv.x * uAspect, vUv.y) * 8.5;
   // Columns trickle downward at slightly different speeds.
   duv.y += uTime * 0.10;
-  vec3 vo = voronoi(duv);
+  vec3 vo = wnVoronoi(duv);
   float radius = 0.30 + 0.34 * fract(vo.z * 7.31);
   float d = vo.x / radius;
   float mask = 1.0 - smoothstep(0.72, 1.0, d);
@@ -61,7 +61,7 @@ void main() {
   vec2 n = vec2(dFdx(dome), dFdy(dome)) * 38.0;
 
   // A second, finer spray layer.
-  vec3 vo2 = voronoi(duv * 3.1 + 11.7);
+  vec3 vo2 = wnVoronoi(duv * 3.1 + 11.7);
   float d2 = vo2.x / 0.26;
   float mask2 = 1.0 - smoothstep(0.6, 1.0, d2);
   float dome2 = sqrt(max(0.0, 1.0 - d2 * d2)) * mask2;

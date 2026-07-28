@@ -15,7 +15,7 @@
  * shadows instead of static T-pose blobs.
  */
 import * as THREE from 'three';
-import { NOISE_GLSL } from '../core/Noise';
+import { FAUNA_NOISE_GLSL } from './FaunaNoise';
 import { UNDERWATER_GLSL } from '../world/water/UnderwaterFog';
 import type { PbrMaps } from '../assets/TextureLibrary';
 import type { SpeciesDef } from './Species';
@@ -26,18 +26,6 @@ const TAU_DEF = /* glsl */ `
 #endif
 `;
 
-/**
- * `core/Noise.ts`'s NOISE_GLSL declares `sn_permute` only for vec4, but its own
- * 2D `snoise` calls it with a vec3 — so any shader that includes the chunk and
- * uses `snoise(vec2)` fails to link. Declaring the missing overload ahead of the
- * chunk fixes it without touching the shared file (see INTEGRATION REQUESTS).
- */
-export const NOISE_GLSL_FIX = /* glsl */ `
-vec3 sn_permute(vec3 x) {
-  vec3 y = ((x * 34.0) + 1.0) * x;
-  return y - floor(y * (1.0 / 289.0)) * 289.0;
-}
-`;
 
 /* ------------------------------------------------------------------ *
  * Vertex
@@ -162,6 +150,7 @@ uniform vec4  uSurf;   // roughness, roughnessVar, translucency, glow
 uniform vec3  uGlowP;  // glowScale, glowRate, causticAmount
 #ifdef FAUNA_CAUSTICS
 uniform sampler2D uCaustics;
+uniform float uCausticScale;   // 1 / world tile size, matched to the water system
 #endif
 
 varying vec4  vBody;
@@ -199,19 +188,19 @@ const FRAG_SURFACE = /* glsl */ `
   float fFade = exp(-vFDist * 0.10);
 
   // --- macro: length gradient + saddle blotches (silhouette scale) ---
-  float fMacro  = 0.5 + 0.5 * snoise(vec2(fT * 2.6, fHash * 31.0));
-  float fSaddle = smoothstep(0.05, 0.6, snoise(vec2(fT * 6.0 + fHash * 17.0, fWing * 1.6)));
+  float fMacro  = 0.5 + 0.5 * fnSnoise2(vec2(fT * 2.6, fHash * 31.0));
+  float fSaddle = smoothstep(0.05, 0.6, fnSnoise2(vec2(fT * 6.0 + fHash * 17.0, fWing * 1.6)));
 
   // --- mid: species pattern (scales / stripes / spots / leather) ---
   vec2  fPS     = vec2(uPat.x, uPat.x * 0.6);
-  vec3  fCell   = voronoi(fUv * fPS);
+  vec3  fCell   = fnVoronoi(fUv * fPS);
   float fScales = 1.0 - smoothstep(0.0, 0.30, fCell.y - fCell.x);
-  float fStripe = 0.5 + 0.5 * sin(fT * uPat.y * FAUNA_TAU + snoise(fUv * 7.0) * 1.5);
+  float fStripe = 0.5 + 0.5 * sin(fT * uPat.y * FAUNA_TAU + fnSnoise2(fUv * 7.0) * 1.5);
   float fSpots  = smoothstep(0.42, 0.14, fCell.x) * (0.35 + 0.65 * fCell.z);
-  float fLeath  = 0.5 + 0.5 * fbm(fUv * uPat.x * 0.45, 4);
+  float fLeath  = 0.5 + 0.5 * fnFbm2(fUv * uPat.x * 0.45);
 
   // --- micro: grain ---
-  float fGrain  = snoise(fUv * 190.0) * fFade;
+  float fGrain  = fnSnoise2(fUv * 190.0) * fFade;
 
   float fPat;
   #if FAUNA_PATTERN == 0
@@ -270,7 +259,7 @@ const FRAG_NORMAL = /* glsl */ `
 const FRAG_EMISSIVE = /* glsl */ `
   // --- bioluminescent markings ---
   if (uSurf.w > 0.001) {
-    float gp = smoothstep(0.45, 0.86, snoise(vec3(fUv * uGlowP.x, fHash * 9.0)));
+    float gp = smoothstep(0.45, 0.86, fnSnoise3(vec3(fUv * uGlowP.x, fHash * 9.0)));
     float pulse = 0.5 + 0.5 * sin(uTime * uGlowP.y * 2.0 + fHash * 40.0 + fT * 5.0);
     totalEmissiveRadiance += uGlowCol * gp * (0.4 + 0.6 * pulse) * uSurf.w * vExtra.x;
   }
@@ -298,13 +287,17 @@ const FRAG_EMISSIVE = /* glsl */ `
   // --- caustic dapple from the surface above ---
   #ifdef FAUNA_CAUSTICS
   {
-    vec2 cuv = vFWorld.xz * 0.055 + vec2(uwTime * 0.011, -uwTime * 0.008);
-    float c1 = texture2D(uCaustics, cuv).r;
-    float c2 = texture2D(uCaustics, cuv * 1.73 - vec2(uwTime * 0.017, uwTime * 0.006)).r;
-    float caus = min(c1, c2);
+    // Same two-layer rotated sampling the water system uses on the sea floor, at
+    // the same world tile size, so a fish swimming over sand is lit by the same
+    // filaments. (1 - fShade) stands in for "this surface faces up".
+    vec2 p0 = vFWorld.xz * uCausticScale;
+    vec2 p1 = vec2(p0.x * 0.7986 - p0.y * 0.6018, p0.x * 0.6018 + p0.y * 0.7986) * 1.73;
+    float c1 = texture2D(uCaustics, p0 + vec2(uwTime * 0.008, -uwTime * 0.006)).r;
+    float c2 = texture2D(uCaustics, p1 - vec2(uwTime * 0.011, uwTime * 0.004)).r;
+    float caus = max(c1 * c2 - 0.82, 0.0) * 1.45;
     float dep = exp(-max(0.0, uwSurfaceY - vFWorld.y) * 0.022);
-    totalEmissiveRadiance += uwSunColor * caus * caus * uGlowP.z * dep
-                             * (0.35 + 0.65 * (1.0 - fShade));
+    totalEmissiveRadiance += uwSunColor * caus * uGlowP.z * dep
+                             * (0.25 + 0.75 * (1.0 - fShade));
   }
   #endif
 `;
@@ -336,6 +329,7 @@ export interface CreatureUniforms {
   uSurf: THREE.IUniform<THREE.Vector4>;
   uGlowP: THREE.IUniform<THREE.Vector3>;
   uCaustics: THREE.IUniform<THREE.Texture | null>;
+  uCausticScale: THREE.IUniform<number>;
 }
 
 export interface CreatureMaterialSet {
@@ -351,6 +345,8 @@ export interface CreatureMaterialOptions {
   /** WaterSystem.sharedUniforms — the same IUniform objects, not copies. */
   shared: Record<string, THREE.IUniform>;
   caustics: THREE.Texture | null;
+  /** World size in metres of one caustics tile, from `uwCausticsParams.y`. */
+  causticTile: number;
   halfWidth: number;
   /** Build an animated depth material for shadow casting. */
   shadows: boolean;
@@ -378,6 +374,7 @@ export function createCreatureMaterial(opts: CreatureMaterialOptions): CreatureM
     uSurf: { value: new THREE.Vector4(s.roughness, s.roughnessVar, s.translucency, s.glow) },
     uGlowP: { value: new THREE.Vector3(s.glowScale, s.glowRate, opts.caustics ? 0.85 : 0) },
     uCaustics: { value: opts.caustics },
+    uCausticScale: { value: 1 / Math.max(1, opts.causticTile) },
   };
 
   const defines: Record<string, unknown> = {
@@ -402,6 +399,11 @@ export function createCreatureMaterial(opts: CreatureMaterialOptions): CreatureM
   material.name = `fauna.${s.id}`;
   material.defines = defines;
   material.normalScale.set(0.7, 0.7);
+  // Tell world/water/MaterialPatch.ts we already apply applyUnderwater ourselves;
+  // without this it retrofits a second copy of the fog chunk and the program
+  // fails to link on "uwExtinction: redefinition".
+  material.userData.underwater = true;
+  material.userData.waterAware = true;
 
   /**
    * `lit` selects the MeshStandardMaterial path (which resolves `objectNormal`
@@ -454,8 +456,7 @@ export function createCreatureMaterial(opts: CreatureMaterialOptions): CreatureM
     Object.assign(shader.uniforms, uniforms, opts.shared);
     shader.vertexShader = patchVertex(shader.vertexShader, true);
 
-    let f =
-      TAU_DEF + NOISE_GLSL_FIX + NOISE_GLSL + UNDERWATER_GLSL + FRAG_PARS + shader.fragmentShader;
+    let f = TAU_DEF + FAUNA_NOISE_GLSL + UNDERWATER_GLSL + FRAG_PARS + shader.fragmentShader;
     f = f.replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\n${FRAG_SURFACE}`);
     f = f.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRAG_NORMAL}`);
     f = f.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${FRAG_EMISSIVE}`);
@@ -467,7 +468,10 @@ export function createCreatureMaterial(opts: CreatureMaterialOptions): CreatureM
   let depthMaterial: THREE.MeshDepthMaterial | null = null;
   if (opts.shadows) {
     depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+    depthMaterial.name = `fauna.${s.id}.depth`;
     depthMaterial.defines = { ...defines };
+    depthMaterial.userData.underwater = true;
+    depthMaterial.userData.waterAware = true;
     depthMaterial.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
       shader.vertexShader = patchVertex(shader.vertexShader, false);

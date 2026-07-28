@@ -98,7 +98,7 @@ async function main(): Promise<void> {
   const baker = new TextureBaker(renderer);
   const size = 256;
   const stats: Stat[] = [];
-  const baked: Array<{ id: string; target: THREE.WebGLRenderTarget<THREE.Texture[]> }> = [];
+  const baked: Array<{ id: string; target: THREE.WebGLRenderTarget }> = [];
 
   const readRt = new THREE.WebGLRenderTarget(size, size, {
     format: THREE.RGBAFormat,

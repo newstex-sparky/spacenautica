@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { Phase } from '../core/Types';
 import type { GameContext, GameSystem } from '../core/Types';
+import type { GraphicsSettings } from '../core/Settings';
 import type { Engine } from '../core/Engine';
 import { Blitter, ColorPool, makeTarget } from './FrameContext';
 import type { FrameContext } from './FrameContext';
@@ -101,6 +102,15 @@ export class PostStack implements GameSystem {
   private lastTier = '';
   private booted = false;
 
+  /** Guarded copy of `settings.graphics` — the budget guard clears flags here. */
+  private effective!: GraphicsSettings;
+  private slowStreak = 0;
+  private fastStreak = 0;
+  /** 0 = everything the settings ask for; 4 = only bloom + grade survive. */
+  budgetLevel = 0;
+  /** Frame-time ceiling (ms) before the guard starts shedding passes. */
+  budgetMs = 55;
+
   /* ------------------------------------------------------------------ *
    * Lifecycle
    * ------------------------------------------------------------------ */
@@ -114,6 +124,7 @@ export class PostStack implements GameSystem {
 
     this.blitter = new Blitter();
     this.pool = new ColorPool(w, h);
+    this.effective = { ...ctx.settings.graphics };
 
     this.placeholderColor = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
     this.placeholderColor.needsUpdate = true;
@@ -125,7 +136,7 @@ export class PostStack implements GameSystem {
       camera: ctx.camera,
       width: w,
       height: h,
-      settings: ctx.settings.graphics,
+      settings: this.effective,
       time: 0,
       dt: 1 / 60,
       frame: 0,
@@ -359,7 +370,8 @@ export class PostStack implements GameSystem {
       this.applySize(Math.max(1, Math.floor(_size.x)), Math.max(1, Math.floor(_size.y)));
     }
 
-    frame.settings = ctx.settings.graphics;
+    this.updateBudget(ctx);
+    frame.settings = this.effective;
     frame.time = ctx.time;
     frame.dt = Math.min(Math.max(dt, 1 / 480), 0.1);
     frame.frame = ctx.frame;
@@ -415,6 +427,48 @@ export class PostStack implements GameSystem {
     }
 
     frame.historyValid = true;
+  }
+
+  /**
+   * Frame-time guard. The quality tiers are the user's intent, but a scene can
+   * still blow the budget (a kelp forest at ultra on a laptop, or a software
+   * rasteriser in CI). Rather than letting the frame rate collapse, shed the
+   * most expensive passes in a fixed order with heavy hysteresis so it never
+   * visibly pumps. Everything comes back once there is headroom again.
+   */
+  private updateBudget(ctx: GameContext): void {
+    const ms = (ctx as unknown as { frameMs?: number }).frameMs ?? 16.7;
+    const budget = this.budgetMs;
+    if (ms > budget * 6) this.slowStreak += 12;
+    else if (ms > budget * 2) this.slowStreak += 4;
+    else if (ms > budget) this.slowStreak += 1;
+    else this.slowStreak = Math.max(0, this.slowStreak - 2);
+
+    if (this.slowStreak >= 48 && this.budgetLevel < 4) {
+      this.budgetLevel++;
+      this.slowStreak = 0;
+      this.fastStreak = 0;
+    }
+    if (ms < budget * 0.45) this.fastStreak++;
+    else this.fastStreak = 0;
+    if (this.fastStreak > 420 && this.budgetLevel > 0) {
+      this.budgetLevel--;
+      this.fastStreak = 0;
+    }
+
+    const g = ctx.settings.graphics;
+    Object.assign(this.effective, g);
+    const lvl = this.budgetLevel;
+    if (lvl >= 1) this.effective.ssr = false;
+    if (lvl >= 2) this.effective.gtao = false;
+    if (lvl >= 3) {
+      this.effective.dof = false;
+      this.effective.motionBlur = false;
+    }
+    if (lvl >= 4) {
+      this.effective.godRays = false;
+      this.effective.taa = false;
+    }
   }
 
   private readEnvironment(ctx: GameContext): void {

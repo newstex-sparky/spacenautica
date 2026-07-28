@@ -126,9 +126,18 @@ export class MenuLayer {
     return this.screen !== 'none';
   }
 
-  /** True when the world simulation should be frozen. */
+  /**
+   * True when the world simulation should be frozen. Deliberately excludes the
+   * main menu: the engine's pause also freezes `ctx.time`, which would stop the
+   * waves, caustics and fauna behind the title. The main menu instead suspends
+   * survival drains only (see HudSystem.freezeSurvival) so the scene stays alive.
+   */
   get pausing(): boolean {
-    return this.screen === 'main' || this.screen === 'pause' || this.screen === 'settings' || this.screen === 'dead';
+    return (
+      this.screen === 'pause' ||
+      this.screen === 'dead' ||
+      (this.screen === 'settings' && this.returnTo !== 'main')
+    );
   }
 
   /* ------------------------------------------------------------------ *

@@ -497,6 +497,28 @@ export class TerrainSystem implements GameSystem, WorldQuery {
     if (!u) return;
     u.uTerrainTime.value = ctx.time;
 
+    // The ocean generates its caustics during *its* init, which runs after ours,
+    // so pick the real texture up as soon as it exists and follow the tile size
+    // and strength it publishes. `uwCausticsParams.w` is 0 when the ocean runs a
+    // screen-space caustics pass, in which case we stay out of its way.
+    const water = ctx.tryGet<GameSystem & {
+      causticsTexture?: THREE.Texture | null;
+      sharedUniforms?: Record<string, THREE.IUniform>;
+    }>('world.water');
+    const causticTex = water?.causticsTexture ?? null;
+    if (causticTex && u.tCaustics.value !== causticTex) {
+      causticTex.wrapS = causticTex.wrapT = THREE.RepeatWrapping;
+      u.tCaustics.value = causticTex;
+    }
+    const cp = water?.sharedUniforms?.uwCausticsParams?.value as THREE.Vector4 | undefined;
+    if (cp) {
+      u.uCausticTile.value = Math.max(1, cp.y);
+      u.uCausticFall.value = Math.max(0.002, cp.z);
+      // Own-pass strength when the ocean is not doing screen-space caustics,
+      // otherwise a light touch so the two do not stack into blown highlights.
+      u.uCausticAmt.value = cp.w > 0.5 ? cp.x : cp.x * 0.35;
+    }
+
     // Rock tint follows the biome you are actually in, so cliffs stay in family
     // with the sand. Lerped so a biome border does not snap.
     const s = this.biomeMap.sample(this.camX, this.camZ);

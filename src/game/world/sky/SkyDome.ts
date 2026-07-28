@@ -4,6 +4,7 @@ import { UNDERWATER_GLSL } from '../water/UnderwaterFog';
 import { ATMO, ATMOSPHERE_GLSL } from './Atmosphere';
 import { CELESTIAL_GLSL } from './Celestial';
 import { CLOUD_GLSL } from './CloudField';
+import { NOISE_COMPAT_GLSL } from './GlslCompat';
 
 /**
  * The sky dome: one shader that composites, back to front,
@@ -53,6 +54,7 @@ uniform float uUnderwater;
 uniform float uEyeY;
 uniform float uLightning;
 
+${NOISE_COMPAT_GLSL}
 ${NOISE_GLSL}
 ${ATMOSPHERE_GLSL}
 ${CLOUD_GLSL}

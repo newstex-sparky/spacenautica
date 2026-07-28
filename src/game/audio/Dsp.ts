@@ -293,7 +293,9 @@ export function gain(ac: AudioContext, value = 1): GainNode {
 }
 
 /** tanh-ish soft clip curve; used for limiting and for creature snarl. */
-export function softClipCurve(drive = 1, n = 1024): Float32Array {
+// The return type is pinned to `Float32Array<ArrayBuffer>` because that is what
+// `WaveShaperNode.curve` accepts; the default inference widens to ArrayBufferLike.
+export function softClipCurve(drive = 1, n = 1024): Float32Array<ArrayBuffer> {
   const c = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1;
