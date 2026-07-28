@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Spacenautica — procedural material preview</title>
+    <style>
+      html, body { margin: 0; background: #0b1013; color: #cfe; font: 12px/1.4 ui-monospace, monospace; }
+      h2 { font-size: 13px; margin: 14px 0 6px 8px; color: #7fd; font-weight: 600; }
+      canvas { display: block; image-rendering: pixelated; }
+      #log { padding: 8px; white-space: pre; font-size: 11px; color: #9ab; }
+    </style>
+  </head>
+  <body>
+    <h2>Lit preview — MeshStandardMaterial with the generated set (one directional light + sky ambient)</h2>
+    <canvas id="lit"></canvas>
+    <h2>Raw maps — per material: albedo / normal+height / ORM (r=AO g=rough b=metal)</h2>
+    <canvas id="atlas"></canvas>
+    <div id="log">booting…</div>
+    <script type="module" src="./preview.ts"></script>
+  </body>
+</html>

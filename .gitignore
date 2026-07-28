@@ -6,3 +6,4 @@ screenshots/ci/
 screenshots/loop-*/
 .critique/
 .briefs/
+dist-*/
