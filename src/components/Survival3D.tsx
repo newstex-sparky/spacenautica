@@ -482,6 +482,281 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const [uiResearchProgress, setUiResearchProgress] = useState<Set<string>>(new Set());
   const [uiResearchingNode, setUiResearchingNode] = useState<string>('');
 
+// Tech tree data structure
+interface TechTreeNode {
+  id: string;
+  name: string;
+  category: 'mining' | 'o2' | 'power' | 'advanced';
+  parent?: string;
+  requires?: string; // Parent tech ID
+  cost: { iron: number; h2: number | null; oxygen: number | null };
+  description: string;
+  unlocks?: string; // Module type this tech unlocks
+  costModifier?: number; // Crafting cost modifier (0.5 = 50%, 1 = 100%)
+}
+
+const TECH_TREE: TechTreeNode[] = [
+  // Mining Tier
+  {
+    id: 'mining-basic',
+    name: 'Basic Mining Research',
+    category: 'mining',
+    cost: { iron: 10, h2: 5, oxygen: 0 },
+    description: 'Unlocks Smelter research and reduces ore processing time.',
+    unlocks: 'smelter',
+    costModifier: 0.8,
+  },
+  {
+    id: 'mining-advanced',
+    name: 'Advanced Mining Tech',
+    category: 'mining',
+    parent: 'mining-basic',
+    requires: 'mining-basic',
+    cost: { iron: 30, h2: 20, oxygen: 0 },
+    description: 'Unlock titanium asteroid drilling and improved ore processing.',
+    unlocks: 'titanium-drill',
+    costModifier: 1.0,
+  },
+  {
+    id: 'mining-quantum',
+    name: 'Quantum Materials',
+    category: 'mining',
+    parent: 'mining-advanced',
+    requires: 'mining-advanced',
+    cost: { iron: 80, h2: 50, oxygen: 20 },
+    description: 'Advanced material synthesis technology.',
+    unlocks: 'quantum-smelter',
+    costModifier: 0.6,
+  },
+  
+  // O2 Tier
+  {
+    id: 'o2-basic',
+    name: 'Basic O2 Systems',
+    category: 'o2',
+    cost: { iron: 15, h2: 10, oxygen: 0 },
+    description: 'Unlocks Electrolysis Refinery research.',
+    unlocks: 'refinery',
+    costModifier: 0.8,
+  },
+  {
+    id: 'o2-efficient',
+    name: 'Efficient Refinery',
+    category: 'o2',
+    parent: 'o2-basic',
+    requires: 'o2-basic',
+    cost: { iron: 40, h2: 30, oxygen: 0 },
+    description: 'Improve water ice processing efficiency (50% faster O2 + H2 generation).',
+    unlocks: 'hydrogen-harvest',
+    costModifier: 0.5,
+  },
+  {
+    id: 'o2-atmospheric',
+    name: 'Atmospheric Recycling',
+    category: 'o2',
+    parent: 'o2-efficient',
+    requires: 'o2-efficient',
+    cost: { iron: 100, h2: 70, oxygen: 40 },
+    description: 'Advanced air recycling systems for long-term survival.',
+    unlocks: 'atmospheric-recycler',
+    costModifier: 0.3,
+  },
+  
+  // Power Tier
+  {
+    id: 'power-basic',
+    name: 'Basic Power Systems',
+    category: 'power',
+    cost: { iron: 20, h2: 15, oxygen: 0 },
+    description: 'Unlock Solar Panel technology.',
+    unlocks: 'solar-panel',
+    costModifier: 1.0,
+  },
+  {
+    id: 'power-solar-grid',
+    name: 'Solar Grid',
+    category: 'power',
+    parent: 'power-basic',
+    requires: 'power-basic',
+    cost: { iron: 60, h2: 40, oxygen: 0 },
+    description: 'Improve solar panel efficiency (25% more H2 generation).',
+    unlocks: 'solar-grid',
+    costModifier: 1.0,
+  },
+  {
+    id: 'power-fusion',
+    name: 'Fusion Reactor',
+    category: 'power',
+    parent: 'power-solar-grid',
+    requires: 'power-solar-grid',
+    cost: { iron: 150, h2: 100, oxygen: 60 },
+    description: 'Infinite power source for advanced station modules.',
+    unlocks: 'fusion-reactor',
+    costModifier: 0.1, // Massive cost reduction
+  },
+];
+
+// ====================== 3D Tech Tree Holographic Interface ======================
+interface TechTreeGroup {
+  group: THREE.Group;
+  nodeMeshes: Map<string, THREE.Mesh>;
+  nodeLabels: Map<string, THREE.Mesh>;
+  links: THREE.Line[];
+  button: THREE.Mesh;
+  isHovered: boolean;
+  isOpen: boolean;
+}
+
+let techTreeGroupRef = useRef<TechTreeGroup | null>(null);
+const TECH_TREE_NODE_RADIUS = 0.6;
+const TECH_TREE_NODE_SPACING = 2.5;
+
+// Create tech tree layout positions
+function getTechTreeNodePosition(node: TechTreeNode, index: number, totalInCategory: number) {
+  const categories: { [key: string]: number } = {
+    'mining': 0,
+    'o2': 1,
+    'power': 2,
+    'advanced': 3,
+  };
+  
+  const categoryIndex = categories[node.category];
+  const categoryStart = Object.keys(categories).reduce((sum, key) => sum + (key === node.category ? index - totalInCategory : 0), 0);
+  
+  const x = categoryIndex * TECH_TREE_NODE_SPACING * 4;
+  const z = (index - (totalInCategory / 2)) * TECH_TREE_NODE_SPACING;
+  const y = 0;
+  
+  return new THREE.Vector3(x, y, z);
+}
+
+// Create 3D tech tree holographic interface
+const createTechTree3D = (): THREE.Group => {
+  const group = new THREE.Group();
+  group.visible = false;
+  
+  // Holographic background plane
+  const bgGeometry = new THREE.PlaneGeometry(20, 15);
+  const bgMaterial = new THREE.MeshBasicMaterial({
+    color: 0x001133,
+    transparent: true,
+    opacity: 0.3,
+    side: THREE.DoubleSide,
+  });
+  const bgPlane = new THREE.Mesh(bgGeometry, bgMaterial);
+  bgPlane.position.z = -0.5;
+  group.add(bgPlane);
+  
+  // Holographic grid lines
+  const gridHelper = new THREE.GridHelper(20, 40, 0x004466, 0x002233);
+  gridHelper.position.y = -1.5;
+  gridHelper.material.transparent = true;
+  gridHelper.material.opacity = 0.4;
+  gridHelper.material.color.setHex(0x004466);
+  group.add(gridHelper);
+  
+  const nodeMeshes = new Map<string, THREE.Mesh>();
+  const nodeLabels = new Map<string, THREE.Mesh>();
+  const links: THREE.Line[] = [];
+  
+  // Create nodes and connections
+  TECH_TREE.forEach((node, index) => {
+    const pos = getTechTreeNodePosition(node, index, 3);
+    const isUnlocked = uiResearchProgress.has(node.id);
+    
+    // Node geometry based on category
+    let geometry: THREE.BufferGeometry;
+    if (node.category === 'mining') {
+      geometry = new THREE.IcosahedronGeometry(TECH_TREE_NODE_RADIUS, 1);
+    } else if (node.category === 'o2') {
+      geometry = new THREE.OctahedronGeometry(TECH_TREE_NODE_RADIUS, 0);
+    } else if (node.category === 'power') {
+      geometry = new THREE.BoxGeometry(TECH_TREE_NODE_RADIUS * 1.5, TECH_TREE_NODE_RADIUS * 0.5, TECH_TREE_NODE_RADIUS * 1.5);
+    } else {
+      geometry = new THREE.TorusGeometry(TECH_TREE_NODE_RADIUS * 0.7, 0.2, 8, 16);
+    }
+    
+    const color = isUnlocked ? 0x00ffff : (node.requires ? 0x666666 : 0x00ff88);
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: isUnlocked ? 0.9 : 0.3,
+      wireframe: true,
+    });
+    
+    const nodeMesh = new THREE.Mesh(geometry, material);
+    nodeMesh.position.copy(pos);
+    nodeMesh.userData = { techId: node.id, nodeData: node, type: 'tech-node' };
+    group.add(nodeMesh);
+    nodeMeshes.set(node.id, nodeMesh);
+    
+    // Glow effect for unlocked nodes
+    if (isUnlocked) {
+      const glowGeometry = new THREE.SphereGeometry(TECH_TREE_NODE_RADIUS * 1.3);
+      const glowMaterial = new THREE.MeshBasicMaterial({
+        color: 0x00ffff,
+        transparent: true,
+        opacity: 0.2,
+        side: THREE.DoubleSide,
+      });
+      const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+      glow.position.copy(pos);
+      glow.scale.multiplyScalar(0.8 + Math.sin(Date.now() * 0.002) * 0.2);
+      group.add(glow);
+    }
+    
+    // Connection line to parent (if exists)
+    if (node.requires) {
+      const parentPos = getTechTreeNodePosition(TECH_TREE.find(n => n.id === node.requires)!, 
+        TECH_TREE.findIndex(n => n.id === node.requires), 3);
+      
+      const points = [parentPos, pos];
+      const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+      const lineMaterial = new THREE.LineBasicMaterial({
+        color: node.requires ? (isUnlocked ? 0x00ffff : 0x666666) : 0x004466,
+        transparent: true,
+        opacity: isUnlocked ? 0.6 : 0.2,
+      });
+      const line = new THREE.Line(lineGeometry, lineMaterial);
+      group.add(line);
+      links.push(line);
+    }
+    
+    // Node label
+    const labelGeometry = new THREE.PlaneGeometry(0.8, 0.15);
+    const labelMaterial = new THREE.MeshBasicMaterial({
+      color: isUnlocked ? 0xffffff : 0x888888,
+      transparent: true,
+      opacity: isUnlocked ? 0.9 : 0.5,
+      side: THREE.DoubleSide,
+    });
+    const label = new THREE.Mesh(labelGeometry, labelMaterial);
+    label.position.set(pos.x, pos.y + TECH_TREE_NODE_RADIUS * 1.8, pos.z);
+    label.userData = { text: node.name };
+    group.add(label);
+    nodeLabels.set(node.id, label);
+  });
+  
+  // Holographic scanline effect
+  const scanlineGeometry = new THREE.PlaneGeometry(20, 0.1);
+  const scanlineMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.1,
+    side: THREE.DoubleSide,
+  });
+  const scanline = new THREE.Mesh(scanlineGeometry, scanlineMaterial);
+  scanline.position.y = 2;
+  scanline.userData = { type: 'scanline', speed: 0.5 };
+  group.add(scanline);
+  
+  (group as any).nodeMeshes = nodeMeshes;
+  (group as any).nodeLabels = nodeLabels;
+  (group as any).links = links;
+  
+  return group;
+};
+
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -499,6 +774,7 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const buildPreviewRef = useRef<THREE.Group | null>(null); // holographic build preview
   const inventoryPanelRef = useRef<THREE.Group | null>(null); // holographic inventory panel
   const inventoryGroupRef = useRef<THREE.Group | null>(null); // Group to hold all inventory 3D elements
+  const techTreeGroupRef = useRef<THREE.Group | null>(null); // 3D tech tree holographic interface
 
   // Resource refs (mirrored to UI state)
   const resourcesRef = useRef({ iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0, ironMetal: 0, titanium: 0 });
