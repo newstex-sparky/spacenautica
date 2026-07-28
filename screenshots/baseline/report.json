@@ -1,0 +1,52 @@
+{
+  "results": [
+    {
+      "id": "01_shallows_surface",
+      "file": "/home/user/spacenautica/screenshots/baseline/01_shallows_surface.png",
+      "intent": "Sunlit shallows just under the surface looking up-forward: Snell window, god rays, caustics."
+    },
+    {
+      "id": "02_shallows_floor",
+      "file": "/home/user/spacenautica/screenshots/baseline/02_shallows_floor.png",
+      "intent": "Sea floor in the shallows: sand detail, coral, caustic dapple, fish."
+    },
+    {
+      "id": "03_kelp_forest",
+      "file": "/home/user/spacenautica/screenshots/baseline/03_kelp_forest.png",
+      "intent": "Inside a kelp forest: translucent blades, volumetric shafts, depth haze."
+    },
+    {
+      "id": "04_reef_wall",
+      "file": "/home/user/spacenautica/screenshots/baseline/04_reef_wall.png",
+      "intent": "Reef wall / drop-off: silhouette against blue, parallax, scale."
+    },
+    {
+      "id": "05_deep_dark",
+      "file": "/home/user/spacenautica/screenshots/baseline/05_deep_dark.png",
+      "intent": "Deep zone: near-black water, bioluminescence, torch cone, marine snow."
+    },
+    {
+      "id": "06_surface_above",
+      "file": "/home/user/spacenautica/screenshots/baseline/06_surface_above.png",
+      "intent": "Above water at golden hour: ocean surface, sky, sun glitter, horizon."
+    },
+    {
+      "id": "07_night_dive",
+      "file": "/home/user/spacenautica/screenshots/baseline/07_night_dive.png",
+      "intent": "Night dive: flashlight cone, bioluminescent flora, moonlight from above."
+    },
+    {
+      "id": "08_wreck",
+      "file": "/home/user/spacenautica/screenshots/baseline/08_wreck.png",
+      "intent": "Man-made wreck: PBR metal, rust, barnacles, interior darkness."
+    }
+  ],
+  "errors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "fps": {
+    "frameMs": 4.876913307065624,
+    "adaptiveScale": 0.97,
+    "tier": "medium"
+  }
+}

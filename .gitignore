@@ -1,4 +1,6 @@
 node_modules/
 dist/
 *.local
-.DS_Store
+.DS_Storescreenshots/ci/
+screenshots/loop-*/
+.critique/

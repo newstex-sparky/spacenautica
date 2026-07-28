@@ -1,0 +1,113 @@
+/* Baseline HUD shell. The UI agent owns and extends this file. */
+:root {
+  --hud-cyan: #7fe8ff;
+  --hud-amber: #ffb347;
+  --hud-danger: #ff5c4d;
+  --hud-dim: rgba(160, 220, 240, 0.55);
+  --hud-panel: rgba(6, 26, 34, 0.55);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body, #app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: #dff6ff;
+  -webkit-font-smoothing: antialiased;
+}
+
+#game-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: crosshair;
+}
+
+#ui-root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ---------- loading ---------- */
+
+#loading {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(ellipse at 50% 40%, #06222e 0%, #010609 70%);
+  transition: opacity 0.8s ease;
+}
+#loading.done { opacity: 0; pointer-events: none; }
+.loading-inner { text-align: center; width: min(420px, 70vw); }
+.loading-title {
+  font-size: clamp(22px, 4vw, 40px);
+  letter-spacing: 0.42em;
+  font-weight: 200;
+  color: var(--hud-cyan);
+  text-shadow: 0 0 32px rgba(127, 232, 255, 0.45);
+  margin-bottom: 26px;
+}
+.loading-track {
+  height: 2px;
+  background: rgba(127, 232, 255, 0.16);
+  overflow: hidden;
+}
+#loading-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, transparent, var(--hud-cyan));
+  transition: width 0.25s ease;
+}
+#loading-label {
+  margin-top: 14px;
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+}
+
+/* ---------- hud ---------- */
+
+.hud { position: absolute; inset: 0; }
+
+.hud-vitals { position: absolute; left: 34px; bottom: 34px; display: flex; gap: 14px; }
+.hud-ring {
+  width: 76px; height: 76px; border-radius: 50%;
+  display: grid; place-items: center; line-height: 1;
+  border: 1px solid rgba(127, 232, 255, 0.35);
+  background: var(--hud-panel);
+  backdrop-filter: blur(6px);
+}
+.hud-ring span { font-size: 10px; letter-spacing: 0.18em; color: var(--hud-dim); }
+.hud-ring b { font-size: 22px; font-weight: 300; }
+
+.hud-depth {
+  position: absolute; right: 34px; bottom: 34px;
+  font-weight: 200; letter-spacing: 0.04em;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.7);
+}
+.hud-depth b { font-size: 40px; }
+.hud-depth span { font-size: 14px; color: var(--hud-dim); margin-left: 4px; }
+
+.hud-biome {
+  position: absolute; top: 30px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; letter-spacing: 0.34em; text-transform: uppercase;
+  color: var(--hud-dim); text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+}
+
+.hud-reticle {
+  position: absolute; top: 50%; left: 50%;
+  width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: rgba(223, 246, 255, 0.7);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.9);
+}

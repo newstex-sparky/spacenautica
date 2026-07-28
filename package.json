@@ -4,10 +4,13 @@
   "description": "3D Space Survival Game with Three.js",
   "main": "index.html",
   "scripts": {
-    "dev": "python3 -m http.server 8000",
+    "dev": "vite",
     "serve": "npx serve",
     "build": "vite build",
-    "generate-model": "node img2threejs-cli.js"
+    "generate-model": "node img2threejs-cli.js",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit",
+    "shots": "node scripts/capture.mjs"
   },
   "keywords": [
     "game",
@@ -20,12 +23,16 @@
   "dependencies": {
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "three": "^0.128.0"
+    "three": "^0.185.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@types/node": "^26.1.1",
+    "@types/three": "^0.185.1",
     "@vitejs/plugin-react": "^6.0.4",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5"
-  }
+    "vite": "^8.1.5",
+    "vite-plugin-glsl": "^1.6.1"
+  },
+  "type": "module"
 }

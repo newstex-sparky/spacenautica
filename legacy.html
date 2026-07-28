@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spacenautica - 3D Space Survival</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #000;
+        }
+
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            color: #fff;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        }
+
+        .stat-row {
+            margin-bottom: 8px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 15px;
+            border-radius: 8px;
+            min-width: 250px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        #o2-bar-container {
+            width: 100%;
+            height: 20px;
+            background: rgba(50, 50, 50, 0.8);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+
+        #o2-bar-fill {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+            transition: width 0.1s;
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 10;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        }
+
+        #instructions h3 {
+            margin-bottom: 8px;
+            color: #4facfe;
+        }
+
+        #instructions p {
+            margin: 4px 0;
+            color: #ccc;
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            width: 20px;
+            height: 20px;
+            pointer-events: none;
+        }
+
+        #crosshair::before,
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.7);
+            box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+        }
+
+        #crosshair::before {
+            width: 2px;
+            height: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        #crosshair::after {
+            width: 100%;
+            height: 2px;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        #game-over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 20;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 40px;
+            border-radius: 12px;
+            text-align: center;
+            color: #fff;
+            display: none;
+        }
+
+        #game-over h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            color: #ff6b6b;
+        }
+
+        #game-over button {
+            margin-top: 20px;
+            padding: 15px 30px;
+            font-size: 18px;
+            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #game-over button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(79, 172, 254, 0.4);
+        }
+
+        .minimap {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 150px;
+            height: 150px;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: 50%;
+            border: 3px solid rgba(79, 172, 254, 0.5);
+            z-index: 10;
+            overflow: hidden;
+        }
+
+        .minimap-canvas {
+            width: 100%;
+            height: 100%;
+        }
+    
+    /* =====================
+        STATION BUILDER STYLES
+        ===================== */
+
+    #station-builder-menu {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        z-index: 100;
+        background: rgba(0, 0, 0, 0.85);
+        border: 2px solid #4FACFE;
+        border-radius: 10px;
+        padding: 20px;
+        color: white;
+        max-width: 400px;
+        backdrop-filter: blur(10px);
+    }
+
+    .builder-header {
+        text-align: center;
+        margin-bottom: 20px;
+    }
+
+    .builder-header h1 {
+        font-size: 24px;
+        color: #4FACFE;
+        margin-bottom: 10px;
+        text-shadow: 0 0 10px #4FACFE;
+    }
+
+    .stats {
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        font-size: 14px;
+    }
+
+    .module-selection {
+        margin-bottom: 20px;
+    }
+
+    .module-selection h3 {
+        font-size: 16px;
+        margin-bottom: 10px;
+        color: #aaa;
+    }
+
+    .module-buttons {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+    }
+
+    .module-select-btn {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid #444;
+        border-radius: 5px;
+        padding: 10px;
+        color: white;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 12px;
+    }
+
+    .module-select-btn:hover {
+        background: rgba(79, 172, 254, 0.2);
+        border-color: #4FACFE;
+    }
+
+    .module-select-btn.selected {
+        border: 2px solid #4FACFE;
+        background: rgba(79, 172, 254, 0.3);
+    }
+
+    .module-select-btn small {
+        display: block;
+        color: #888;
+        margin-top: 4px;
+    }
+
+    .cost-display {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+    }
+
+    .cost-display h3 {
+        font-size: 14px;
+        margin-bottom: 5px;
+    }
+
+    #cost-module-name {
+        color: #4FACFE;
+    }
+
+    #cost-text {
+        font-size: 14px;
+        color: #aaa;
+    }
+
+    .feedback {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+        min-height: 50px;
+    }
+
+    #placement-status {
+        font-size: 12px;
+        margin-bottom: 5px;
+        color: #4CAF50;
+    }
+
+    #tooltip-module {
+        font-size: 12px;
+        color: #888;
+    }
+
+    #tooltip-module h4 {
+        color: #fff;
+        margin-bottom: 5px;
+    }
+
+    .builder-actions {
+        display: flex;
+        gap: 10px;
+    }
+
+    .action-btn {
+        flex: 1;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        color: white;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: bold;
+    }
+
+    .exit-btn {
+        background: #F44336;
+    }
+
+    .exit-btn:hover {
+        background: #D32F2F;
+    }
+
+    .place-btn {
+        background: #4CAF50;
+    }
+
+    .place-btn:hover {
+        background: #388E3C;
+    }
+
+    /* Holographic effect for station builder */
+    .station-builder-container {
+        box-shadow: 0 0 30px rgba(79, 172, 254, 0.3);
+    }
+
+    /* Key bindings hint */
+    .key-bindings {
+        position: absolute;
+        bottom: 20px;
+        left: 20px;
+        color: #888;
+        font-size: 12px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 10px;
+        border-radius: 5px;
+        z-index: 100;
+    }
+
+    .key-bindings kbd {
+        background: #333;
+        padding: 2px 6px;
+        border-radius: 3px;
+        color: white;
+        margin: 0 2px;
+    }
+
+</style>
+</head>
+<body>
+    <div id="game-container"></div>
+
+    <div id="ui">
+        <div class="stat-row">
+            <div class="stat-label">OXYGEN</div>
+            <div id="o2-bar-container">
+                <div id="o2-bar-fill"></div>
+            </div>
+            <div class="stat-value" id="o2-value">100%</div>
+        </div>
+
+        <div class="stat-row">
+            <div class="stat-label">RESOURCES</div>
+            <div class="stat-value">
+                <span style="color: #f8e71c;">⚡ Iron: <span id="iron-value">0</span></span><br>
+                <span style="color: #00f2fe;">❄️ Ice: <span id="ice-value">0</span></span><br>
+                <span style="color: #ff6b6b;">💎 O2: <span id="o2crystal-value">0</span></span>
+            </div>
+        </div>
+    </div>
+
+    <div id="instructions">
+        <h3>Controls</h3>
+        <p>WASD - Move</p>
+        <p>Mouse - Look around</p>
+        <p>Click - Mine asteroids</p>
+        <p>ESC - Pause</p>
+        <p>1 - Show map</p>
+    </div>
+
+    <div id="crosshair"></div>
+
+    <div class="minimap">
+        <canvas id="minimap-canvas" class="minimap-canvas"></canvas>
+    </div>
+
+    <div id="game-over">
+        <h1>O2 DEPLETED</h1>
+        <p>Your survival mission has ended.</p>
+        <button onclick="location.reload()">Restart</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- =====================
+    M2 STATION BUILDER UI
+    ===================== -->
+
+<!-- Station Builder Menu Overlay -->
+<div id="station-builder-menu" style="display: none;">
+    <div class="station-builder-container">
+        <!-- Header -->
+        <div class="builder-header">
+            <h1>🚀 Station Builder</h1>
+            <div class="stats">
+                <span>⚡ Iron: <strong id="iron-display">0</strong></span>
+                <span>❄️ Ice: <strong id="ice-display">0</strong></span>
+            </div>
+        </div>
+
+        <!-- Module Selection -->
+        <div class="module-selection">
+            <h3>Select Module:</h3>
+            <div class="module-buttons">
+                <button class="module-select-btn" data-module="habitat" onclick="selectModule('habitat')">
+                    🏠 Habitat<br>
+                    <small>50 Iron | 30 Ice</small>
+                </button>
+                <button class="module-select-btn" data-module="smelter" onclick="selectModule('smelter')">
+                    🔥 Smelter<br>
+                    <small>40 Iron | 20 Ice</small>
+                </button>
+                <button class="module-select-btn" data-module="refinery" onclick="selectModule('refinery')">
+                    💧 Refinery<br>
+                    <small>50 Ice</small>
+                </button>
+                <button class="module-select-btn" data-module="solar" onclick="selectModule('solar')">
+                    ☀️ Solar Panel<br>
+                    <small>30 Iron</small>
+                </button>
+                <button class="module-select-btn" data-module="o2gen" onclick="selectModule('o2gen')">
+                    💚 O2 Generator<br>
+                    <small>40 Ice</small>
+                </button>
+                <button class="module-select-btn" data-module="comms" onclick="selectModule('comms')">
+                    📡 Comms Array<br>
+                    <small>60 Iron | 40 Ice</small>
+                </button>
+            </div>
+        </div>
+
+        <!-- Cost Display -->
+        <div class="cost-display">
+            <h3>Selected: <span id="cost-module-name">Habitat Module</span></h3>
+            <div id="cost-text">
+                🏠 Habitat Module<br>
+                Iron: 50 | Ice: 30
+            </div>
+        </div>
+
+        <!-- Feedback -->
+        <div id="placement-feedback" class="feedback">
+            <div id="placement-status">Ready to build</div>
+            <div id="tooltip-module">
+                <h4>Instructions</h4>
+                <p>1. Select a module (1-6 or click)</p>
+                <p>2. Move with WASD</p>
+                <p>3. Click to place</p>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="builder-actions">
+            <button class="action-btn exit-btn" onclick="toggleBuilder()">Exit Builder [ESC]</button>
+            <button class="action-btn place-btn" onclick="placeModule()">Place Module [CLICK]</button>
+        </div>
+    </div>
+</div>
+
+    <script>
+        // Game State
+        const gameState = {
+            o2: 100,
+            iron: 0,
+            ice: 0,
+            o2crystal: 0,
+            isGameOver: false,
+            isPaused: false
+        };
+
+        // Scene, camera, renderer
+        
+        // =========================
+        // M2 STATION BUILDING SYSTEM
+        // Phase 1: Module Placement & Grid System
+        // =========================
+
+        // Module Configuration (6 types)
+        const STATION_MODULES = {
+            habitat: {
+                name: 'Habitat Module',
+                icon: '🏠',
+                color: 0x4FACFE,
+                size: 20,
+                cost: { iron: 50, ice: 30 },
+                description: 'Pressurized living space'
+            },
+            smelter: {
+                name: 'Smelter',
+                icon: '🔥',
+                color: 0xFFA500,
+                size: 18,
+                cost: { iron: 40, ice: 20 },
+                description: 'Refine ore into metals'
+            },
+            refinery: {
+                name: 'Electrolysis Refinery',
+                icon: '💧',
+                color: 0x4F86F7,
+                size: 18,
+                cost: { ice: 50 },
+                description: 'Split water into O2 + H2'
+            },
+            solar: {
+                name: 'Solar Panel',
+                icon: '☀️',
+                color: 0xFFFF00,
+                size: 16,
+                cost: { iron: 30 },
+                description: 'Generate power from sunlight'
+            },
+            o2gen: {
+                name: 'O2 Generator',
+                icon: '💚',
+                color: 0x4CAF50,
+                size: 16,
+                cost: { ice: 40 },
+                description: 'Produce oxygen from water'
+            },
+            comms: {
+                name: 'Comms Array',
+                icon: '📡',
+                color: 0xFF4F4F,
+                size: 22,
+                cost: { iron: 60, ice: 40 },
+                description: 'Build signal relay'
+            }
+        };
+
+        // Grid System Configuration
+        const GRID_SIZE = 10;  // 10x10 station grid
+        const GRID_SPACING = 5;  // World units between grid points
+
+        // Game State Extension - M2 Station Building
+        if (typeof gameState !== 'undefined') {
+            gameState.isBuilderOpen = false;
+            gameState.currentModule = 'habitat';
+            gameState.stationModules = [];  // Array of {type, x, z}
+            gameState.grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+        } else {
+            console.warn('⚠️ gameState not found - defining it');
+            const gameState = {
+                o2: 100,
+                iron: 0,
+                ice: 0,
+                o2crystal: 0,
+                isGameOver: false,
+                isPaused: false,
+                // M2 Station Building State
+                isBuilderOpen: false,
+                currentModule: 'habitat',
+                stationModules: [],
+                grid: Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null))
+            };
+        }
+
+        // Selected Module Display
+        let selectedModule = 'habitat';
+        let ghostMesh = null;
+
+        // Keyboard state for builder (reuse existing keys object from game controls below)
+        // const keys = {};  // REMOVED — duplicate declaration, original game defines this below
+
+        // =========================
+        // STATION BUILDER FUNCTIONS
+        // =========================
+
+        // Initialize Station Builder System
+        function initStationBuilder() {
+            console.log('🚀 Station Builder Initialized');
+            createModuleGrid();
+            createGhostModule();
+            setupBuilderControls();
+        }
+
+        // Create Invisible Grid for Placement
+        function createModuleGrid() {
+            const gridSize = GRID_SIZE * GRID_SPACING;
+            const gridHelper = new THREE.GridHelper(gridSize, GRID_SIZE, 0x333333, 0x222222);
+            scene.add(gridHelper);
+        }
+
+        // Create Ghost Module (Preview)
+        function createGhostModule() {
+            if (ghostMesh) scene.remove(ghostMesh);
+            
+            const module = STATION_MODULES[selectedModule];
+            const geometry = new THREE.BoxGeometry(module.size, module.size * 0.5, module.size);
+            
+            // Holographic material with transparency
+            const material = new THREE.MeshBasicMaterial({
+                color: module.color,
+                transparent: true,
+                opacity: 0.3,
+                side: THREE.DoubleSide
+            });
+            
+            ghostMesh = new THREE.Mesh(geometry, material);
+            ghostMesh.position.copy(camera.position);
+            ghostMesh.visible = false;  // Initially hidden
+            
+            // Add wireframe edges for visibility
+            const edges = new THREE.EdgesGeometry(geometry);
+            const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+            const wireframe = new THREE.LineSegments(edges, lineMaterial);
+            ghostMesh.add(wireframe);
+            
+            scene.add(ghostMesh);
+        }
+
+        // Setup Builder Controls
+        function setupBuilderControls() {
+            document.addEventListener('keydown', (e) => {
+                keys[e.code] = true;
+                
+                // 'B' key - Toggle Builder
+                if (e.code === 'KeyB') {
+                    toggleBuilder();
+                }
+                
+                // Number keys - Select Module (1-6)
+                const numKeys = { 
+                    'Digit1': 'habitat', 'Digit2': 'smelter', 'Digit3': 'refinery',
+                    'Digit4': 'solar', 'Digit5': 'o2gen', 'Digit6': 'comms' 
+                };
+                if (numKeys[e.code]) {
+                    selectModule(numKeys[e.code]);
+                }
+            });
+            
+            document.addEventListener('keyup', (e) => {
+                keys[e.code] = false;
+            });
+        }
+
+        // Toggle Station Builder
+        function toggleBuilder() {
+            gameState.isBuilderOpen = !gameState.isBuilderOpen;
+            
+            const builderMenu = document.getElementById('station-builder-menu');
+            if (builderMenu) {
+                builderMenu.style.display = gameState.isBuilderOpen ? 'block' : 'none';
+            }
+            
+            if (ghostMesh) ghostMesh.visible = gameState.isBuilderOpen;
+            
+            console.log(gameState.isBuilderOpen ? '🛠️ Builder Open' : '⏹️ Builder Closed');
+        }
+
+        // Select Module Type
+        function selectModule(moduleType) {
+            if (STATION_MODULES[moduleType]) {
+                selectedModule = moduleType;
+                
+                // Update UI
+                const module = STATION_MODULES[moduleType];
+                const selectBtns = document.querySelectorAll('.module-select-btn');
+                selectBtns.forEach(btn => {
+                    btn.style.border = btn.dataset.module === moduleType ? '2px solid #4FACFE' : '1px solid #444';
+                });
+                
+                // Update cost text
+                const costText = document.getElementById('cost-text');
+                if (costText) {
+                    costText.innerHTML = `${module.icon} ${module.name}<br>
+                                        Iron: ${module.cost.iron || 0} | Ice: ${module.cost.ice || 0}`;
+                    costText.style.color = '#' + module.color.toString(16).padStart(6, '0');
+                }
+                
+                console.log(`Selected: ${module.name}`);
+            }
+        }
+
+        // Place Module (Click Handler)
+        function placeModule() {
+            if (!gameState.isBuilderOpen) return;
+            
+            const module = STATION_MODULES[selectedModule];
+            
+            // Snap to grid
+            const gridX = Math.round((ghostMesh.position.x + GRID_SIZE * GRID_SPACING / 2) / GRID_SPACING);
+            const gridZ = Math.round((ghostMesh.position.z + GRID_SIZE * GRID_SPACING / 2) / GRID_SPACING);
+            
+            // Validate placement
+            if (!isValidPlacement(selectedModule, gridX, gridZ)) {
+                showPlacementFeedback(gridX, gridZ, false);
+                return;
+            }
+            
+            // Check resource cost
+            if (checkResources(module.cost)) {
+                // Deduct resources
+                gameState.iron -= module.cost.iron || 0;
+                gameState.ice -= module.cost.ice || 0;
+                
+                // Place module
+                placeStructure(selectedModule, gridX, gridZ);
+                showPlacementFeedback(gridX, gridZ, true);
+            } else {
+                showPlacementFeedback(gridX, gridZ, false);
+            }
+        }
+
+        // Validate Module Placement
+        function isValidPlacement(moduleType, gridX, gridZ) {
+            // Check grid bounds
+            if (gridX < 0 || gridX >= GRID_SIZE || gridZ < 0 || gridZ >= GRID_SIZE) return false;
+            
+            // Check if cell is occupied
+            if (gameState.grid[gridX][gridZ] !== null) return false;
+            
+            return true;
+        }
+
+        // Check Resources
+        function checkResources(cost) {
+            const ironEnough = gameState.iron >= (cost.iron || 0);
+            const iceEnough = gameState.ice >= (cost.ice || 0);
+            
+            if (!ironEnough) {
+                console.warn('❌ Insufficient Iron!');
+            }
+            if (!iceEnough) {
+                console.warn('❌ Insufficient Ice!');
+            }
+            
+            return ironEnough && iceEnough;
+        }
+
+        // Place Structure in 3D Scene
+        function placeStructure(moduleType, gridX, gridZ) {
+            const module = STATION_MODULES[moduleType];
+            
+            // Calculate world position
+            const x = (gridX - GRID_SIZE / 2) * GRID_SPACING;
+            const z = (gridZ - GRID_SIZE / 2) * GRID_SPACING;
+            
+            // Create 3D mesh
+            const geometry = new THREE.BoxGeometry(module.size, module.size * 0.5, module.size);
+            const material = new THREE.MeshStandardMaterial({
+                color: module.color,
+                metalness: 0.8,
+                roughness: 0.2
+            });
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, module.size / 2, z);
+            
+            // Add glow effect
+            const glowGeometry = new THREE.SphereGeometry(module.size * 0.3, 16, 16);
+            const glowMaterial = new THREE.MeshBasicMaterial({
+                color: module.color,
+                transparent: true,
+                opacity: 0.3
+            });
+            const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+            glow.position.set(x, 0, z);
+            mesh.add(glow);
+            
+            // Add module data
+            mesh.userData = {
+                type: moduleType,
+                gridX,
+                gridZ,
+                cost: module.cost
+            };
+            
+            scene.add(mesh);
+            
+            // Update grid and station modules
+            gameState.grid[gridX][gridZ] = moduleType;
+            gameState.stationModules.push({
+                type: moduleType,
+                x: gridX,
+                z: gridZ
+            });
+            
+            console.log(`Placed: ${module.name} at [${gridX}, ${gridZ}]`);
+        }
+
+        // Show Placement Feedback
+        function showPlacementFeedback(gridX, gridZ, isValid) {
+            const feedback = document.getElementById('placement-feedback');
+            const status = document.getElementById('placement-status');
+            const tooltip = document.getElementById('tooltip-module');
+            
+            if (feedback) {
+                feedback.style.display = 'block';
+                status.textContent = isValid ? '✓ Valid Placement' : '✗ Cannot Place Here';
+                status.style.color = isValid ? '#4CAF50' : '#F44336';
+                
+                if (isValid) {
+                    tooltip.innerHTML = `<h4>Module Placed!</h4><p>Position: [${gridX}, ${gridZ}]</p>`;
+                } else {
+                    tooltip.innerHTML = `<h4>Placement Failed</h4><p>${gridX < 0 || gridX >= GRID_SIZE ? 'Outside grid bounds' : 'Cell already occupied'}</p>`;
+                }
+            }
+        }
+
+        // Update Builder in Game Loop
+        function updateBuilder(deltaTime) {
+            if (!gameState.isBuilderOpen || !ghostMesh) return;
+            
+            // Move ghost module with camera
+            const moveSpeed = 10;
+            const moveDirection = new THREE.Vector3();
+            
+            if (keys['KeyW']) moveDirection.z -= 1;
+            if (keys['KeyS']) moveDirection.z += 1;
+            if (keys['KeyA']) moveDirection.x -= 1;
+            if (keys['KeyD']) moveDirection.x += 1;
+            
+            if (moveDirection.length() > 0) {
+                moveDirection.normalize().multiplyScalar(moveSpeed);
+                ghostMesh.position.add(moveDirection);
+            }
+            
+            // Update ghost rotation (face camera)
+            ghostMesh.quaternion.copy(camera.quaternion);
+        }
+
+const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('game-container').appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(50, 50, 50);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 500;
+        directionalLight.shadow.camera.left = -100;
+        directionalLight.shadow.camera.right = 100;
+        directionalLight.shadow.camera.top = 100;
+        directionalLight.shadow.camera.bottom = -100;
+        scene.add(directionalLight);
+
+        const pointLight = new THREE.PointLight(0x4facfe, 1, 100);
+        pointLight.position.set(0, 10, 0);
+        scene.add(pointLight);
+
+        // Stars
+        const starsGeometry = new THREE.BufferGeometry();
+        const starsMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.5,
+            sizeAttenuation: true
+        });
+
+        const starPositions = [];
+        for (let i = 0; i < 2000; i++) {
+            starPositions.push(
+                (Math.random() - 0.5) * 500,
+                (Math.random() - 0.5) * 500,
+                (Math.random() - 0.5) * 500
+            );
+        }
+
+        starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+        const stars = new THREE.Points(starsGeometry, starsMaterial);
+        scene.add(stars);
+
+        // Asteroids (3D)
+        const asteroidGeometry = new THREE.IcosahedronGeometry(5, 1);
+        const asteroidMaterial = new THREE.MeshStandardMaterial({
+            color: 0x8b7355,
+            roughness: 0.8,
+            metalness: 0.2
+        });
+
+        const asteroids = [];
+        const asteroidPositions = [];
+
+        for (let i = 0; i < 30; i++) {
+            const asteroid = new THREE.Mesh(asteroidGeometry, asteroidMaterial.clone());
+
+            // Random position
+            const x = (Math.random() - 0.5) * 150;
+            const y = (Math.random() - 0.5) * 50;
+            const z = (Math.random() - 0.5) * 150;
+            asteroid.position.set(x, y, z);
+
+            // Random rotation
+            asteroid.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+
+            // Different asteroid types
+            const type = Math.random();
+            if (type < 0.4) {
+                // Iron ore asteroid
+                asteroid.material.color.setHex(0xc0c0c0);
+                asteroid.userData = { type: 'iron', health: 3 };
+            } else if (type < 0.7) {
+                // Water ice asteroid
+                asteroid.material.color.setHex(0xaaddff);
+                asteroid.userData = { type: 'ice', health: 3 };
+            } else {
+                // Oxygen crystal asteroid
+                asteroid.material.color.setHex(0xff6b6b);
+                asteroid.userData = { type: 'o2crystal', health: 1 };
+            }
+
+            asteroid.castShadow = true;
+            asteroid.receiveShadow = true;
+            scene.add(asteroid);
+            asteroids.push(asteroid);
+            asteroidPositions.push({
+                position: asteroid.position.clone(),
+                mesh: asteroid
+            });
+        }
+
+        // Player
+        camera.position.set(0, 5, 0);
+        camera.castShadow = true;
+
+        // Pointer lock
+        document.body.addEventListener('click', () => {
+            if (!gameState.isGameOver && !gameState.isPaused) {
+                renderer.domElement.requestPointerLock();
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement !== renderer.domElement) {
+                gameState.isPaused = true;
+            } else {
+                gameState.isPaused = false;
+            }
+        });
+
+        // Controls
+        const keys = {};
+        const moveSpeed = 0.1;
+        const mouseSensitivity = 0.002;
+
+        document.addEventListener('keydown', (e) => keys[e.code] = true);
+        document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        let yaw = 0;
+        let pitch = 0;
+
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === renderer.domElement) {
+                yaw -= e.movementX * mouseSensitivity;
+                pitch -= e.movementY * mouseSensitivity;
+                pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+            }
+        });
+
+        // Mining
+        const raycaster = new THREE.Raycaster();
+        document.addEventListener('mousedown', (e) => {
+            if (e.button === 0 && document.pointerLockElement === renderer.domElement) {
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const intersects = raycaster.intersectObjects(asteroids);
+
+                if (intersects.length > 0) {
+                    const hit = intersects[0];
+                    const target = asteroids[asteroids.indexOf(hit.object)];
+
+                    if (target) {
+                        target.userData.health--;
+
+                        // Particle explosion
+                        for (let i = 0; i < 5; i++) {
+                            const particle = new THREE.Mesh(
+                                new THREE.SphereGeometry(0.5),
+                                new THREE.MeshBasicMaterial({ color: target.material.color })
+                            );
+                            particle.position.copy(target.position);
+                            particle.userData = {
+                                velocity: new THREE.Vector3(
+                                    (Math.random() - 0.5) * 5,
+                                    (Math.random() - 0.5) * 5 + 2,
+                                    (Math.random() - 0.5) * 5
+                                ),
+                                life: 1.0
+                            };
+                            scene.add(particle);
+
+                            const particles = [];
+                            particles.push({ mesh: particle, velocity: particle.userData.velocity, life: 1.0 });
+                        }
+
+                        if (target.userData.health <= 0) {
+                            scene.remove(target);
+
+                            // Add resources
+                            if (target.userData.type === 'iron') {
+                                gameState.iron += 5;
+                            } else if (target.userData.type === 'ice') {
+                                gameState.ice += 5;
+                            } else if (target.userData.type === 'o2crystal') {
+                                gameState.o2crystal += 1;
+                            }
+
+                            // Remove from array
+                            const index = asteroids.indexOf(target);
+                            if (index > -1) {
+                                asteroids.splice(index, 1);
+                            }
+
+                            // Spawn new asteroid
+                            const newAsteroid = new THREE.Mesh(asteroidGeometry, asteroidMaterial.clone());
+                            const type = Math.random();
+                            if (type < 0.4) {
+                                newAsteroid.material.color.setHex(0xc0c0c0);
+                                newAsteroid.userData = { type: 'iron', health: 3 };
+                            } else if (type < 0.7) {
+                                newAsteroid.material.color.setHex(0xaaddff);
+                                newAsteroid.userData = { type: 'ice', health: 3 };
+                            } else {
+                                newAsteroid.material.color.setHex(0xff6b6b);
+                                newAsteroid.userData = { type: 'o2crystal', health: 1 };
+                            }
+                            newAsteroid.position.set(
+                                (Math.random() - 0.5) * 150,
+                                (Math.random() - 0.5) * 50,
+                                (Math.random() - 0.5) * 150
+                            );
+                            newAsteroid.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+                            newAsteroid.castShadow = true;
+                            newAsteroid.receiveShadow = true;
+                            scene.add(newAsteroid);
+                            asteroids.push(newAsteroid);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Minimap
+        const minimapCanvas = document.getElementById('minimap-canvas');
+        const minimapCtx = minimapCanvas.getContext('2d');
+        minimapCanvas.width = 150;
+        minimapCanvas.height = 150;
+
+        function updateMinimap() {
+            minimapCtx.clearRect(0, 0, 150, 150);
+            minimapCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            minimapCtx.beginPath();
+            minimapCtx.arc(75, 75, 70, 0, Math.PI * 2);
+            minimapCtx.fill();
+
+            asteroids.forEach(asteroid => {
+                const x = (asteroid.position.x / 100 + 1) / 2 * 150;
+                const y = (asteroid.position.z / 100 + 1) / 2 * 150;
+                minimapCtx.fillStyle = asteroid.material.color.getHexString();
+                minimapCtx.beginPath();
+                minimapCtx.arc(x, y, 3, 0, Math.PI * 2);
+                minimapCtx.fill();
+            });
+
+            minimapCtx.fillStyle = '#4facfe';
+            minimapCtx.beginPath();
+            minimapCtx.arc(75, 75, 4, 0, Math.PI * 2);
+            minimapCtx.fill();
+        }
+
+        function updateUI() {
+            const o2BarFill = document.getElementById('o2-bar-fill');
+            const o2Value = document.getElementById('o2-value');
+            const ironValue = document.getElementById('iron-value');
+            const iceValue = document.getElementById('ice-value');
+            const o2crystalValue = document.getElementById('o2crystal-value');
+
+            o2BarFill.style.width = `${gameState.o2}%`;
+            o2Value.textContent = `${Math.round(gameState.o2)}%`;
+
+            o2BarFill.style.background = gameState.o2 < 30
+                ? 'linear-gradient(90deg, #ff6b6b 0%, #ff8e8e 100%)'
+                : 'linear-gradient(90deg, #4facfe 0%, #00f2fe 100%)';
+
+            ironValue.textContent = gameState.iron;
+            iceValue.textContent = gameState.ice;
+            o2crystalValue.textContent = gameState.o2crystal;
+
+            if (gameState.o2 <= 0 && !gameState.isGameOver) {
+                gameState.isGameOver = true;
+                document.exitPointerLock();
+                document.getElementById('game-over').style.display = 'block';
+            }
+        }
+
+        // Main game loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (gameState.isGameOver || gameState.isPaused) {
+                return;
+            }
+
+            // Update camera rotation
+            camera.rotation.order = 'YXZ';
+            camera.rotation.y = yaw;
+            camera.rotation.x = pitch;
+
+            // Player movement
+            const moveDirection = new THREE.Vector3();
+            if (keys['KeyW']) moveDirection.z -= 1;
+            if (keys['KeyS']) moveDirection.z += 1;
+            if (keys['KeyA']) moveDirection.x -= 1;
+            if (keys['KeyD']) moveDirection.x += 1;
+
+            if (moveDirection.length() > 0) {
+                moveDirection.normalize().multiplyScalar(moveSpeed);
+                camera.position.add(moveDirection);
+            }
+
+            // O2 depletion (1% per second)
+            gameState.o2 = Math.max(0, gameState.o2 - 0.016);
+
+            // Update particles
+            for (let i = asteroids.length - 1; i >= 0; i--) {
+                const asteroid = asteroids[i];
+                asteroid.rotation.x += 0.001;
+                asteroid.rotation.y += 0.002;
+            }
+
+            updateUI();
+            updateMinimap();
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start game
+        console.log('🎮 Spacenautica loaded!');
+        console.log('Asteroids will appear. Mine them for resources and maintain your O2 level!');
+        console.log('Controls: WASD movement, Mouse look, Click to mine');
+
+        // Initialize M2 Station Builder
+        initStationBuilder();
+
+        animate();
+    </script>
+
+</body>
+</html>

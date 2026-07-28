@@ -1,20 +1,14 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
 
 export default defineConfig({
-  plugins: [react()],
-  base: '/spacenautica/',
+  base: './',
   build: {
     outDir: 'dist',
     sourcemap: true,
+    target: 'es2022',
+    chunkSizeWarningLimit: 2500,
   },
-  server: {
-    port: 8000,
-    host: true,
-  },
-  resolve: {
-    alias: {
-      '@': '/src',
-    },
-  },
+  server: { port: 8000, host: true },
+  preview: { port: 4173, host: true },
+  resolve: { alias: { '@': '/src' } },
 });
