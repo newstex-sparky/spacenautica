@@ -19,7 +19,7 @@ const args = Object.fromEntries(
 );
 
 const OUT = resolve(args.out ?? 'screenshots/ci');
-const ROOT = resolve('dist');
+const ROOT = resolve(args.dist ?? 'dist');
 const WIDTH = Number(args.width ?? 1920);
 const HEIGHT = Number(args.height ?? 1080);
 
@@ -73,7 +73,7 @@ function serve(root, port) {
 
 async function main() {
   if (!existsSync(ROOT)) {
-    console.error('dist/ missing — run `npm run build` first');
+    console.error(`${ROOT} missing — run \`npm run build\` first`);
     process.exit(1);
   }
   await mkdir(OUT, { recursive: true });
@@ -101,8 +101,12 @@ async function main() {
     errors.push('TIMEOUT: window.__READY__ never became true');
   }
 
+  const only = typeof args.shots === 'string' && args.shots !== 'all'
+    ? new Set(args.shots.split(',').map((s) => s.trim()))
+    : null;
   const results = [];
   for (const shot of SHOTS) {
+    if (only && !only.has(shot.id)) continue;
     await page.evaluate((s) => {
       const g = window.__GAME__;
       if (!g) return;
