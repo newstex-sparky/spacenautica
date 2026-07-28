@@ -244,8 +244,11 @@ export const defaultNoise = new Noise(20260728);
  * ------------------------------------------------------------------ */
 
 export const NOISE_GLSL = /* glsl */ `
+#ifndef SN_NOISE_INCLUDED
+#define SN_NOISE_INCLUDED
 vec3 sn_mod289(vec3 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
 vec4 sn_mod289(vec4 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
+vec3 sn_permute(vec3 x){ return sn_mod289(((x*34.0)+1.0)*x); }
 vec4 sn_permute(vec4 x){ return sn_mod289(((x*34.0)+1.0)*x); }
 vec4 sn_taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314 * r; }
 
@@ -373,6 +376,7 @@ float hash11(float p){ p = fract(p*0.1031); p *= p+33.33; p *= p+p; return fract
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*0.1031); p3 += dot(p3, p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
 vec2  hash22(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*vec3(0.1031,0.1030,0.0973)); p3 += dot(p3, p3.yzx+33.33); return fract((p3.xx+p3.yz)*p3.zy); }
 vec3  hash33(vec3 p){ p = fract(p*vec3(0.1031,0.1030,0.0973)); p += dot(p, p.yxz+33.33); return fract((p.xxy+p.yxx)*p.zyx); }
+#endif
 `;
 
 /** Utility GLSL shared by many materials: triplanar sampling, ACES, blending. */
@@ -401,5 +405,8 @@ float heightBlend(float h1, float h2, float t, float depth){
   return b2 / max(b1 + b2, 1e-4);
 }
 
-float luminance(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+// Named snLuminance, not luminance: three emits its own
+// "float luminance(const in vec3)" in the fragment prefix for tone mapping, and
+// GLSL treats a differing parameter qualifier as a redefinition.
+float snLuminance(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 `;

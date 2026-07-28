@@ -75,9 +75,9 @@ void matSurface(MatCtx c, inout MatOut o){
   // --- substrate: two-tone, blended by a large patch mask, plus a very low
   //     frequency hue/value drift. This is the macro-variation layer that keeps
   //     the tile from reading as one flat colour when repeated 40 times.
-  float patch = 0.5 + 0.5 * bk_fbm(uv * mC * 0.5, mC * 0.5, 3, 0.6);
+  float patchN = 0.5 + 0.5 * bk_fbm(uv * mC * 0.5, mC * 0.5, 3, 0.6);
   float macro = bk_perlin(uv * vec2(2.0, 2.0), vec2(2.0, 2.0));
-  vec3 base = mix(uColA, uColB, smoothstep(0.2, 0.85, patch));
+  vec3 base = mix(uColA, uColB, smoothstep(0.2, 0.85, patchN));
   base = bk_hueShift(base, macro * uP[7].x);
   base *= 1.0 + macro * uP[7].y;
 

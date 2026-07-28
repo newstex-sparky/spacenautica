@@ -6,7 +6,7 @@
  * Params
  *   uP[3] = joint cells.xy, joint width.z, joint depth.w
  *   uP[4] = bedding wave numbers.xy, bedding amplitude.z, vesicle/pit density.w
- *   uP[5] = encrustation coverage.x, coralline patch scale.y, barnacle density.z, biofilm.w
+ *   uP[5] = encrustation coverage.x, coralline patchN scale.y, barnacle density.z, biofilm.w
  */
 export const ROCK_GLSL = /* glsl */ `
 // Two generations of fracture joints, coarse then fine, so the rock has a
@@ -127,9 +127,9 @@ void matSurface(MatCtx c, inout MatOut o){
 
   // --- biological encrustation. Only in crevices (curvature) AND inside large
   //     patches, so it looks colonised rather than sprayed on uniformly.
-  float patch = smoothstep(0.35, 0.8, 0.5 + 0.5 * bk_fbm(uv * uP[5].y + 7.0, vec2(uP[5].y), 4, 0.6));
+  float patchN = smoothstep(0.35, 0.8, 0.5 + 0.5 * bk_fbm(uv * uP[5].y + 7.0, vec2(uP[5].y), 4, 0.6));
   float shelter = clamp(c.curv * 2.2, 0.0, 1.0) * 0.6 + joints * 0.7 + (1.0 - c.ao) * 0.5;
-  float bio = clamp(shelter, 0.0, 1.0) * patch * uP[5].x;
+  float bio = clamp(shelter, 0.0, 1.0) * patchN * uP[5].x;
 
   // coralline algae (pink), green film, dark biofilm — three species, not one
   float which = 0.5 + 0.5 * bk_fbm(uv * uP[5].y * 2.3 + 21.0, vec2(uP[5].y * 2.3), 3, 0.6);

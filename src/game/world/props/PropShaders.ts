@@ -34,9 +34,10 @@ import { UNDERWATER_GLSL } from '../water/UnderwaterFog';
  *     `float luminance(const in vec3)` that three's own fragment prefix emits
  *     for tone mapping. We simply do not include `COMMON_GLSL`.
  */
-export const NOISE_COMPAT_GLSL = /* glsl */ `
-vec3 sn_permute(vec3 x){ return mod(((x * 34.0) + 1.0) * x, 289.0); }
-`;
+// Issue 1 is now fixed at source: `core/Noise.ts` declares the `vec3` overload
+// itself, so this prelude must stay empty — emitting the overload here as well
+// would be a redefinition. The export is kept so call sites stay untouched.
+export const NOISE_COMPAT_GLSL = '';
 
 /** Material families. Each compiles to its own program via a `#define`. */
 export type PropMatKind = 'rock' | 'metal' | 'alien' | 'crystal' | 'organic';

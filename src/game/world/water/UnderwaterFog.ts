@@ -16,7 +16,13 @@
  * `viewDir` is the normalised direction from the eye toward the shaded point;
  * `dot(viewDir, uwSunDir) == 1` means you are looking straight at the sun.
  */
+// Every shared chunk in this file is wrapped in an include guard. Materials are
+// assembled by several independent systems and a chunk can legitimately arrive
+// twice in one shader (e.g. a prop that patches in fog itself and then gets the
+// global patch too); without the guard that is a redefinition link error.
 export const UNDERWATER_UNIFORMS_GLSL = /* glsl */ `
+#ifndef UW_UNIFORMS_INCLUDED
+#define UW_UNIFORMS_INCLUDED
 uniform vec3  uwExtinction;    // per-metre beam extinction, RGB (red dies first)
 uniform vec3  uwInscatter;     // linear inscattered colour at the surface
 uniform float uwSurfaceY;      // world Y of the sea surface
@@ -25,9 +31,12 @@ uniform vec3  uwSunDir;        // toward the sun
 uniform vec3  uwSunColor;
 uniform float uwTime;
 uniform float uwCameraDepth;
+#endif
 `;
 
 export const UNDERWATER_FUNCS_GLSL = /* glsl */ `
+#ifndef UW_FUNCS_INCLUDED
+#define UW_FUNCS_INCLUDED
 /** Downwelling irradiance factor reaching 'depth' metres below the surface. */
 vec3 waterDownwelling(float depth) {
   // Diffuse attenuation Kd is lower than beam extinction c; 0.62 is the ratio
@@ -72,6 +81,7 @@ vec3 applyUnderwater(vec3 color, float dist, float wy, vec3 viewDir) {
 
   return color * T + inscattered;
 }
+#endif
 `;
 
 /** Convenience: the two chunks concatenated. */
@@ -85,13 +95,18 @@ export const UNDERWATER_GLSL = UNDERWATER_UNIFORMS_GLSL + UNDERWATER_FUNCS_GLSL;
  * ------------------------------------------------------------------ */
 
 export const UNDERWATER_CAUSTICS_UNIFORMS_GLSL = /* glsl */ `
+#ifndef UW_CAUSTIC_UNIFORMS_INCLUDED
+#define UW_CAUSTIC_UNIFORMS_INCLUDED
 uniform sampler2D uwCausticsMap;
 // x: strength, y: world tile size in metres, z: depth falloff scale,
 // w: 1 when materials should apply caustics themselves (no screen-space pass).
 uniform vec4  uwCausticsParams;
+#endif
 `;
 
 export const UNDERWATER_CAUSTICS_GLSL = /* glsl */ `
+#ifndef UW_CAUSTICS_INCLUDED
+#define UW_CAUSTICS_INCLUDED
 /**
  * Animated caustics at a world position. The texture is a seamless 48 m tile,
  * so it is sampled twice — rotated and at a different scale — and combined,
@@ -115,6 +130,7 @@ vec3 waterCaustics(vec3 wpos, vec3 wnrm) {
   float fall = exp(-depth * uwCausticsParams.z);
   return c * (uwCausticsParams.x * facing * fall);
 }
+#endif
 `;
 
 /** Everything, including the optional caustics helpers. */

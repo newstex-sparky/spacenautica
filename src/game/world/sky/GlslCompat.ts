@@ -15,9 +15,7 @@
  * belongs in `core/Noise.ts`, which this module does not own — see the
  * integration notes.
  */
-export const NOISE_COMPAT_GLSL = /* glsl */ `
-vec3 sn_permute(vec3 x) {
-  vec3 m = ((x * 34.0) + 1.0) * x;
-  return m - floor(m * (1.0 / 289.0)) * 289.0;
-}
-`;
+// Fixed at source: `core/Noise.ts` now declares the `vec3` overload (and the
+// whole chunk carries an include guard), so this prelude must stay empty or the
+// overload is defined twice. Kept as an export so call sites stay untouched.
+export const NOISE_COMPAT_GLSL = '';
