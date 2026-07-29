@@ -260,6 +260,7 @@ export class SkyDome {
         uGalNormal: { value: new THREE.Vector3(0, 0, 1) },
         uGalCentre: { value: new THREE.Vector3(1, 0, 0) },
         uStarBrightness: { value: 1 },
+        uStarFade: { value: 0 },
         uPixelAngle: { value: this.pixelAngle },
         uSunRadius: { value: 0.004654 },
         uSunRadiance: { value: new THREE.Vector3(1, 1, 1) },

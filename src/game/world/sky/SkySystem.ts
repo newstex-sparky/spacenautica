@@ -415,6 +415,9 @@ export class SkySystem implements GameSystem {
     u.uAurora.value = this.auroraStrength;
     (u.uStarRot.value as THREE.Matrix3).copy(this.celestial.starRot);
     u.uMoonIllum.value = this.celestial.moonIllum;
+    // First-magnitude stars appear around civil dusk; the field is fully out by
+    // the time the sun is 8 degrees down.
+    u.uStarFade.value = 1 - smoothstep(-0.22, 0.0, this.sunDirection.y);
 
     // Sun radiance used to light the cloud deck: the sun colour as seen from
     // cloud altitude. A deck at 1.5 km sees the sun set later than the eye does,

@@ -271,6 +271,13 @@ const FRAG_EMISSIVE = /* glsl */ `
   // --- bioluminescent markings ---
   if (uSurf.w > 0.001) {
     float gp = smoothstep(0.45, 0.86, fnSnoise3(vec3(fUv * uGlowP.x, fHash * 9.0)));
+    // Far away the markings are sub-pixel, so sampling the mask point-wise makes
+    // a deep-zone creature flicker between "lit" and "unlit" and mostly land on
+    // unlit — it reads as a dark speck instead of a glow. Dissolve the mask into
+    // its own mean as it stops being resolvable: hand-rolled mip averaging, and
+    // the reason a bioluminescent animal is a soft dot at 40 m rather than
+    // nothing at all.
+    gp = mix(0.35, gp, fFade);
     float pulse = 0.5 + 0.5 * sin(uTime * uGlowP.y * 2.0 + fHash * 40.0 + fT * 5.0);
     totalEmissiveRadiance += uGlowCol * gp * (0.4 + 0.6 * pulse) * uSurf.w * vExtra.x;
   }
@@ -292,11 +299,14 @@ const FRAG_EMISSIVE = /* glsl */ `
 
   // --- thin membranes pick up ambient from both sides ---
   if (fPart > 0.5 && fPart < 1.5) {
-    totalEmissiveRadiance += uwInscatter * uSurf.z * 0.5;
+    totalEmissiveRadiance += uwInscatter * uSurf.z * 0.4 * fDown;
   }
 
   // --- caustic dapple from the surface above ---
   #ifdef FAUNA_CAUSTICS
+  // NOTE: waterCaustics() already folds in its own depth falloff; fDown is the
+  // remaining daylight term, exactly as world/water/MaterialPatch.ts does it on
+  // terrain, so a fish and the sand beneath it agree.
   // waterCaustics() is the water system's own helper, reading its own
   // uwCausticsParams: strength, world tile size and depth falloff all arrive
   // live from WaterSystem, so a fish swimming over sand is dappled by exactly
@@ -307,17 +317,17 @@ const FRAG_EMISSIVE = /* glsl */ `
   // applying caustics in both places would double the highlights.
   if (uwCausticsParams.w > 0.5 && vFWorld.y < uwSurfaceY) {
     vec3 caus = waterCaustics(vFWorld, normalize(vFWNrm));
-    totalEmissiveRadiance += caus * uwSunColor * uGlowP.z
-                             * waterDownwelling(uwSurfaceY - vFWorld.y);
+    totalEmissiveRadiance += caus * uwSunColor * uGlowP.z * fDown;
   }
   #endif
 `;
 
 const FRAG_OUT = /* glsl */ `
-  // Subsurface transmission through thin fins when backlit by the sun.
+  // Subsurface transmission through thin fins when backlit by the sun. uwSunColor
+  // is the above-surface sun, so this needs the same fDown as everything else.
   if (vBody.y > 0.5 && vBody.y < 1.5) {
     float back = pow(max(dot(normalize(vFView), normalize(uwSunDir)), 0.0), 3.0);
-    gl_FragColor.rgb += diffuseColor.rgb * uwSunColor * back * uSurf.z * 1.3;
+    gl_FragColor.rgb += diffuseColor.rgb * uwSunColor * back * uSurf.z * 1.3 * fDown;
   }
   gl_FragColor.rgb = applyUnderwater(gl_FragColor.rgb, vFDist, vFWorld.y, normalize(vFView));
 `;

@@ -131,6 +131,14 @@ uniform mat3  uStarRot;
 uniform vec3  uGalNormal;
 uniform vec3  uGalCentre;
 uniform float uStarBrightness;
+/**
+ * Daylight extinction of the star field, 1 at night and 0 once the sun is up.
+ * The stars are drawn as per-pixel Gaussians rather than true point sources, so
+ * their rendered radiance does not scale the way a real star's does against a
+ * daytime sky and they will not drown on their own — at noon they were plainly
+ * visible through the blue.
+ */
+uniform float uStarFade;
 uniform float uPixelAngle;
 uniform float uSunRadius;
 uniform vec3  uSunRadiance;
@@ -166,13 +174,18 @@ vec3 starUnproject(vec2 uv, float face) {
   return normalize(d);
 }
 
-/** Stellar colour from a hashed effective temperature. */
+/**
+ * Stellar colour from a hashed effective temperature. The exponent sets the
+ * spectral-class mix: at 2.6 roughly two thirds of the field is blue-white to
+ * white and only about an eighth is gold or red, which is what a real naked-eye
+ * sky looks like. Lower exponents turn the whole field amber.
+ */
 vec3 starTint(float h) {
   vec3 hot  = vec3(0.72, 0.82, 1.00);
   vec3 warm = vec3(1.00, 0.98, 0.95);
   vec3 gold = vec3(1.00, 0.87, 0.68);
   vec3 red  = vec3(1.00, 0.66, 0.45);
-  float t = pow(h, 1.6);
+  float t = pow(h, 2.6);
   vec3 c = mix(hot, warm, smoothstep(0.0, 0.30, t));
   c = mix(c, gold, smoothstep(0.30, 0.68, t));
   c = mix(c, red, smoothstep(0.68, 1.0, t));
@@ -194,6 +207,7 @@ float milkyWay(vec3 cd, out vec3 tint) {
 }
 
 vec3 starField(vec3 worldDir) {
+  if (uStarFade <= 0.002) return vec3(0.0);
   vec3 cd = normalize(uStarRot * worldDir);
   vec3 mwTint;
   float mw = milkyWay(cd, mwTint);
@@ -245,7 +259,7 @@ vec3 starField(vec3 worldDir) {
       col += tint * flux * spike * exp(-ang / (uPixelAngle * 9.0)) * 0.0068 * uStarBrightness;
     }
   }
-  return col;
+  return col * uStarFade;
 }
 
 /* ---- sun ---- */

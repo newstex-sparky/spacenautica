@@ -62,6 +62,18 @@ three 0.185's `RenderTarget.setSize()` never touches an attached `depthTexture`,
 so the prepass FBO goes incomplete on the first adaptive-resolution change and the
 driver rejects every operation against it. Confirmed against the installed source.
 
+**flora density vs framing.** Terrain reports that after the flora fill fix,
+plants now occlude most of the `02_shallows_floor` frame. Worth judging from a
+settled capture before acting: it may be correct density that simply needs a
+different camera height, rather than too much flora. Owner: integrator to judge,
+then flora if real.
+
+**terrain is calibrated against WaterProfiles Jerlov IA.** The floor's albedo and
+tint work was tuned against the water column the water system currently ships. If
+the shallows extinction re-thickens, the floor will flatten again — the two are
+coupled and neither owns the coupling. Any future change to shallow-water
+extinction needs a terrain re-check. Owner: integrator.
+
 ## Per-subsystem
 
 **systems** — Creative mode does not auto-unlock the tech tree. Arguably it

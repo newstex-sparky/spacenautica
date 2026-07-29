@@ -191,6 +191,25 @@ void main() {
   vec3 warm = mix(vec3(0.94, 0.96, 1.0), vec3(1.30, 0.92, 0.55), toSun * lowSun);
   vec3 hazeCol = uSunIrradiance * (0.0032 + 0.019 * max(0.0, uSunDir.y)) * dayGate * warm;
   vec3 lum = s.lum + hazeCol * uHaze * pow(horizon, 3.0) * (0.5 + 0.85 * toSun);
+
+  /*
+   * Twilight wedge.
+   *
+   * After sunset all the light in the sky comes from the 40-80 km slab that is
+   * still in sunlight, and its density is under 1% of sea level. A 20-36 step
+   * single-scatter march cannot resolve that slab, so with physics alone the sky
+   * drops from daylight to the airglow floor within a couple of minutes of
+   * sunset and both the golden and the blue hour disappear. This adds the missing
+   * energy back with the shape it actually has: a warm wedge low in the sun's
+   * azimuth over an all-sky blue lift, both dying out by the time the sun is
+   * 15 degrees down.
+   */
+  float duskGate = smoothstep(0.05, -0.015, uSunDir.y) * smoothstep(0.26, -0.01, -uSunDir.y);
+  if (duskGate > 0.002) {
+    float wedge = pow(toSun, 2.2) * pow(clamp(1.0 - abs(dir.y) * 2.6, 0.0, 1.0), 2.0);
+    vec3 duskCol = mix(vec3(0.19, 0.27, 0.58), vec3(1.00, 0.38, 0.16), pow(toSun, 3.0));
+    lum += duskCol * (0.15 * duskGate) * (0.34 + 0.66 * wedge);
+  }
   gl_FragColor = vec4(lum, 1.0);
 }
 `;
