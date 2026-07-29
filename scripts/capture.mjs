@@ -59,7 +59,8 @@ export const SHOTS = [
   { id: '05_deep_dark', pos: [-320, 0, -280], aboveFloor: 6, biome: 'blood_kelp', yaw: 0.3, pitch: -0.15,
     tod: 12.0,
     intent: 'Deep zone: near-black water, bioluminescence, torch cone, marine snow.' },
-  { id: '06_surface_above', pos: [0, 0, 0], y: 2.6, biome: 'shallows', yaw: 0.9, pitch: -0.06, tod: 17.6,
+  { id: '06_surface_above', pos: [0, 0, 0], y: 2.6, biome: 'shallows', freeze: true, yaw: 0.9, pitch: -0.06,
+    tod: 17.6,
     intent: 'Above water at golden hour: ocean surface, sky, sun glitter, horizon.' },
   { id: '07_night_dive', pos: [40, 0, 40], aboveFloor: 3.0, biome: 'shallows', yaw: 2.6, pitch: -0.1,
     tod: 22.0,
@@ -343,6 +344,26 @@ async function main() {
         );
       }
     }
+    // Some vantage points cannot survive their own physics. An eye held above the
+    // water line gets floated back down to it by buoyancy between pins, so
+    // "above water at golden hour" is unphotographable while the simulation runs —
+    // the frame comes back at depth 0 wearing the half-submerged grade no matter
+    // what the sky does. Engine.paused freezes the World..Gameplay phase band,
+    // which contains Physics, while render phases keep running, so the sequence is:
+    // settle with simulation live, then freeze, re-pin, and let the render phases
+    // converge on the held pose.
+    if (shot.freeze) {
+      await page.evaluate(() => { const g = window.__GAME__; if (g) g.paused = true; });
+      await pin();
+      const frozenFrom = await pin();
+      const frozenDeadline = Date.now() + 60000;
+      while (Date.now() < frozenDeadline) {
+        const f = await pin();
+        if (f - frozenFrom >= (shot.freezeFrames ?? 6)) break;
+        await page.waitForTimeout(50);
+      }
+    }
+
     // One last pin so the photographed frame is the pinned one.
     await pin();
 
@@ -354,7 +375,8 @@ async function main() {
       const g = window.__GAME__;
       if (!g) return null;
       const p = g.tryGet('player');
-      const w = g.tryGet('world.terrain') ?? g.tryGet('world');
+      // Same accessor the resolver uses; tryGet('world') alone returns nothing here.
+      const w = g.world ?? g.tryGet('world.terrain') ?? g.tryGet('world');
       let biome = null;
       try {
         biome = p && w?.biomeAt ? (w.biomeAt(p.position.x, p.position.z)?.name ?? null) : null;
@@ -393,6 +415,9 @@ async function main() {
         `${shot.id}: camera drifted to ${observed.pos.join(', ')} from ` +
           `${resolved.pos.map((v) => v.toFixed(1)).join(', ')} — pose pin is not holding`,
       );
+    }
+    if (shot.freeze) {
+      await page.evaluate(() => { const g = window.__GAME__; if (g) g.paused = false; });
     }
     console.log(
       `captured ${shot.id}` +
