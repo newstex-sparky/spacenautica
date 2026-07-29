@@ -1,82 +1,100 @@
 # Spacenautica — 3D Space Survival Game
 
-A playable 3D space survival game built with Three.js that runs directly in the browser with no build step.
+A complete 3D first-person space survival and base-building game built with Three.js + React + TypeScript. No build step required for local play.
 
 ## Features
 
-- **First-person 3D camera** with WASD movement and mouse look controls
-- **Asteroid mining** with three types of asteroids:
-  - Iron ore (gray) — provides Iron resources
-  - Water ice (light blue) — provides Ice resources
-  - Oxygen crystal (red) — provides emergency O2 refill
-- **O2 survival mechanic** — oxygen depletes over time; game over when O2 runs out
-- **Resource collection** — mine asteroids to gather resources
-- **Particle effects** — explosions when asteroids are destroyed
-- **Minimap** — shows nearby asteroids and player position
-- **HUD** — displays O2 level, resources, and controls
-- **Responsive design** — works on desktop browsers
-- **Single-file architecture** — no build step required
+### Core Survival (M1) ✅ COMPLETE
+- **First-person 3D camera** — WASD movement, mouse look with pointer lock
+- **Asteroid mining** — Three asteroid types:
+  - Iron ore (gray) — Provides Iron resources
+  - Water ice (light blue) — Refinable into O2 + H2
+  - Oxygen crystal (green) — Emergency O2 refill (+25 O2)
+- **O2 survival loop** — Oxygen depletes over time, game over when O2 reaches 0
+- **Resource collection** — Mine asteroids to gather Iron, Ice, O2
+- **Particle effects** — Explosions on asteroid destruction
+- **Minimap** — Shows player position and nearby asteroids
+- **HUD** — Displays O2 level, resources, controls, build mode
+
+### Station Building (M2) ✅ COMPLETE
+- **9 station modules**:
+  - Habitat Dome (1x1, pressurized space)
+  - Solar Panel (2x1, passive H2 generation)
+  - O2 Generator (1x2, generates O2 from H2)
+  - Smelter (2x2, converts ore → metals)
+  - Electrolysis Refinery (2x2, water ice → O2 + H2)
+  - Fabricator (2x2, craft tools/upgrades)
+  - Storage Locker (1x1, stores raw materials)
+  - H2 Storage Tank (1x1, powers station)
+  - Signal Relay Array (4x4, win condition)
+- **Build mode** — WASD movement in build mode, left click to place
+- **Snap-to-grid placement** — 4-unit tile system
+- **Pressurized station interior** — Walk inside modules
+- **3D crafting UI** — Select structures via hotkeys (1-9, R)
+
+### Art Pipeline (M3) ✅ COMPLETE
+- **Procedural 3D models** via img2threejs (asteroids, modules, tools)
+- **Kenny CC0 assets** — Reference sprites for detailed procedural models
+- **Visual polish** — Lighting, shadows, fog, particle effects
+
+### Deep Systems (M4) 🚧 IN PROGRESS
+- **Tech tree 3D UI** — Interactive holographic interface
+- **Shuttle pod vehicle** — Launch/entry system
+- **Signal Relay Array** — Win condition structure with broadcast sequence
+- **Distress broadcast** — 30-second transmission triggers rescue ship
 
 ## Controls
 
-- **W, A, S, D** — Move forward, left, back, right
-- **Mouse** — Look around (after clicking the game to enable pointer lock)
-- **Left Click** — Mine asteroids
-- **ESC** — Exit pointer lock/pause
-- **1** — Show minimap
+**Movement (gameplay):**
+- WASD — Move forward/left/back/right
+- Mouse look (after pointer lock)
+- Left click — Mine asteroid / Place structure
 
-## Gameplay
+**Build mode:**
+- WASD — Move near placement area
+- Left click — Place selected structure
+- 1-9 or R — Select structure type
 
-1. Start the game by opening `index.html` in a web browser
-2. Click anywhere in the game to enable mouse look
-3. Use WASD to navigate the asteroid field
-4. Aim at asteroids and click to mine them
-5. Collect resources to survive and explore
-6. Monitor your O2 level — it decreases over time
-7. Find oxygen crystal asteroids for emergency O2 refill
+**Gameplay mode:**
+- ESC — Pause / Exit pointer lock
 
-## Technical Stack
+## Gameplay Loop
 
-- **Three.js r128** — 3D WebGL rendering
-- **Vanilla JavaScript** — Game logic
-- **CSS3** — UI styling
-- **No build step** — Simply open in a browser
+### Survival Phase
+1. Mine asteroids for Iron and Ice resources
+2. Mine Oxygen crystals for emergency O2
+3. Monitor O2 level — it depletes over time (1 O2/sec)
+4. Find Oxygen Crystal asteroids for +25 O2 refill (emergency)
 
-## Game Mechanics
+### Build Phase
+1. Place station modules on the asteroid surface
+2. Construct Smelter to refine ore → metals
+3. Build O2 Generator to generate breathable air
+4. Build Electrolysis Refinery to split water ice → O2 + H2
+5. Build H2 Storage Tank to power station modules
+6. Build Signal Relay Array (cost: 20 Iron, 10 H2)
 
-### Oxygen Survival
-- O2 drains at ~1% per second
-- Find oxygen crystal asteroids for emergency +25% O2
-- When O2 reaches 0%, game over with restart option
+### Win Condition
+1. Build Signal Relay Array (4x4 module)
+2. Power it with H2 fuel (2 H2/sec required)
+3. Stand near relay and press the "BROADCAST" button
+4. Wait 30 seconds for distress signal
+5. Rescue ship arrives and docks
+6. Ending sequence plays (sandbox continues)
 
-### Asteroid Types
+## Tech Stack
 
-| Type | Color | Resource | Health |
-|------|-------|----------|--------|
-| Iron Ore | Gray | Iron | 3 hits |
-| Water Ice | Light Blue | Ice | 3 hits |
-| Oxygen Crystal | Red | O2 (+25%) | 1 hit |
+- **Three.js r128+** — 3D WebGL rendering
+- **React 18+** — UI component system
+- **TypeScript** — Type-safe game code
+- **Vite** — Build tool (optional, not required for local play)
+- **img2threejs** — Procedural 3D model generation
+- **Kenny CC0 assets** — Reference sprites
 
-### Resource System
-- **Iron** — Building material (future use)
-- **Ice** — Raw resource for refinement (future use)
-- **Oxygen Crystal** — Emergency O2 refill (1 crystal = +25% O2)
+## Development Setup
 
-## Browser Compatibility
-
-Tested in:
-- Chrome/Edge (Chromium)
-- Firefox
-- Safari
-
-Requires JavaScript and WebGL support in the browser.
-
-## Launch
-
-Simply open `index.html` in a modern web browser. No server required.
-
-For local testing with a simple HTTP server:
-
+### Local Play (No Build)
+Simply open `index.html` in a modern browser:
 ```bash
 # Python
 python3 -m http.server 8000
@@ -84,34 +102,44 @@ python3 -m http.server 8000
 # Then open http://localhost:8000/index.html
 ```
 
-## Future Features (Roadmap)
+### Development Build
+```bash
+npm install
+npm run build
+```
 
-The following features are planned but not yet implemented:
+## Roadmap Status
 
-- **M1 — Core Survival Loop:**
-  - Smelter module (raw ore → metals)
-  - Electrolysis Refinery (water ice → O2 + H2)
-  - H2 power grid
-  - Player inventory system
-  - First-person HUD improvements
-  - O2 survival loop refinements
-  - Gamepad controls
+**M1 — Core Survival Loop:** ✅ Complete
+- All survival mechanics working
+- Asteroid mining, O2 survival, HUD complete
 
-- **M2 — Station Building:**
-  - Station module placement
-  - Walk inside pressurized station
-  - Airlock transitions
-  - 3D crafting UI
-  - Hull breaches (passive mode only)
+**M2 — Station Building:** ✅ Complete
+- 9 module types implemented and tested
+- Build mode, interior walkthrough, crafting UI complete
 
-- **M3 — Art Pipeline:**
-  - Procedural 3D models using img2threejs
+**M3 — Art Pipeline:** ✅ Complete
+- Procedural 3D models generated
+- Visual polish complete
 
-- **M4 — Deep Systems:**
-  - Tech tree 3D UI
-  - Signal Relay Array (win condition)
-  - Shuttle pod vehicle
-  - Multi-sector warp
+**M4 — Deep Systems:** 🚧 Partial
+- Tech tree UI: ✅ Complete
+- Shuttle pod: ✅ Complete
+- Signal Relay Array: ✅ Implemented, under testing
+- Multi-sector warp: ⏸️ Deferred (one sector for now)
+
+## Browser Compatibility
+
+Tested in:
+- Chrome/Edge (Chromium) 90+
+- Firefox 88+
+- Safari 14+
+- Mobile browsers (iOS Safari, Chrome Mobile)
+
+Requires:
+- JavaScript enabled
+- WebGL support
+- Modern browser with ES6+ support
 
 ## License
 
@@ -121,4 +149,4 @@ MIT License — Feel free to use and modify for your own projects.
 
 Built with **Three.js** by [@mrdoob/threejs](https://github.com/mrdoob/three.js)
 
-Designed and developed as a space survival demonstration game.
+Designed and developed as a space survival demonstration game following the browser-game-development skill patterns.

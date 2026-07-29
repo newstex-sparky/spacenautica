@@ -1,494 +1,619 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 
-// ====================== Game Constants ======================
-const PLAYER_HEIGHT = 1.6;
-const PLAYER_SPEED = 5;
+/**
+ * Shuttle Pod Component
+ *
+ * First-person cockpit view for pilotable shuttle.
+ * Free 3D flight (6DOF: pitch, yaw, roll, thrust) in the asteroid sector.
+ */
 
-// Shuttle pod types
-type ShuttleType = 'shuttle-mk1' | 'shuttle-rescue';
+// ====================== Constants ======================
 
-interface ShuttlePod {
-  type: ShuttleType;
-  name: string;
-  maxFuel: number;
-  currentFuel: number;
-  maxSpeed: number;
-  minSpeed: number;
-  acceleration: number;
-  deceleration: number;
-  maneuverability: number;
-  hudColor: number;
+const SHUTTLE_SPEED = 15;
+const SHUTTLE_TURN_SPEED = 0.02;
+const SHUTTLE_THRUST_POWER = 0.8;
+const SHUTTLE_ROTATION_DAMPING = 0.95;
+
+// ====================== Component ======================
+
+interface Shuttle3DProps {
+  onDock?: () => void;
+  onArrive?: () => void;
+  onLaunch?: () => void;
+  onLand?: () => void;
+  onCargoUpdate?: (cargo: any) => void;
+  onFuelUpdate?: (fuel: number) => void;
+  shuttlePosition?: THREE.Vector3;
+  shuttleType?: 'shuttle-mk1' | 'shuttle-rescue';
 }
 
-const SHUTTLE_PODS: Record<ShuttleType, ShuttlePod> = {
-  'shuttle-mk1': {
-    type: 'shuttle-mk1',
-    name: 'Shuttle MK-1',
-    maxFuel: 100,
-    currentFuel: 100,
-    maxSpeed: 15,
-    minSpeed: 5,
-    acceleration: 8,
-    deceleration: 4,
-    maneuverability: 0.03,
-    hudColor: 0x00ffff,
-  },
-  'shuttle-rescue': {
-    type: 'shuttle-rescue',
-    name: 'Rescue Shuttle',
-    maxFuel: 150,
-    currentFuel: 100,
-    maxSpeed: 12,
-    minSpeed: 4,
-    acceleration: 6,
-    deceleration: 3,
-    maneuverability: 0.04,
-    hudColor: 0xff6b6b,
-  },
-};
-
-// Shuttle state (when player is in shuttle)
-interface ShuttleState {
-  inShuttle: boolean;
-  currentShuttleType: ShuttleType;
-  shuttlePosition: THREE.Vector3;
-  shuttleVelocity: THREE.Vector3;
-  throttle: number;
-  heading: number;
-  pitchAngle: number;
-  isEngineOn: boolean;
-  isAirbrakeOn: boolean;
-}
-
-const SHUTTLE_SPAWN_POSITION = new THREE.Vector3(0, 0, 20);
-const SHUTTLE_BAY_OFFSET = new THREE.Vector3(0, 0, 4);
-const SHUTTLE_BAY_MODULE_TYPE = 'shuttle-bay';
-
-// ====================== Save/Load Callback Props ======================
-export interface Shuttle3DProps {
-  onGetState?: () => any;
-  onRestoreState?: (state: any) => void;
-  newGame?: () => void;
-}
-
-export function Shuttle3D({ onGetState, onRestoreState, newGame }: Shuttle3DProps = {}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // UI state
-  const [gameState, setGameState] = useState({
-    inShuttle: false,
-    currentShuttleType: 'shuttle-mk1',
-    throttle: 0,
-    heading: 0,
-    pitchAngle: 0,
-    fuelPercent: 100,
-    hudMessage: '',
-    hudMessageTimeout: 0,
-  });
-
-  // Three.js refs
+export function Shuttle3D({
+  onDock,
+  onArrive,
+  onLaunch,
+  onLand,
+  onCargoUpdate,
+  onFuelUpdate,
+  shuttlePosition = new THREE.Vector3(0, 0, 0),
+  shuttleType = 'shuttle-mk1',
+}: Shuttle3DProps) {
+  const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const playerRef = useRef<THREE.Group | null>(null);
-  const shuttleGroupRef = useRef<THREE.Group | null>(null);
-  const shuttleHudGroupRef = useRef<THREE.Group | null>(null);
-  const shuttleThrustRef = useRef<THREE.Mesh | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
-  // Shuttle state refs
-  const shuttleStateRef = useRef<ShuttleState>({
-    inShuttle: false,
-    currentShuttleType: 'shuttle-mk1',
-    shuttlePosition: SHUTTLE_SPAWN_POSITION.clone(),
-    shuttleVelocity: new THREE.Vector3(0, 0, 0),
-    throttle: 0,
-    heading: 0,
-    pitchAngle: 0,
-    isEngineOn: false,
-    isAirbrakeOn: false,
+  // Player state for 6DOF flight
+  const [flightState, setFlightState] = useState({
+    position: shuttlePosition.clone(),
+    rotation: new THREE.Euler(0, 0, 0),
+    velocity: new THREE.Vector3(0, 0, 0),
+    angularVelocity: new THREE.Vector3(0, 0, 0),
+    throttle: 0, // 0-1, forward thrust
+    up: false,
+    forward: false,
+    backward: false,
+    left: false,
+    right: false,
   });
 
-  // Input refs
-  const keysRef = useRef<Record<string, boolean>>({});
-  const gameLoopRef = useRef<number | null>(null);
+  // Fuel state (100% max)
+  const [fuel, setFuel] = useState(100);
 
-  // ====================== Save/Load Helpers ======================
-  const buildSaveData = useCallback((): any => {
-    if (!sceneRef.current || !playerRef.current || !cameraRef.current) {
-      throw new Error('Cannot save: scene or camera not initialized');
-    }
+  // Cargo state
+  const [cargo, setCargo] = useState({
+    iron: 0,
+    ice: 0,
+    rawOre: 0,
+    ironMetal: 0,
+    titanium: 0,
+    oxygen: 0,
+    h2: 0,
+  });
 
-    const player = playerRef.current;
-    const camera = cameraRef.current;
-    const shuttleState = shuttleStateRef.current;
+  // HUD state
+  const [hudVisible, setHudVisible] = useState(true);
+  const [stationDistance, setStationDistance] = useState(999);
 
-    return {
-      version: '1.0.0-shuttle',
-      timestamp: Date.now(),
-      player: {
-        position: [player.position.x, player.position.y, player.position.z],
-        rotation: [player.rotation.x, player.rotation.y, player.rotation.z],
-      },
-      shuttle: {
-        inShuttle: shuttleState.inShuttle,
-        currentShuttleType: shuttleState.currentShuttleType,
-        shuttlePosition: [shuttleState.shuttlePosition.x, shuttleState.shuttlePosition.y, shuttleState.shuttlePosition.z],
-        shuttleVelocity: [shuttleState.shuttleVelocity.x, shuttleState.shuttleVelocity.y, shuttleState.shuttleVelocity.z],
-        throttle: shuttleState.throttle,
-        heading: shuttleState.heading,
-        pitchAngle: shuttleState.pitchAngle,
-      },
-    };
-  }, []);
+  // Shuttle status
+  const [shuttleStatus, setShuttleStatus] = useState<'docked' | 'launching' | 'flying' | 'landed'>('docked');
 
-  // Expose current state via callback
+  // Track if we're in autopilot mode (return trip)
+  const [autopilotMode, setAutopilotMode] = useState(false);
+
+  // Initialize shuttle scene
   useEffect(() => {
-    if (onGetState) {
-      try {
-        onGetState();
-      } catch (e) {
-        console.error('Error in onGetState:', e);
-      }
-    }
-  }, [onGetState]);
-
-  // ====================== Initialize Three.js ======================
-  useEffect(() => {
-    if (!containerRef.current) return;
+    if (!mountRef.current) return;
 
     // Create scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000011);
-    scene.fog = new THREE.FogExp2(0x000011, 0.015);
+    scene.background = new THREE.Color(0x050510); // Deep space
+    scene.fog = new THREE.FogExp2(0x050510, 0.008);
     sceneRef.current = scene;
 
     // Create camera (first-person cockpit view)
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, PLAYER_HEIGHT, 0);
+    const camera = new THREE.PerspectiveCamera(
+      70,
+      mountRef.current.clientWidth / mountRef.current.clientHeight,
+      0.1,
+      1000
+    );
+    camera.position.set(0, 0.7, 0); // Cockpit height
     cameraRef.current = camera;
 
-    // Create renderer with preserveDrawingBuffer for screenshots
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      preserveDrawingBuffer: true,
-    });
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    // Create renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    mountRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
-    containerRef.current.appendChild(renderer.domElement);
 
-    // Create starfield
-    createStarfield(scene);
+    // Create shuttle group
+    const shuttleGroup = createShuttlePodModel(shuttleType);
+    shuttleGroup.position.copy(flightState.position);
+    scene.add(shuttleGroup);
+    (shuttleGroup as any).shuttleCamera = camera;
 
-    // Create player (empty group for camera attachment)
-    const player = new THREE.Group();
-    player.position.set(0, PLAYER_HEIGHT, 0);
-    playerRef.current = player;
-    scene.add(player);
+    // Space background (stars)
+    const starsGeometry = new THREE.BufferGeometry();
+    const starsCount = 1000;
+    const starsPositions = new Float32Array(starsCount * 3);
 
-    // Create shuttle pod
-    createShuttlePod(scene, 'shuttle-mk1');
+    for (let i = 0; i < starsCount * 3; i += 3) {
+      starsPositions[i] = (Math.random() - 0.5) * 200;
+      starsPositions[i + 1] = (Math.random() - 0.2) * 200;
+      starsPositions[i + 2] = (Math.random() - 0.5) * 200;
+    }
 
-    // Handle pointer lock
-    const handlePointerLock = () => {
-      containerRef.current?.requestPointerLock();
+    starsGeometry.setAttribute('position', new THREE.BufferAttribute(starsPositions, 3));
+    const starsMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5 });
+    const stars = new THREE.Points(starsGeometry, starsMaterial);
+    scene.add(stars);
+
+    // Asteroids in shuttle range
+    const asteroidGeometry = new THREE.IcosahedronGeometry(0.5, 0);
+    const asteroidMaterial = new THREE.MeshStandardMaterial({
+      color: 0x666666,
+      roughness: 0.8,
+      metalness: 0.2,
+    });
+
+    const asteroids: THREE.Mesh[] = [];
+    for (let i = 0; i < 10; i++) {
+      const asteroid = new THREE.Mesh(asteroidGeometry, asteroidMaterial);
+      asteroid.position.set(
+        (Math.random() - 0.5) * 20,
+        (Math.random() - 0.5) * 10,
+        (Math.random() - 0.5) * 50
+      );
+      asteroid.userData.isAsteroid = true;
+      scene.add(asteroid);
+      asteroids.push(asteroid);
+    }
+
+    // HUD element
+    const hudElement = document.createElement('div');
+    hudElement.id = 'shuttle-hud';
+    hudElement.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      display: ${hudVisible ? 'flex' : 'none'};
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 20px;
+      z-index: 100;
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      color: #00ff00;
+    `;
+    mountRef.current.appendChild(hudElement);
+
+    // HUD content
+    const speedDisplay = document.createElement('div');
+    speedDisplay.style.cssText = `
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      text-shadow: 0 0 10px #00ff00;
+    `;
+    const fuelDisplay = document.createElement('div');
+    fuelDisplay.style.cssText = `
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      text-shadow: 0 0 10px #00ff00;
+    `;
+    const altitudeDisplay = document.createElement('div');
+    altitudeDisplay.style.cssText = `
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      text-shadow: 0 0 10px #00ff00;
+    `;
+    const headingDisplay = document.createElement('div');
+    headingDisplay.style.cssText = `
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      text-shadow: 0 0 10px #00ff00;
+    `;
+    const statusDisplay = document.createElement('div');
+    statusDisplay.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      text-shadow: 0 0 10px #00ff00;
+      font-size: 24px;
+      font-weight: bold;
+    `;
+    statusDisplay.id = 'shuttle-status';
+
+    hudElement.appendChild(speedDisplay);
+    hudElement.appendChild(fuelDisplay);
+    hudElement.appendChild(altitudeDisplay);
+    hudElement.appendChild(headingDisplay);
+    hudElement.appendChild(statusDisplay);
+
+    // Handle input changes
+    const handleInput = useCallback(() => {
+      setFlightState((prev) => ({
+        ...prev,
+        throttle: flightState.throttle,
+        up: flightState.up,
+        forward: flightState.forward,
+        backward: flightState.backward,
+        left: flightState.left,
+        right: flightState.right,
+      }));
+    }, [flightState]);
+
+    // Keyboard handlers
+    const handleKeyDown = useCallback((event: KeyboardEvent) => {
+      switch (event.code) {
+        case 'Space':
+          setFlightState((prev) => ({ ...prev, throttle: 1 }));
+          break;
+        case 'KeyW':
+          setFlightState((prev) => ({ ...prev, forward: true }));
+          break;
+        case 'KeyS':
+          setFlightState((prev) => ({ ...prev, backward: true }));
+          break;
+        case 'KeyA':
+          setFlightState((prev) => ({ ...prev, left: true }));
+          break;
+        case 'KeyD':
+          setFlightState((prev) => ({ ...prev, right: true }));
+          break;
+        case 'KeyE':
+          setFlightState((prev) => ({ ...prev, up: true }));
+          break;
+        case 'KeyQ':
+          setFlightState((prev) => ({ ...prev, up: false }));
+          break;
+        case 'KeyR':
+          // Toggle autopilot return
+          setAutopilotMode((prev) => !prev);
+          break;
+      }
+    }, []);
+
+    const handleKeyUp = useCallback((event: KeyboardEvent) => {
+      switch (event.code) {
+        case 'Space':
+          setFlightState((prev) => ({ ...prev, throttle: 0 }));
+          break;
+        case 'KeyW':
+          setFlightState((prev) => ({ ...prev, forward: false }));
+          break;
+        case 'KeyS':
+          setFlightState((prev) => ({ ...prev, backward: false }));
+          break;
+        case 'KeyA':
+          setFlightState((prev) => ({ ...prev, left: false }));
+          break;
+        case 'KeyD':
+          setFlightState((prev) => ({ ...prev, right: false }));
+          break;
+      }
+    }, []);
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    // Handle docking
+    const checkDocking = useCallback(
+      (shuttlePos: THREE.Vector3) => {
+        const stationPosition = new THREE.Vector3(0, 0, 0);
+        const distance = shuttlePos.distanceTo(stationPosition);
+
+        if (distance < 10 && !flightState.up) {
+          setShuttleStatus('docked');
+          if (shuttleStatus === 'flying') {
+            onDock?.();
+          }
+        }
+      },
+      [onDock, flightState.up, shuttleStatus]
+    );
+
+    // Handle arrival at station
+    const checkArrival = useCallback(
+      (shuttlePos: THREE.Vector3) => {
+        const stationPosition = new THREE.Vector3(0, 0, 0);
+        const distance = shuttlePos.distanceTo(stationPosition);
+
+        if (distance < 5 && shuttleStatus !== 'docked') {
+          setShuttleStatus('landed');
+          if (shuttleStatus === 'flying') {
+            onArrive?.();
+          }
+        }
+      },
+      [onArrive, shuttleStatus]
+    );
+
+    // Animation loop
+    const animate = () => {
+      animationFrameRef.current = requestAnimationFrame(animate);
+
+      const position = flightState.position.clone();
+      const rotation = flightState.rotation.clone();
+      const velocity = flightState.velocity.clone();
+      const angularVelocity = flightState.angularVelocity.clone();
+
+      // Apply thrust in forward direction
+      const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(
+        new THREE.Quaternion().setFromEuler(rotation)
+      );
+      const up = new THREE.Vector3(0, 1, 0);
+
+      if (flightState.throttle > 0) {
+        velocity.add(forward.clone().multiplyScalar(SHUTTLE_THRUST_POWER * flightState.throttle * 0.01));
+      }
+      if (flightState.up) {
+        velocity.add(up.clone().multiplyScalar(SHUTTLE_THRUST_POWER * flightState.throttle * 0.01));
+      }
+      if (flightState.backward) {
+        velocity.sub(forward.clone().multiplyScalar(SHUTTLE_THRUST_POWER * 0.01));
+      }
+      if (flightState.left) {
+        angularVelocity.y -= SHUTTLE_TURN_SPEED;
+      }
+      if (flightState.right) {
+        angularVelocity.y += SHUTTLE_TURN_SPEED;
+      }
+
+      // Apply rotation with damping
+      rotation.x += angularVelocity.x;
+      rotation.y += angularVelocity.y;
+      rotation.z += angularVelocity.z;
+
+      angularVelocity.multiplyScalar(SHUTTLE_ROTATION_DAMPING);
+
+      // Apply velocity with damping
+      velocity.multiplyScalar(0.99);
+
+      // Update position
+      position.add(velocity);
+
+      // Fuel consumption based on distance and throttle
+      if (flightState.throttle > 0) {
+        const fuelConsumption = flightState.throttle * 0.01;
+        setFuel((prev) => {
+          const newFuel = Math.max(0, prev - fuelConsumption);
+          onFuelUpdate?.(newFuel);
+          return newFuel;
+        });
+      }
+
+      // Docking
+      checkDocking(position);
+
+      // Arrival
+      checkArrival(position);
+
+      // Update camera and cockpit
+      const shuttleGroup = sceneRef.current?.getObjectByProperty('type', 'Group') as THREE.Group | null;
+      if (shuttleGroup) {
+        shuttleGroup.position.copy(position);
+        shuttleGroup.rotation.copy(rotation);
+
+        // Update shuttle camera
+        const shuttleCamera = (shuttleGroup as any).shuttleCamera as THREE.PerspectiveCamera | null;
+        if (shuttleCamera && cameraRef.current) {
+          cameraRef.current.position.copy(position);
+          cameraRef.current.quaternion.copy(shuttleGroup.quaternion);
+          cameraRef.current.translateZ(1); // Place camera in front of player
+        }
+
+        // Update thrust glow
+        const thrustNozzle = (shuttleGroup as any).thrustNozzle as THREE.Mesh | null;
+        if (thrustNozzle) {
+          thrustNozzle.material.opacity = Math.max(0, flightState.throttle * 0.8);
+          const glowMesh = (shuttleGroup as any).thrustGlow as THREE.Mesh | null;
+          if (glowMesh) {
+            glowMesh.material.opacity = Math.max(0, flightState.throttle * 0.5);
+          }
+        }
+
+        // Update shuttle rotation to match camera
+        const shuttleHull = shuttleGroup.children.find(
+          (child) => child instanceof THREE.Mesh && child.geometry.type === 'CylinderGeometry'
+        ) as THREE.Mesh | null;
+
+        if (shuttleHull) {
+          const hullOffset = new THREE.Vector3(0.2, 0, 0);
+          hullOffset.applyQuaternion(new THREE.Quaternion().setFromEuler(rotation));
+          shuttleHull.position.copy(cameraRef.current?.position.clone().add(hullOffset) || position);
+          shuttleHull.rotation.copy(cameraRef.current?.rotation || rotation);
+        }
+      }
+
+      // Update HUD
+      const speed = velocity.length() * 100;
+      const stationPos = new THREE.Vector3(0, 0, 0);
+      setStationDistance(position.distanceTo(stationPos));
+
+      speedDisplay.textContent = `SPEED: ${speed.toFixed(1)} km/s`;
+      fuelDisplay.textContent = `FUEL: ${fuel.toFixed(1)}%`;
+      altitudeDisplay.textContent = `ALTITUDE: ${stationDistance.toFixed(1)} m`;
+      headingDisplay.textContent = `HEADING: ${Math.floor(Math.atan2(forward.x, forward.z) * (180 / Math.PI))}°`;
+      statusDisplay.textContent = shuttleStatus.toUpperCase();
+
+      // Autopilot return trip
+      if (autopilotMode && shuttleStatus === 'flying') {
+        // Simple autopilot: fly towards station at 0,0,0
+        const toStation = stationPos.clone().sub(position);
+        const distance = toStation.length();
+
+        if (distance < 20) {
+          // Approach and land
+          const approachDirection = toStation.clone().normalize();
+          velocity.add(approachDirection.multiplyScalar(SHUTTLE_THRUST_POWER * 0.02));
+          // Gradually reduce velocity for landing
+          velocity.multiplyScalar(0.98);
+        } else {
+          // Cruise towards station
+          const cruiseDirection = toStation.clone().normalize();
+          velocity.add(cruiseDirection.multiplyScalar(SHUTTLE_THRUST_POWER * 0.015));
+        }
+      }
+
+      renderer.render(scene, cameraRef.current!);
+
+      // Update position callback
+      onCargoUpdate?.(cargo);
     };
 
-    renderer.domElement.addEventListener('click', handlePointerLock);
+    animate();
 
     // Handle window resize
     const handleResize = () => {
-      if (!camera || !renderer) return;
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
+      if (mountRef.current && camera && renderer) {
+        camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+      }
     };
+
     window.addEventListener('resize', handleResize);
 
-    // Handle input
-    const handleKeyDown = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = true;
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = false;
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('keyup', handleKeyUp);
-
-    // Game loop
-    const gameLoop = () => {
-      updateShuttle(deltaTime);
-      renderer.render(scene, camera);
-      gameLoopRef.current = requestAnimationFrame(gameLoop);
+    // Toggle HUD with H key
+    const handleHKeyDown = (event: KeyboardEvent) => {
+      if (event.code === 'KeyH') {
+        setHudVisible((prev) => !prev);
+      }
     };
 
-    gameLoop();
+    window.addEventListener('keydown', handleHKeyDown);
 
-    // Cleanup
     return () => {
-      renderer.domElement.removeEventListener('click', handlePointerLock);
       window.removeEventListener('resize', handleResize);
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('keyup', handleKeyUp);
-      if (gameLoopRef.current) {
-        cancelAnimationFrame(gameLoopRef.current);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('keydown', handleHKeyDown);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
       }
-      renderer.dispose();
-      playerRef.current = null;
-      cameraRef.current = null;
-      sceneRef.current = null;
+      if (mountRef.current) {
+        mountRef.current.removeChild(hudElement);
+        if (renderer) {
+          mountRef.current.removeChild(renderer.domElement);
+        }
+      }
+      if (renderer) {
+        renderer.dispose();
+      }
+      if (scene) {
+        scene.clear();
+      }
     };
-  }, [newGame]);
+  }, [flightState, fuel, cargo, shuttleStatus, autopilotMode, onDock, onArrive, onCargoUpdate, onFuelUpdate]);
 
-  // ====================== Helper Functions ======================
-  function createStarfield(scene: THREE.Scene) {
-    const starsGeometry = new THREE.BufferGeometry();
-    const starsCount = 2000;
-    const posArray = new Float32Array(starsCount * 3);
+  // Expose launch function via ref
+  const launchRef = useRef(() => {
+    setShuttleStatus('flying');
+    onLaunch?.();
+  });
+  const landRef = useRef(() => {
+    setShuttleStatus('landed');
+    onLand?.();
+  });
 
-    for (let i = 0; i < starsCount * 3; i++) {
-      posArray[i] = (Math.random() - 0.5) * 400;
-    }
+  // Update shuttle position when prop changes
+  useEffect(() => {
+    setFlightState((prev) => ({ ...prev, position: shuttlePosition.clone() }));
+  }, [shuttlePosition]);
 
-    starsGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-    const starsMaterial = new THREE.PointsMaterial({
-      size: 0.5,
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.8,
-    });
-    const starsMesh = new THREE.Points(starsGeometry, starsMaterial);
-    scene.add(starsMesh);
-  }
+  // Expose methods for external control
+  useEffect(() => {
+    (window as any).shuttle3D = {
+      launch: launchRef.current,
+      land: landRef.current,
+    };
+  }, []);
 
-  function createShuttlePod(scene: THREE.Scene, shuttleType: ShuttleType): THREE.Group {
-    const shuttle = new THREE.Group();
-    shuttle.userData.shuttleType = shuttleType;
-
-    const shuttleInfo = SHUTTLE_PODS[shuttleType];
-
-    // Main hull (elongated teardrop shape)
-    const hullGeometry = new THREE.ConeGeometry(2, 6, 8);
-    hullGeometry.rotateX(Math.PI / 2);
-    hullGeometry.rotateZ(Math.PI / 8); // Slight tilt for aerodynamic look
-    const hullMaterial = new THREE.MeshPhongMaterial({
-      color: 0x88ccff,
-      side: THREE.DoubleSide,
-      flatShading: true,
-    });
-    const hull = new THREE.Mesh(hullGeometry, hullMaterial);
-    hull.scale.set(0.6, 1, 0.6); // Flatten it
-    shuttle.add(hull);
-
-    // Cockpit canopy (transparent dome)
-    const canopyGeometry = new THREE.SphereGeometry(1.2, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
-    const canopyMaterial = new THREE.MeshPhongMaterial({
-      color: 0x00ffff,
-      transparent: true,
-      opacity: 0.6,
-      shininess: 100,
-    });
-    const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
-    canopy.position.z = 1.5;
-    canopy.position.y = 0.3;
-    canopy.rotation.x = Math.PI / 6;
-    shuttle.add(canopy);
-
-    // Wings
-    const wingGeometry = new THREE.BoxGeometry(6, 0.1, 3);
-    const wingMaterial = new THREE.MeshPhongMaterial({ color: 0x6699cc });
-    const wings = new THREE.Mesh(wingGeometry, wingMaterial);
-    wings.position.z = -1;
-    shuttle.add(wings);
-
-    // Engine nozzles
-    const engineGeometry = new THREE.CylinderGeometry(0.3, 0.4, 1, 8);
-    engineGeometry.rotateX(Math.PI / 2);
-    const engineMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
-    const leftEngine = new THREE.Mesh(engineGeometry, engineMaterial);
-    leftEngine.position.set(-1.2, 0, -3);
-    shuttle.add(leftEngine);
-
-    const rightEngine = new THREE.Mesh(engineGeometry, engineMaterial);
-    rightEngine.position.set(1.2, 0, -3);
-    shuttle.add(rightEngine);
-
-    // Shuttle HUD (holographic display)
-    createShuttleHUD(shuttle, shuttleType);
-
-    // Engine thrust particles
-    const thrustGeometry = new THREE.ConeGeometry(0.3, 1, 8);
-    thrustGeometry.rotateX(-Math.PI / 2);
-    const thrustMaterial = new THREE.MeshBasicMaterial({ color: 0x00aaff, transparent: true, opacity: 0 });
-    shuttleThrustRef.current = new THREE.Mesh(thrustGeometry, thrustMaterial);
-    shuttleThrustRef.current.position.set(0, 0, -3.5);
-    shuttleThrustRef.current.scale.set(0.5, 0.5, 0.5);
-    shuttle.add(shuttleThrustRef.current);
-
-    scene.add(shuttle);
-    return shuttle;
-  }
-
-  function createShuttleHUD(shuttle: THREE.Group, shuttleType: ShuttleType) {
-    const hud = new THREE.Group();
-    const shuttleInfo = SHUTTLE_PODS[shuttleType];
-
-    // Main HUD panel (wireframe box)
-    const hudGeometry = new THREE.BoxGeometry(4, 3, 0.5);
-    const hudMaterial = new THREE.MeshBasicMaterial({
-      color: shuttleInfo.hudColor,
-      transparent: true,
-      opacity: 0.1,
-      wireframe: true,
-    });
-    const hudPanel = new THREE.Mesh(hudGeometry, hudMaterial);
-    hudPanel.position.set(0, 0, 4);
-    hud.add(hudPanel);
-
-    // Speedometer arc (torus)
-    const speedometerGeometry = new THREE.TorusGeometry(1, 0.1, 16, 32, Math.PI);
-    const speedometerMaterial = new THREE.MeshBasicMaterial({ color: shuttleInfo.hudColor });
-    const speedometer = new THREE.Mesh(speedometerGeometry, speedometerMaterial);
-    speedometer.position.set(1.5, 1, 4.5);
-    speedometer.rotation.z = Math.PI / 2;
-    hud.add(speedometer);
-
-    // Heading indicator (line)
-    const headingGeometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 4.2),
-      new THREE.Vector3(0, 0, 5.2),
-    ]);
-    const headingMaterial = new THREE.LineBasicMaterial({ color: 0xff00ff });
-    const headingLine = new THREE.Line(headingGeometry, headingMaterial);
-    hud.add(headingLine);
-
-    // Thrust bar (rectangular)
-    const thrustGeometry = new THREE.BoxGeometry(1.5, 0.1, 0.4);
-    const thrustMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-    const thrustBar = new THREE.Mesh(thrustGeometry, thrustMaterial);
-    thrustBar.position.set(-1.5, 0.6, 4.2);
-    hud.add(thrustBar);
-
-    hud.userData.hudElement = thrustBar;
-    shuttle.add(hud);
-  }
-
-  // ====================== Update Functions ======================
-  let deltaTime = 0.016;
-  const camera = cameraRef.current || new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
-
-  function updateShuttle(dt: number) {
-    deltaTime = dt;
-    const keys = keysRef.current;
-    const shuttleState = shuttleStateRef.current;
-    const shuttleInfo = SHUTTLE_PODS[shuttleState.currentShuttleType];
-
-    if (!shuttleState.inShuttle) return;
-
-    // Handle input
-    if (keys['KeyW'] || keys['ArrowUp']) {
-      shuttleState.throttle = Math.min(shuttleState.throttle + dt * shuttleInfo.acceleration, 1);
-      if (shuttleThrustRef.current) {
-        shuttleThrustRef.current.material.opacity = Math.min(shuttleState.throttle * 0.8, 0.8);
-        shuttleThrustRef.current.scale.setScalar(0.5 + shuttleState.throttle * 0.5);
-      }
-    } else if (keys['KeyS'] || keys['ArrowDown']) {
-      shuttleState.throttle = Math.max(shuttleState.throttle - dt * shuttleInfo.deceleration, 0);
-      if (shuttleThrustRef.current) {
-        shuttleThrustRef.current.material.opacity = Math.max(shuttleState.throttle * 0.5, 0);
-      }
-    } else {
-      // Gradual throttle decay
-      shuttleState.throttle = Math.max(shuttleState.throttle - dt * shuttleInfo.deceleration * 0.5, 0);
-      if (shuttleThrustRef.current) {
-        shuttleThrustRef.current.material.opacity = Math.max(shuttleState.throttle * 0.8, 0);
-      }
-    }
-
-    if (keys['KeyA'] || keys['ArrowLeft']) {
-      shuttleState.heading -= dt * shuttleInfo.maneuverability;
-    }
-    if (keys['KeyD'] || keys['ArrowRight']) {
-      shuttleState.heading += dt * shuttleInfo.maneuverability;
-    }
-    if (keys['KeyQ']) {
-      shuttleState.pitchAngle = Math.min(shuttleState.pitchAngle + dt * 0.02, Math.PI / 4);
-    }
-    if (keys['KeyE']) {
-      shuttleState.pitchAngle = Math.max(shuttleState.pitchAngle - dt * 0.02, -Math.PI / 4);
-    }
-    if (keys['Space']) {
-      shuttleState.isAirbrakeOn = true;
-    } else {
-      shuttleState.isAirbrakeOn = false;
-    }
-
-    // Calculate velocity based on throttle
-    const targetSpeed = shuttleState.throttle * shuttleInfo.maxSpeed;
-    const currentSpeed = shuttleState.shuttleVelocity.length();
-    if (currentSpeed < targetSpeed) {
-      shuttleState.shuttleVelocity.multiplyScalar(1 + dt * 0.1);
-    } else if (currentSpeed > targetSpeed) {
-      shuttleState.shuttleVelocity.multiplyScalar(1 - dt * 0.1);
-    }
-
-    // Apply airbrake
-    if (shuttleState.isAirbrakeOn) {
-      shuttleState.shuttleVelocity.multiplyScalar(0.95);
-    }
-
-    // Fuel consumption
-    if (shuttleState.throttle > 0) {
-      shuttleInfo.currentFuel = Math.max(shuttleInfo.currentFuel - dt * shuttleState.throttle * 0.5, 0);
-    }
-
-    // Update position (forward vector based on heading and pitch)
-    const forward = new THREE.Vector3(
-      Math.sin(shuttleState.heading),
-      Math.sin(shuttleState.pitchAngle),
-      Math.cos(shuttleState.heading)
-    ).multiplyScalar(shuttleState.shuttleVelocity.length());
-
-    shuttleState.shuttlePosition.add(forward.multiplyScalar(dt));
-
-    // Auto-strafe to station center
-    const toStation = new THREE.Vector3(0, 0, 0).sub(shuttleState.shuttlePosition);
-    if (toStation.length() > 30) {
-      const strafe = new THREE.Vector3(toStation.y, 0, -toStation.x).normalize();
-      shuttleState.shuttlePosition.add(strafe.multiplyScalar(dt * 5));
-    }
-
-    // Clamp position
-    shuttleState.shuttlePosition.x = Math.max(-40, Math.min(40, shuttleState.shuttlePosition.x));
-    shuttleState.shuttlePosition.y = Math.max(-20, Math.min(20, shuttleState.shuttlePosition.y));
-    shuttleState.shuttlePosition.z = Math.max(-20, Math.min(60, shuttleState.shuttlePosition.z));
-
-    // Update camera position (cockpit view)
-    const cameraOffset = new THREE.Vector3(0, 0.2, 0);
-    camera.position.copy(shuttleState.shuttlePosition).add(cameraOffset);
-
-    // Update camera rotation
-    camera.rotation.order = 'YXZ';
-    camera.rotation.y = shuttleState.heading;
-    camera.rotation.x = -shuttleState.pitchAngle;
-
-    // Update state from ref
-    setGameState({
-      ...gameState,
-      throttle: shuttleState.throttle,
-      pitchAngle: shuttleState.pitchAngle,
-      fuelPercent: (shuttleInfo.currentFuel / shuttleInfo.maxFuel) * 100,
-      heading: (shuttleState.heading * 180 / Math.PI) % 360,
-    });
-  }
-
-  // ====================== Return UI ======================
   return (
-    <div className="shuttle-container" style={{ width: '100%', height: '100vh', overflow: 'hidden' }}>
-      <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
-    </div>
+    <div
+      style={{
+        position: 'fixed',
+        top: '0',
+        left: '0',
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+        zIndex: 1000,
+        display: 'none',
+      }}
+    />
   );
 }
+
+// ====================== Helper Functions ======================
+
+function createShuttlePodModel(shuttleType: 'shuttle-mk1' | 'shuttle-rescue'): THREE.Group {
+  const group = new THREE.Group();
+  group.userData.shuttleType = shuttleType;
+
+  // Main hull (elongated teardrop shape)
+  const hullGeometry = new THREE.ConeGeometry(2, 6, 8);
+  hullGeometry.rotateX(Math.PI / 2);
+  hullGeometry.rotateZ(Math.PI / 8);
+  const hullMaterial = new THREE.MeshPhongMaterial({
+    color: shuttleType === 'shuttle-mk1' ? 0x88ccff : 0xff6b6b,
+    side: THREE.DoubleSide,
+    flatShading: true,
+  });
+  const hull = new THREE.Mesh(hullGeometry, hullMaterial);
+  hull.scale.set(0.6, 1, 0.6);
+  group.add(hull);
+
+  // Cockpit canopy (transparent dome)
+  const canopyGeometry = new THREE.SphereGeometry(1.2, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+  const canopyMaterial = new THREE.MeshPhongMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.6,
+    shininess: 100,
+  });
+  const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
+  canopy.position.z = 1.5;
+  canopy.position.y = 0.3;
+  canopy.rotation.x = Math.PI / 6;
+  group.add(canopy);
+
+  // Wings
+  const wingGeometry = new THREE.BoxGeometry(6, 0.1, 3);
+  const wingMaterial = new THREE.MeshPhongMaterial({
+    color: shuttleType === 'shuttle-mk1' ? 0x6699cc : 0xffaa55,
+  });
+  const wings = new THREE.Mesh(wingGeometry, wingMaterial);
+  wings.position.z = -1;
+  group.add(wings);
+
+  // Engine nozzles
+  const engineGeometry = new THREE.CylinderGeometry(0.3, 0.4, 1, 8);
+  engineGeometry.rotateX(Math.PI / 2);
+  const engineMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+  const leftEngine = new THREE.Mesh(engineGeometry, engineMaterial);
+  leftEngine.position.set(-1.2, 0, -3);
+  group.add(leftEngine);
+  const rightEngine = new THREE.Mesh(engineGeometry, engineMaterial);
+  rightEngine.position.set(1.2, 0, -3);
+  group.add(rightEngine);
+
+  // Thruster glow (for engine exhaust)
+  const glowGeometry = new THREE.ConeGeometry(0.4, 2, 8);
+  glowGeometry.rotateX(-Math.PI / 2);
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00aaff,
+    transparent: true,
+    opacity: 0,
+  });
+  const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
+  glowMesh.position.set(0, 0, -4);
+  glowMesh.scale.set(0.5, 0.5, 0.5);
+  group.add(glowMesh);
+  (group as any).thrustGlow = glowMesh;
+
+  // Thruster nozzle (visible exhaust port)
+  const nozzleGeometry = new THREE.CylinderGeometry(0.3, 0.4, 1, 8);
+  nozzleGeometry.rotateX(Math.PI / 2);
+  const nozzleMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+  const nozzleMesh = new THREE.Mesh(nozzleGeometry, nozzleMaterial);
+  nozzleMesh.position.set(0, 0, -3.5);
+  group.add(nozzleMesh);
+  (group as any).thrustNozzle = nozzleMesh;
+
+  return group;
+}
+
+export default Shuttle3D;
