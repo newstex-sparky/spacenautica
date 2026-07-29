@@ -146,7 +146,7 @@ float ggx(vec3 N, vec3 V, vec3 L, float rough) {
   float D = a2 / (3.14159265 * max(d * d, 1e-8));
   float k = a * 0.5;
   float G = (NoV / (NoV * (1.0 - k) + k)) * (NoL / (NoL * (1.0 - k) + k));
-  return min(D * G / (4.0 * NoV), 220.0);
+  return min(D * G / (4.0 * NoV), 60.0);
 }
 
 void main() {
@@ -266,9 +266,6 @@ void main() {
     // Grazing reflections are dimmer and murkier than the near-vertical ones.
     float graze = 1.0 - cosI;
     mirrored *= 0.72 + 0.28 * cosI;
-    // Bright wave-lensed sunlight caught in the ceiling at moderate angles.
-    mirrored += uwSunColor * uSunIntensity * ggx(N, V, L, max(rough * 2.6, 0.06))
-              * 0.05 * daylight * (1.0 - graze * 0.6);
 
     // Fresnel transmittance across the interface, hard-edged at the critical
     // angle but not aliased.
@@ -287,8 +284,12 @@ void main() {
     // bright network the underside of a wavy surface always shows. The network
     // is what makes the underside read as a moving liquid ceiling rather than a
     // painted dome, so it fades in with the wave detail rather than with range.
-    float specW = ggx(N, V, L, max(rough * 1.4, 0.02));
-    col += uSunColor * uSunIntensity * specW * trans * 0.45 * daylight;
+    // The sun's own disc is already inside the window term (the analytic sky
+    // carries it), so this is only its soft halo — a small coefficient, or the
+    // window blows to white and the ceiling grows bright streaks wherever a wave
+    // facet happens to line up with the sun's half-vector.
+    float specW = ggx(N, V, L, max(rough * 2.4, 0.09));
+    col += uSunColor * uSunIntensity * specW * trans * 0.10 * daylight;
     vec3 shimmer = waterCaustics(vWorld + vec3(0.0, 0.05, 0.0), vec3(0.0, 1.0, 0.0));
     col += shimmer * (0.10 + 0.30 * trans) * daylight * (0.35 + 0.65 * microFade);
 

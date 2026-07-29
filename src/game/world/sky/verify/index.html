@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>sky verify</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      #wrap { position: fixed; inset: 0; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #loading { position: fixed; inset: 0; display: grid; place-items: center; color: #8ecfe0;
+        font: 13px/1.4 monospace; background: #04080b; transition: opacity .4s; }
+      #loading.done { opacity: 0; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div id="wrap"><canvas id="game-canvas"></canvas></div>
+    <div id="loading"><span id="loading-label">boot</span><span id="loading-bar"></span></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

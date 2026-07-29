@@ -488,7 +488,14 @@ float vmPixel = 1.0;`,
     float up = clamp(wn.y * 0.5 + 0.55, 0.0, 1.0);
     float caust = vmCaustics(vVmWorld) * up * uVmCaustics;
     vec3 col = gl_FragColor.rgb * mix(vec3(1.0), down, step(0.02, wdepth));
-    col += uwSunColor * down * caust * (0.35 + 0.65 * vmAOFactor);
+    // Caustics *modulate* the light arriving at the suit, so they scale with what
+    // the surface already reflects. Adding raw sun radiance instead — which is a
+    // lux-ish scalar, not a 0..1 colour — blew the hands out to a flat pale grey
+    // brighter than the water behind them and erased the material entirely. A
+    // small bounded additive keeps the bright filaments from being purely tonal.
+    float dapple = clamp(caust, 0.0, 2.0) * (0.35 + 0.65 * vmAOFactor);
+    col *= 1.0 + dapple * 0.75;
+    col += uwSunColor * down * min(dapple, 1.0) * 0.05;
     vec3 vdir = normalize(vVmWorld - cameraPosition);
     gl_FragColor.rgb = applyUnderwater(col, length(vVmView) * uVmFogDist, vVmWorld.y, vdir);
   }

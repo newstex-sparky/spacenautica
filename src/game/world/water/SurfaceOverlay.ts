@@ -180,22 +180,25 @@ export class SurfaceOverlay {
 
   /** Metres below the surface, fed every frame; hard-gates the droplets. */
   private depth = 0;
+  /** Which direction the live grade came from; decides whether depth gates it. */
+  private surfacing = false;
 
   /** Called on every `water:transition`. */
   trigger(underwater: boolean): void {
+    this.surfacing = !underwater;
     if (underwater) {
       // Going under: a brief cold clamp on exposure and colour, and nothing on
       // the lens. There is no such thing as a droplet on a submerged lens.
       this.grade = 1;
       this.wet = 0;
-      this.targetExposure = 0.72;
-      this.tint.setRGB(0.72, 0.98, 1.06);
+      this.targetExposure = 0.78;
+      this.tint.setRGB(0.78, 0.99, 1.05);
     } else {
-      // Surfacing: air is much brighter, and the lens is soaked.
+      // Surfacing: air is brighter, and the lens is soaked.
       this.grade = 1;
       this.wet = 1;
-      this.targetExposure = 1.45;
-      this.tint.setRGB(1.05, 1.0, 0.97);
+      this.targetExposure = 1.28;
+      this.tint.setRGB(1.04, 1.0, 0.98);
     }
   }
 
@@ -213,15 +216,22 @@ export class SurfaceOverlay {
     // not wet — coverage is forced to zero regardless of what armed it. This is
     // deliberately not a decay: it is unconditional, so no ordering or timing
     // mistake anywhere else can put beads on a 40 m frame.
-    const submerged = 1 - THREE.MathUtils.smoothstep(this.depth, 0.15, 0.6);
-    const wet = this.wet * submerged;
+    //
+    // The *surfacing* grade is gated the same way, and for the same reason. It is
+    // a full-screen exposure lift plus a desaturation, so a stray surfacing event
+    // while submerged does not merely tint the frame — it washes the water out to
+    // pale mint and lifts red, which is the one channel depth-graded water must
+    // not have. (Going under is not gated: a cold clamp is legitimate at depth.)
+    const air = 1 - THREE.MathUtils.smoothstep(this.depth, 0.15, 0.6);
+    const wet = this.wet * air;
+    const grade = this.grade * (this.surfacing ? air : 1);
 
     const u = this.mat.uniforms;
-    const active = wet > 0.004 || this.grade > 0.004;
+    const active = wet > 0.004 || grade > 0.004;
     this.mesh.visible = active && this.grab.available;
     if (!active) return;
 
-    const ease = this.grade * this.grade;
+    const ease = grade * grade;
     u.uTime.value = time;
     u.uWet.value = wet;
     u.uGrade.value = ease;

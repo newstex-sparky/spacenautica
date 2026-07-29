@@ -33,7 +33,7 @@ const MIME = {
 /** Vantage points chosen to exercise every feature the brief calls for. */
 const SHOTS = [
   { id: 'T1_shelf_floor', pos: [18, -24, -22], yaw: 2.1, pitch: -0.22 },
-  { id: 'T2_close_sand', pos: [6, -31.5, 4], yaw: 1.0, pitch: -0.55 },
+  { id: 'T2_close_sand', pos: [6, -27.4, 4], yaw: 1.0, pitch: -0.62 },
   { id: 'T3_dropoff', pos: [205, -78, -150], yaw: -1.9, pitch: -0.06 },
   { id: 'T4_spire', pos: [176, -46, -108], yaw: -1.62, pitch: 0.05 },
   { id: 'T5_sinkhole', pos: [-92, -34, 96], yaw: 0.0, pitch: -0.25 },

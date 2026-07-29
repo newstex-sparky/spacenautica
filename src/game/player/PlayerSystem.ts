@@ -88,13 +88,31 @@ export class PlayerSystem implements GameSystem {
   readonly velocity = new THREE.Vector3();
   yaw = 0;
   pitch = 0;
-  /** Metres below the water surface, >= 0. */
-  depth = 14;
   inVehicle: string | null = null;
   /** True while the body is in the water and not standing on the floor. */
   swimming = true;
   sprinting = false;
   grounded = false;
+
+  /**
+   * Metres below the water surface, >= 0.
+   *
+   * Derived on read, never cached. `position` is written from outside this class
+   * — `teleport()`, vehicles, and the capture harness all poke it directly — and
+   * `Engine.tick` skips every system in the World..Gameplay phase band while
+   * `engine.paused` is true, which includes this one. A stored copy therefore
+   * goes stale the moment anything moves the player while a menu is open, and
+   * then reports the depth of wherever the player used to be. That is exactly how
+   * a HUD can end up reading 130 m while the zone label says SURFACE.
+   */
+  get depth(): number {
+    return Math.max(0, this.surfaceY - this.position.y);
+  }
+
+  /** True when the eye is below the water line. Derived, for the same reason. */
+  get submerged(): boolean {
+    return this.position.y < this.surfaceY - 0.06;
+  }
 
   readonly vitals: Vitals = {
     oxygen: 45,
@@ -117,8 +135,6 @@ export class PlayerSystem implements GameSystem {
 
   /** Current locomotion mode. */
   mode: LocomotionMode = 'swim';
-  /** True when the eye is below the water line. */
-  submerged = true;
   /** 0..1 fraction of the body below the water line. */
   submergedFraction = 1;
   /** World Y of the water surface above the player right now. */
@@ -167,14 +183,15 @@ export class PlayerSystem implements GameSystem {
   private post: PostLike | null = null;
   private rig: RigLike | null = null;
   private lastSpeed = 0;
+  private world: GameContext['world'] | null = null;
 
   init(ctx: GameContext): void {
     this.busRef = ctx.bus;
+    this.world = ctx.world;
     this.applyEquipment();
     const h = ctx.world.heightAt(0, 0);
     this.position.set(0, Math.min(-6, h + 9), 0);
     this.surfaceY = ctx.world.waterHeightAt(this.position.x, this.position.z, ctx.time);
-    this.depth = Math.max(0, this.surfaceY - this.position.y);
     this.vitals.oxygen = this.vitals.maxOxygen;
   }
 
@@ -217,6 +234,19 @@ export class PlayerSystem implements GameSystem {
     this.position.copy(pos);
     this.velocity.set(0, 0, 0);
     this.impulse.set(0, 0, 0);
+    // Resample here rather than waiting for the next update: a teleport may
+    // happen while the engine is paused, in which case update() will not run at
+    // all and every consumer of `depth` would see the old location's surface.
+    this.refreshSurface();
+  }
+
+  /**
+   * Re-reads the water height at the current position. Cheap (one Gerstner
+   * evaluation) and safe to call from outside the frame loop.
+   */
+  refreshSurface(time = 0): void {
+    if (!this.world) return;
+    this.surfaceY = this.world.waterHeightAt(this.position.x, this.position.z, time);
   }
 
   /** Change kit; recomputes oxygen capacity and buoyancy trim. */
@@ -253,6 +283,10 @@ export class PlayerSystem implements GameSystem {
     }
 
     const input = ctx.input;
+    // Snapshot before anything is resampled: `submerged` is derived from live
+    // position and surface height, so the "previous" value has to be taken now
+    // or the water-line crossing test below compares a value against itself.
+    const wasSubmerged = this.submerged;
 
     /* --- look ------------------------------------------------------ */
     this.yawRate = dt > 0 ? -input.lookX / dt : 0;
@@ -273,9 +307,6 @@ export class PlayerSystem implements GameSystem {
       0,
       1,
     );
-    const wasSubmerged = this.submerged;
-    this.submerged = this.position.y < this.surfaceY - 0.06;
-    this.depth = Math.max(0, this.surfaceY - this.position.y);
 
     /* --- body basis ------------------------------------------------ */
     const cy = Math.cos(this.yaw);
@@ -376,8 +407,6 @@ export class PlayerSystem implements GameSystem {
 
     /* --- post-integration state ----------------------------------- */
     this.surfaceY = ctx.world.waterHeightAt(this.position.x, this.position.z, ctx.time);
-    this.depth = Math.max(0, this.surfaceY - this.position.y);
-    this.submerged = this.position.y < this.surfaceY - 0.06;
     this.viewDirection(_tmp);
     this.forwardSpeed = this.velocity.dot(_tmp);
 

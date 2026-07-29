@@ -33,23 +33,30 @@ interface RigLike extends GameSystem {
 /**
  * Bare-hand rest poses, used when no tool is equipped.
  *
- * Pushed out to ~0.48 m and yawed away from the view axis so the cut end of the
- * forearm stays at least 0.31 m from the eye. Any closer and the near end of the
- * arm subtends most of the frame — the pair then reads as two boulders in the
- * bottom corners rather than as hands.
+ * Two constraints drive these numbers, and both were violated before:
+ *
+ *  1. Nothing may come within ~0.33 m of the eye. The old poses put the cut end
+ *     of the forearm 6 cm from the lens — inside the 0.08 m near plane, so it was
+ *     both clipped and magnified until the pair read as two boulders filling the
+ *     bottom corners of every frame.
+ *  2. The forearm must not aim its cut end at the camera. Even at a safe
+ *     distance, an arm running back toward the eye presents the stump end-on and
+ *     reads as a smooth disc. Yawing the arm out by ~0.6 rad drops the stump
+ *     below the bottom edge (screen y ~ -1.23) and leaves the knuckles and the
+ *     back of the hand as the only part in frame — which is the read we want.
  */
 const IDLE_RIGHT = {
-  pos: new THREE.Vector3(0.24, -0.25, -0.48),
-  rot: new THREE.Euler(-0.34, -0.55, 0.34),
+  pos: new THREE.Vector3(0.32, -0.32, -0.52),
+  rot: new THREE.Euler(-0.1, -0.6, 0.34),
 };
 const IDLE_LEFT = {
-  pos: new THREE.Vector3(-0.26, -0.265, -0.475),
-  rot: new THREE.Euler(-0.3, 0.58, -0.42),
+  pos: new THREE.Vector3(-0.34, -0.335, -0.515),
+  rot: new THREE.Euler(-0.08, 0.64, -0.42),
 };
 /** Where the support hand idles while a one-handed tool is held. */
 const SUPPORT_IDLE = {
-  pos: new THREE.Vector3(-0.26, -0.3, -0.44),
-  rot: new THREE.Euler(-0.2, 0.66, -0.52),
+  pos: new THREE.Vector3(-0.32, -0.35, -0.49),
+  rot: new THREE.Euler(-0.12, 0.7, -0.5),
 };
 
 /**

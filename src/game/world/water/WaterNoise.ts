@@ -1,13 +1,9 @@
 /**
  * Private GLSL noise for the water system.
  *
- * `core/Noise.ts`'s `NOISE_GLSL` cannot currently be included in a shader at
- * all: its `snoise(vec2)` calls `sn_permute(vec3)`, but only the `vec4` overload
- * is defined, so the chunk fails to link even if you never call it. (Reported
- * to the integrator — it is a one-line fix in a file this module does not own.)
- *
- * Everything here is prefixed `wn` so it can never collide with that chunk once
- * it is fixed, or with any other module's helpers.
+ * Everything here is prefixed `wn` so it can never collide with `core/Noise.ts`'s
+ * `NOISE_GLSL` (which the water system does not include) or with any other
+ * module's helpers, no matter how chunks get combined.
  *
  * `wnVoronoiTiled` is the important one: its cell hash wraps modulo a period, so
  * the caustics tile is genuinely seamless instead of nearly seamless.

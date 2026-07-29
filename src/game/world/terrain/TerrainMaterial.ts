@@ -491,19 +491,33 @@ void rippleBand(
 vec3 floorRelief(
   vec3 wp, vec3 wn, float amount, float footprint, out float crest
 ) {
-  vec2 fl = normalize(vTFlow + vec2(1e-4, 0.0));
+  // Local current direction, rotated by a slow field so neighbouring dune
+  // patches do not all march in lockstep the way a single global vector would.
+  float swing = snoise(wp.xz * 0.0042) * 0.85;
+  float cs = cos(swing);
+  float sn = sin(swing);
+  vec2 f0 = normalize(vTFlow + vec2(1e-4, 0.0));
+  vec2 fl = vec2(f0.x * cs - f0.y * sn, f0.x * sn + f0.y * cs);
   vec2 across = vec2(-fl.y, fl.x);
   float along = dot(wp.xz, fl);
   float lateral = dot(wp.xz, across);
   // Crest lines meander instead of running dead straight across the basin.
   float bend = 2.7 * snoise(wp.xz * 0.019) + 1.2 * snoise(wp.xz * 0.0068);
 
+  // Ripple fields are patchy: current shadows, coarse lag deposits and scoured
+  // pans all leave smooth ground between rippled ground. Without this the floor
+  // reads as one continuous corrugation, which is a texture, not a place.
+  // NB: 'patch' is a reserved word in GLSL ES 3.0 — do not name a local that.
+  float patchField = fbm(wp.xz * 0.0135 + 7.3, 3);
+  float ripplePatch = smoothstep(-0.32, 0.42, patchField);
+  float fineMask = smoothstep(-0.1, 0.55, snoise(wp.xz * 0.048));
+
   float g = 0.0;
   float h = 0.0;
-  rippleBand(24.0, 0.26, along, lateral, bend * 0.55, footprint, g, h);
-  rippleBand(7.3, 0.30, along, lateral, bend, footprint, g, h);
-  rippleBand(1.85, 0.17, along, lateral, bend * 1.7, footprint, g, h);
-  rippleBand(0.47, 0.075, along, lateral, bend * 2.6, footprint, g, h);
+  rippleBand(24.0, 0.24 * (0.45 + 0.55 * ripplePatch), along, lateral, bend * 0.55, footprint, g, h);
+  rippleBand(7.3, 0.25 * ripplePatch, along, lateral, bend, footprint, g, h);
+  rippleBand(1.85, 0.17 * ripplePatch * (0.3 + 0.7 * fineMask), along, lateral, bend * 1.7, footprint, g, h);
+  rippleBand(0.47, 0.07 * (0.35 + 0.65 * fineMask), along, lateral, bend * 2.6, footprint, g, h);
   crest = h;
 
   vec3 alongW = vec3(fl.x, 0.0, fl.y);

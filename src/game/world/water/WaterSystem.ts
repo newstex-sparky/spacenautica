@@ -126,6 +126,7 @@ export class WaterSystem implements GameSystem {
   private pixelScale = 540;
   private frameNow = 0;
   private externalReadFrame = -999;
+  private seeded = false;
 
   /* ---------------------------------------------------------------- *
    * Lifecycle
@@ -261,7 +262,14 @@ export class WaterSystem implements GameSystem {
     const wasUnder = this.underwater;
     this.underwater = cam.position.y < surfaceY;
     this.cameraDepth = Math.max(0, surfaceY - cam.position.y);
-    if (wasUnder !== this.underwater) {
+    // The very first frame *seeds* the state, it does not report a crossing. The
+    // declared initial values are a guess (the camera has not been placed yet
+    // when init runs), so emitting on the first mismatch fires a phantom
+    // `water:transition` on frame 1 — which armed the surfacing grade, and with
+    // it a full-screen exposure lift, over the opening frames of every session.
+    if (!this.seeded) {
+      this.seeded = true;
+    } else if (wasUnder !== this.underwater) {
       ctx.bus.emit('water:transition', { underwater: this.underwater });
     }
 
