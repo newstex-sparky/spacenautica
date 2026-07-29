@@ -18,6 +18,7 @@ import {
   loadPrefs,
   savePrefs,
   setClass,
+  WallClock,
 } from './UiKit';
 import type { UiPrefs } from './UiKit';
 import { HudLayer } from './HudLayer';
@@ -62,6 +63,24 @@ interface EngineLike {
 
 const MINE_RANGE = 4.2;
 
+/**
+ * Boot quiet window, in milliseconds.
+ *
+ * Systems flush their initial state on their first few updates: the tech tree
+ * evaluates its depth triggers, the quest tracker seeds objectives, equipment
+ * reconciles. Those are journal entries, not alerts the player needs thrown at
+ * them before they have touched a key. Inside this window `info` notifications
+ * are written to the PDA log only. Warnings, dangers and successes always toast —
+ * if something is genuinely wrong at second zero the player must see it.
+ */
+const BOOT_QUIET_MS = 1800;
+
+/**
+ * A depth delta larger than this between two region polls is a teleport, not a
+ * descent, so the depth-band announcement is suppressed for it.
+ */
+const BAND_TELEPORT_M = 25;
+
 export class HudSystem implements GameSystem {
   readonly name = 'ui.hud';
   readonly phase = Phase.UI;
@@ -83,6 +102,10 @@ export class HudSystem implements GameSystem {
 
   private lastBiome = '';
   private lastBand = '';
+  private lastPollDepth = 0;
+  private bootAt = 0;
+  /** Drives UI tweens in real time — see WallClock in UiKit. */
+  private uiClock = new WallClock();
   private elapsed = 0;
   private maxDepth = 0;
   private deaths = 0;
@@ -100,6 +123,7 @@ export class HudSystem implements GameSystem {
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
+    this.bootAt = performance.now();
     installUiTextures();
     applyPrefs(this.prefs);
 
@@ -220,6 +244,17 @@ export class HudSystem implements GameSystem {
    * Bus wiring
    * ------------------------------------------------------------------ */
 
+  /**
+   * The single entry point to the toast rail. Applies the boot quiet window: a
+   * non-urgent message raised while systems are still flushing their initial
+   * state is dropped from the rail (it is still in the PDA log). Warnings and
+   * dangers are never suppressed.
+   */
+  private toast(text: string, kind: 'info' | 'warn' | 'danger' | 'success' = 'info', ttl = 4.2): void {
+    if (kind !== 'warn' && kind !== 'danger' && performance.now() - this.bootAt < BOOT_QUIET_MS) return;
+    this.hud.notify(text, kind, ttl);
+  }
+
   private bindBus(ctx: GameContext): void {
     const bus = ctx.bus;
     const on = <K extends Parameters<typeof bus.on>[0]>(k: K, fn: Parameters<typeof bus.on<K>>[1]) => {
@@ -227,8 +262,10 @@ export class HudSystem implements GameSystem {
     };
 
     on('ui:notify', (p) => {
-      this.hud.notify(p.text, p.kind ?? 'info', p.ttl ?? 4.2);
-      this.pda.pushLog(p.text, p.kind ?? 'info', this.timeOfDay());
+      const kind = p.kind ?? 'info';
+      // The log always gets it; the toast rail applies the boot quiet window.
+      this.toast(p.text, kind, p.ttl ?? 4.2);
+      this.pda.pushLog(p.text, kind, this.timeOfDay());
     });
 
     on('ui:voice', (p) => {
@@ -280,13 +317,13 @@ export class HudSystem implements GameSystem {
             : p.kind === 'food'
               ? 'Caloric reserves depleted.'
               : 'Hydration critical.';
-      this.hud.notify(text, p.kind === 'oxygen' ? 'danger' : 'warn', 5);
+      this.toast(text, p.kind === 'oxygen' ? 'danger' : 'warn', 5);
     });
 
     on('inventory:changed', (p) => {
       this.pda.markDirty();
       if (p.delta > 0) {
-        this.hud.notify(`${itemDef(p.id).name} ×${p.delta}`, 'info', 2.6);
+        this.toast(`${itemDef(p.id).name} ×${p.delta}`, 'info', 2.6);
       }
     });
 
@@ -296,7 +333,7 @@ export class HudSystem implements GameSystem {
     });
 
     on('scan:completed', (p) => {
-      this.hud.notify(`Scan complete — ${itemDef(p.id).name}`, 'success', 3.6);
+      this.toast(`Scan complete — ${itemDef(p.id).name}`, 'success', 3.6);
       this.pda.pushLog(`Scanned ${p.id} (${p.category})`, 'success', this.timeOfDay());
       this.pda.markDirty();
       this.scanOverride = -1;
@@ -304,11 +341,11 @@ export class HudSystem implements GameSystem {
 
     on('databank:unlocked', (p) => {
       this.pda.unlockDatabank(p.id);
-      this.hud.notify('New databank entry.', 'success', 3.4);
+      this.toast('New databank entry.', 'success', 3.4);
     });
 
     on('tech:unlocked', (p) => {
-      this.hud.notify(`Blueprint unlocked — ${itemDef(p.id).name}`, 'success', 4);
+      this.toast(`Blueprint unlocked — ${itemDef(p.id).name}`, 'success', 4);
       this.pda.markDirty();
     });
 
@@ -322,11 +359,11 @@ export class HudSystem implements GameSystem {
     });
 
     on('creature:aggro', (p) => {
-      this.hud.notify(`${p.species} — aggressive at ${Math.round(p.distance)} m`, 'danger', 3.4);
+      this.toast(`${p.species} — aggressive at ${Math.round(p.distance)} m`, 'danger', 3.4);
     });
 
-    on('save:written', (p) => this.hud.notify(`Saved to slot "${p.slot}".`, 'success', 2.8));
-    on('save:loaded', (p) => this.hud.notify(`Loaded slot "${p.slot}".`, 'success', 2.8));
+    on('save:written', (p) => this.toast(`Saved to slot "${p.slot}".`, 'success', 2.8));
+    on('save:loaded', (p) => this.toast(`Loaded slot "${p.slot}".`, 'success', 2.8));
 
     on('settings:quality', () => {
       this.icons.allow3d = ctx.settings.at('medium');
@@ -588,8 +625,10 @@ export class HudSystem implements GameSystem {
 
     if (!engine.paused) this.elapsed += dt;
 
-    /* tick animation + icon upgrades */
-    this.anim.update(dt);
+    /* tick animation + icon upgrades — tweens are presentation, so they run on
+       the wall clock rather than the clamped simulation dt. */
+    const uiDt = engine.paused ? (this.uiClock.hold(), 0) : this.uiClock.tick();
+    this.anim.update(uiDt);
     if (this.pda.open || this.craft.fabricatorOpen || this.craft.buildMode) this.icons.update();
 
     /* gather state */
@@ -628,13 +667,14 @@ export class HudSystem implements GameSystem {
       podDistance,
       elapsed: this.elapsed,
       mode: ctx.settings.gameplay.mode,
+      paused: engine.paused,
     };
 
     /* biome + depth band transitions (throttled — these poll the world) */
     if (p && ctx.frame % 12 === 0) this.pollRegion(ctx, p, depth);
 
-    /* prompts */
-    this.updatePrompts(dt, ctx, p);
+    /* prompts — the onboarding hint is a real-time dwell, so it uses uiDt */
+    this.updatePrompts(uiDt, ctx, p);
 
     /* scan ring */
     if (this.scanOverride >= 0) this.hud.setScanProgress(this.scanOverride);
@@ -645,11 +685,14 @@ export class HudSystem implements GameSystem {
       this.hud.setScanProgress(best);
     }
 
-    this.hud.update(dt, state);
-    this.pda.update(dt, ctx);
-    this.craft.update(dt, ctx);
+    // Every layer below is presentation: refresh throttles, progress bars and
+    // dwell timers all want real seconds. Only `elapsed` (the survival clock,
+    // accumulated above) is simulation-timed.
+    this.hud.update(uiDt, state);
+    this.pda.update(uiDt, ctx);
+    this.craft.update(uiDt, ctx);
     this.menus.setStats(this.elapsed, this.maxDepth, this.deaths);
-    this.menus.update(dt);
+    this.menus.update(uiDt);
   }
 
   private pollRegion(ctx: GameContext, p: PlayerLike, depth: number): void {
@@ -666,6 +709,13 @@ export class HudSystem implements GameSystem {
     } catch {
       /* world not installed yet */
     }
+    // A teleport crosses several bands in one step. The event still fires (other
+    // systems want to know where the player *is*), but the announcement does not:
+    // "Deep Zone — Hull stress" is a thing you earn by descending, not something
+    // a load or a respawn should shout at you.
+    const jumped = Math.abs(depth - this.lastPollDepth) > BAND_TELEPORT_M;
+    this.lastPollDepth = depth;
+
     const band = depthBand(depth);
     if (band.id !== this.lastBand) {
       const previous = this.lastBand;
@@ -674,8 +724,8 @@ export class HudSystem implements GameSystem {
       // Only announce descents past a meaningful threshold.
       const idx = DEPTH_BANDS.findIndex((x) => x.id === band.id);
       const prevIdx = DEPTH_BANDS.findIndex((x) => x.id === previous);
-      if (previous && idx > prevIdx && band.note) {
-        this.hud.notify(`${band.label} — ${band.note}`, idx >= 4 ? 'warn' : 'info', 4);
+      if (previous && !jumped && idx > prevIdx && band.note) {
+        this.toast(`${band.label} — ${band.note}`, idx >= 4 ? 'warn' : 'info', 4);
       }
     }
   }

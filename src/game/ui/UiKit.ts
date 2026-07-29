@@ -527,6 +527,47 @@ export class Anim {
 }
 
 /* ------------------------------------------------------------------ *
+ * Presentation clock
+ * ------------------------------------------------------------------ */
+
+/**
+ * Real-time clock for anything the *player* reads.
+ *
+ * The simulation dt is clamped (`Math.min(raw, 1/15)` in core/Engine), which is
+ * correct for physics — it stops a hitch from tunnelling the player through the
+ * sea floor — but it is wrong for interface timing. On a frame that takes 1.4 s
+ * the simulation advances 67 ms, so a 4-second toast would linger for a minute,
+ * a biome banner would never fade, and an eased readout would crawl through
+ * values the player was never at. UI dwell times, fades and damping are ticked
+ * from this instead, so "4 seconds" means four seconds on the wall no matter
+ * what the frame rate is doing.
+ */
+export class WallClock {
+  private last = 0;
+
+  /**
+   * Seconds elapsed since the previous call. Clamped to `max` so a tab-switch or
+   * a shader-compile stall cannot flush every timer at once. Returns 0 on the
+   * first call, and after `hold()`.
+   */
+  tick(max = 1): number {
+    const now = performance.now() * 0.001;
+    if (this.last === 0) {
+      this.last = now;
+      return 0;
+    }
+    const d = now - this.last;
+    this.last = now;
+    return d < 0 ? 0 : d > max ? max : d;
+  }
+
+  /** Re-anchors to now, so time spent paused does not age anything. */
+  hold(): void {
+    this.last = performance.now() * 0.001;
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Disposal
  * ------------------------------------------------------------------ */
 

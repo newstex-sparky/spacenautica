@@ -19,17 +19,39 @@ import { WATER_NOISE_GLSL } from './WaterNoise';
 
 const G = 9.81;
 const TILE = 48;
+/**
+ * Integer lattice vectors, so every component has an exact whole number of
+ * periods across the tile. Wavelengths run 1.4-5.6 m: short waves focus with far
+ * gentler slopes than long ones (the focal depth goes as 1/(A k^2) while the
+ * slope goes as A k), which is why real caustics are cast by ripples and not by
+ * swell. Eight well-spread directions so the filament network has no grain.
+ */
 const LATTICE: Array<[number, number]> = [
-  [3, 1],
-  [-2, 4],
-  [5, -2],
-  [4, 5],
-  [7, 3],
-  [-6, 6],
-  [9, -4],
-  [11, 7],
+  [8, 3],
+  [-6, 11],
+  [14, -5],
+  [7, 17],
+  [-19, 9],
+  [21, 13],
+  [29, -13],
+  [-16, 31],
 ];
 const CWAVES = LATTICE.length;
+/** Receiver depth the amplitudes are tuned to focus at, in metres. */
+const REF_DEPTH = 22;
+/**
+ * Fraction of the focusing amplitude to use per component.
+ *
+ * A sinusoid of amplitude A and wavenumber k first focuses refracted sunlight at
+ * depth  z = 1 / ((1 - 1/n) * A * k^2). Solving for A at z = REF_DEPTH gives the
+ * amplitude at which the Jacobian actually reaches zero — i.e. at which a caustic
+ * *exists* at all. Round 1 shipped amplitudes roughly twenty times below that
+ * threshold, so the Jacobian never left 1 +/- 0.15, the tile came out very nearly
+ * uniform, and no dapple whatsoever reached the sea floor. At 1.0 the summed bank
+ * crosses the threshold often enough for a dense network without degenerating
+ * into noise.
+ */
+const FOCUS = 1.0;
 
 const FRAG = /* glsl */ `
 precision highp float;
@@ -107,14 +129,21 @@ void main() {
     channel(p, h0, n0, p + vec2(eps, 0.0), hx, nx, p + vec2(0.0, eps), hz, nz, inDir, eg, eps, soft),
     channel(p, h0, n0, p + vec2(eps, 0.0), hx, nx, p + vec2(0.0, eps), hz, nz, inDir, eb, eps, soft)
   );
+  // Normalise against an unrippled surface, so 1.0 means "no focusing" no matter
+  // how 'soft' is set. Consumers can then treat the tile as a unit-mean field.
+  c *= 1.0 + soft;
 
   // Micro layer: cell-edge ridges from a seamless voronoi (integer scale keeps
   // the tile joint invisible) add the fine crawling structure between filaments.
   vec3 vo = wnVoronoiTiled(vUv * 12.0 + vec2(uTime * 0.05, uTime * -0.037), 12.0);
   float ridge = smoothstep(0.0, 0.32, vo.y - vo.x);
-  c *= 0.82 + 0.42 * ridge;
+  c *= 0.86 + 0.34 * ridge;
 
-  gl_FragColor = vec4(clamp(c * uGain, 0.0, 8.0), 1.0);
+  // Soft shoulder instead of a hard clamp: real caustic peaks are extremely
+  // bright and clipping them flat-tops the filaments into visible plateaus.
+  c = c / (1.0 + c * 0.11) * 1.11;
+
+  gl_FragColor = vec4(clamp(c * uGain, 0.0, 12.0), 1.0);
 }
 `;
 
@@ -151,13 +180,18 @@ export class CausticsRenderer {
     this.rt.texture.name = 'water.caustics';
 
     const ca = new Float32Array(CWAVES * 4);
+    // (1 - 1/n_water): how much of the surface slope becomes ray deflection.
+    const bend = 1 - 1 / 1.333;
     for (let i = 0; i < CWAVES; i++) {
       const n = LATTICE[i];
       const kx = (Math.PI * 2 * n[0]) / TILE;
       const kz = (Math.PI * 2 * n[1]) / TILE;
       const k = Math.hypot(kx, kz);
-      const lambda = (Math.PI * 2) / k;
-      const amp = 0.1 * Math.pow(lambda / 15.2, 0.85);
+      // Amplitude at which this component alone focuses at REF_DEPTH, scaled by
+      // FOCUS and shared across the bank so the sum stays near the threshold
+      // rather than far above it.
+      const focusAmp = 1 / (bend * k * k * REF_DEPTH);
+      const amp = (FOCUS * focusAmp) / Math.sqrt(CWAVES);
       ca[i * 4] = kx;
       ca[i * 4 + 1] = kz;
       ca[i * 4 + 2] = amp;
@@ -170,7 +204,7 @@ export class CausticsRenderer {
         uTime: { value: 0 },
         uCA: { value: ca },
         uTexel: { value: TILE / size },
-        uDepth: { value: 12 },
+        uDepth: { value: REF_DEPTH },
         uGain: { value: 1 },
         uEta: { value: new THREE.Vector2(0.7502, 0.004) },
       },

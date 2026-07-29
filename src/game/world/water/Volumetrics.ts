@@ -95,14 +95,22 @@ float sunShadow(vec3 p) {
   return smoothstep(-0.0035, 0.0035, mean - sc.z + uShadowBias);
 }
 
-/** Caustics tile lookup at a world XZ (no normal term — used for shafts). */
+/**
+ * Caustics tile lookup at a world XZ (no normal term — used for shafts). Same
+ * unit-mean geometric combine as waterCaustics(), but mean-centred instead of
+ * clipped at the ambient level: a shaft is *modulated* by the surface pattern,
+ * so it must be able to go dark between filaments as well as bright along them.
+ */
 vec3 dappleAt(vec2 xz) {
   float tile = max(uwCausticsParams.y, 1.0);
   vec2 p = xz / tile;
   vec2 q = vec2(p.x * 0.7986 - p.y * 0.6018, p.x * 0.6018 + p.y * 0.7986) * 1.73;
   vec3 a = texture2D(uwCausticsMap, p).rgb;
   vec3 b = texture2D(uwCausticsMap, q).rgb;
-  return max(a * b - 0.8, 0.0);
+  vec3 c = sqrt(max(a * b, vec3(0.0)));
+  // Zero-mean, so uDapple changes shaft *contrast* without changing how much
+  // light the march accumulates overall.
+  return clamp(c - 1.0, vec3(-0.85), vec3(4.0));
 }
 
 void main() {
@@ -150,8 +158,11 @@ void main() {
       float lit = sunShadow(p);
       vec3 down = waterDownwelling(depth);
       vec3 dap = dappleAt(p.xz + upShift * depth);
+      // Shafts are the surface's caustic pattern extruded along the sun; without
+      // this term a raymarch through participating media is just a smooth glow.
+      vec3 dapple = max(vec3(0.0), 1.0 + dap * uDapple);
       vec3 T = waterTransmittance(t);
-      acc += sunRad * lit * down * (1.0 + dap * uDapple) * phase * T * scatterCoef * dt;
+      acc += sunRad * lit * down * dapple * phase * T * scatterCoef * dt;
     }
     t += dt;
   }
@@ -249,7 +260,7 @@ export class Volumetrics {
       uCausticSurface: { value: 1 },
       uPrevTex: { value: this.blank },
       uHistory: { value: 0.82 },
-      uDapple: { value: 2.6 },
+      uDapple: { value: 1.15 },
     };
 
     this.mat = new THREE.ShaderMaterial({

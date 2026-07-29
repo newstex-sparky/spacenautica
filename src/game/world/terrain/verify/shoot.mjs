@@ -83,10 +83,14 @@ page.on('console', (m) => {
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 
 await page.goto(`http://localhost:${port}/index.html`);
-await page.waitForFunction('window.__READY__ === true', null, { timeout: 120000 });
+await page.waitForFunction('window.__READY__ === true', null, { timeout: Number(args.boot ?? 600000) });
+
+const only = args.shots && args.shots !== true ? String(args.shots).split(',') : null;
+const SHOT_TIMEOUT = Number(args.timeout ?? 180000);
 
 const results = [];
 for (const s of SHOTS) {
+  if (only && !only.includes(s.id)) continue;
   await page.evaluate(
     ([x, y, z, yaw, pitch]) => window.__TVIEW__(x, y, z, yaw, pitch),
     [...s.pos, s.yaw, s.pitch],
@@ -94,7 +98,7 @@ for (const s of SHOTS) {
   // Let the streamer converge on this vantage point.
   await page.waitForTimeout(2600);
   const probe = await page.evaluate('window.__TPROBE__()');
-  await page.screenshot({ path: join(OUT, `${s.id}.png`) });
+  await page.screenshot({ path: join(OUT, `${s.id}.png`), timeout: SHOT_TIMEOUT });
   results.push({ id: s.id, probe: JSON.parse(probe) });
   console.log(s.id, probe);
 }

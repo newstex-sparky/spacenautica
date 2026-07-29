@@ -187,6 +187,117 @@ export function packTerrainTextures(
 }
 
 /* ------------------------------------------------------------------ *
+ * Diagnostics
+ * ------------------------------------------------------------------ */
+
+const PROBE_ARRAY_FRAG = /* glsl */ `
+precision highp sampler2DArray;
+uniform sampler2DArray tArr;
+uniform float uCount;
+uniform float uLod;
+void main(){
+  float layer = floor(gl_FragCoord.x);
+  gl_FragColor = textureLod(tArr, vec3(0.371, 0.629, layer), uLod);
+}
+`;
+
+const PROBE_2D_FRAG = /* glsl */ `
+uniform sampler2D tSrc;
+void main(){
+  gl_FragColor = texture2D(tSrc, vec2(0.371, 0.629));
+}
+`;
+
+/**
+ * Reads back one texel per layer from a packed array (and optionally from the
+ * source 2D textures) so a headless harness can prove whether the pack step
+ * produced real content. Diagnostic only; never called on a normal frame.
+ */
+export function probeTerrainTextures(
+  renderer: THREE.WebGLRenderer,
+  packed: PackedTerrainTextures,
+  sources: PbrMaps[],
+  lod = 0,
+): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  const quad = new THREE.PlaneGeometry(1, 1);
+  const scene = new THREE.Scene();
+  const cam = new THREE.Camera();
+  const arrMat = new THREE.ShaderMaterial({
+    vertexShader: PACK_VERT,
+    fragmentShader: PROBE_ARRAY_FRAG,
+    uniforms: { tArr: { value: null }, uCount: { value: sources.length }, uLod: { value: lod } },
+    depthTest: false,
+    depthWrite: false,
+  });
+  const srcMat = new THREE.ShaderMaterial({
+    vertexShader: PACK_VERT,
+    fragmentShader: PROBE_2D_FRAG,
+    uniforms: { tSrc: { value: null } },
+    depthTest: false,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(quad, arrMat);
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+
+  const rt = new THREE.WebGLRenderTarget(Math.max(sources.length, 1), 1, {
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+    depthBuffer: false,
+    stencilBuffer: false,
+    generateMipmaps: false,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+  });
+  const buf = new Uint8Array(Math.max(sources.length, 1) * 4);
+  const prev = renderer.getRenderTarget();
+
+  const shoot = (label: string): void => {
+    renderer.setRenderTarget(rt);
+    renderer.render(scene, cam);
+    renderer.readRenderTargetPixels(rt, 0, 0, rt.width, 1, buf);
+    out[label] = Array.from(buf);
+  };
+
+  mesh.material = arrMat;
+  arrMat.uniforms.tArr.value = packed.albH;
+  shoot('albH');
+  arrMat.uniforms.tArr.value = packed.nra;
+  shoot('nra');
+
+  // Source maps, one render per layer into texel 0 — proves whether the
+  // library handed us real content in the first place.
+  mesh.material = srcMat;
+  const srcAlb: number[] = [];
+  const srcNrm: number[] = [];
+  const srcOrm: number[] = [];
+  for (let i = 0; i < sources.length; i++) {
+    for (const [tex, sink] of [
+      [sources[i].map, srcAlb],
+      [sources[i].normalMap, srcNrm],
+      [sources[i].roughnessMap, srcOrm],
+    ] as Array<[THREE.Texture, number[]]>) {
+      srcMat.uniforms.tSrc.value = tex;
+      renderer.setRenderTarget(rt);
+      renderer.render(scene, cam);
+      renderer.readRenderTargetPixels(rt, 0, 0, 1, 1, buf);
+      sink.push(buf[0], buf[1], buf[2], buf[3]);
+    }
+  }
+  out.srcAlbedo = srcAlb;
+  out.srcNormal = srcNrm;
+  out.srcOrm = srcOrm;
+
+  renderer.setRenderTarget(prev);
+  rt.dispose();
+  quad.dispose();
+  arrMat.dispose();
+  srcMat.dispose();
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
  * Shader source
  * ------------------------------------------------------------------ */
 

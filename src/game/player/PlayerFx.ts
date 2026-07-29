@@ -75,7 +75,10 @@ function makeField(count: number, kind: 'bubble' | 'spray', water?: Record<strin
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         vDepth = -mv.z;
         gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp(aSize * uPixelScale / max(0.05, -mv.z), 1.0, 220.0);
+        // Hard cap on sprite size. Bubbles leave the regulator ~0.16 m from the
+        // lens, so without a ceiling a single one can cover a third of the frame
+        // and read as a full-screen overlay artifact rather than as a bubble.
+        gl_PointSize = clamp(aSize * uPixelScale / max(0.05, -mv.z), 1.0, 96.0);
       }
     `,
     fragmentShader: /* glsl */ `
@@ -100,7 +103,11 @@ function makeField(count: number, kind: 'bubble' | 'spray', water?: Record<strin
         float body = (1.0 - r2) * 0.35;
         vec2 sp = p - normalize(uwSunDir.xz + vec2(0.001)) * 0.42;
         float spec = exp(-dot(sp, sp) * 26.0) * (0.6 + uRim * 0.8);
-        float a = (body + shell * 0.9 + spec) * uOpacity * (1.0 - smoothstep(0.85, 1.0, r));
+        // Near-field fade. A particle drifting between the eye and the near
+        // plane would otherwise flare across the whole frame on its way past.
+        float near = smoothstep(0.09, 0.34, vDepth);
+        float a = (body + shell * 0.9 + spec) * uOpacity * near
+                * (1.0 - smoothstep(0.85, 1.0, r));
         float wdepth = max(0.0, uwSurfaceY - vWorld.y);
         vec3 ext = exp(-uwExtinction * (wdepth * 0.35 + vDepth) * uwDensity);
         gl_FragColor = vec4(uTint * ext * (0.5 + spec * 2.0), a);

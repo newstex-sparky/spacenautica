@@ -45,6 +45,21 @@ function log(msg: string): void {
   if (el) el.textContent += `\n${msg}`;
 }
 
+/**
+ * Yield to the browser.
+ *
+ * This matters more than it looks. Baking N material sets under a software
+ * rasteriser is seconds of unbroken GPU work, and if it runs inside the module's
+ * initial synchronous execution the `load` event never fires — the page appears
+ * hung, and any harness using `waitUntil: 'load'` times out before the first map
+ * exists. Awaiting a frame between units of work keeps the document responsive
+ * and lets the log paint as it goes. The game itself is already safe here
+ * because `Engine.boot()` awaits a frame between system inits.
+ */
+function frame(): Promise<void> {
+  return new Promise((r) => requestAnimationFrame(() => r()));
+}
+
 const BLIT_VERT = /* glsl */ `
 varying vec2 vUv;
 void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
@@ -62,11 +77,28 @@ void main(){
 }
 `;
 
+/**
+ * `?only=sand_fine,rock_basalt` restricts the page to a few materials, and
+ * `?size=512` overrides the bake resolution. Baking all 39 sets at 256 takes
+ * minutes under a software rasteriser, which is too slow to iterate against.
+ */
+function selection(): { ids: string[]; size: number } {
+  const q = new URLSearchParams(location.search);
+  const only = (q.get('only') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const ids = only.length ? TUNED_IDS.filter((id) => only.includes(id)) : [...TUNED_IDS];
+  return { ids: ids.length ? ids : [...TUNED_IDS], size: Number(q.get('size') ?? 256) };
+}
+
 async function main(): Promise<void> {
   const atlas = document.getElementById('atlas') as HTMLCanvasElement;
   const lit = document.getElementById('lit') as HTMLCanvasElement;
+  const sel = selection();
+  const IDS = sel.ids;
 
-  const rows = Math.ceil(TUNED_IDS.length / COLS);
+  // Let the document finish loading before any GPU work starts.
+  await frame();
+
+  const rows = Math.ceil(IDS.length / COLS);
   atlas.width = COLS * CELL * 3;
   atlas.height = rows * CELL;
   lit.width = COLS * SPHERE;
@@ -93,10 +125,10 @@ async function main(): Promise<void> {
   } as unknown as GameContext;
   lib.init(fakeCtx);
   log(`TextureLibrary.init ok: ${JSON.stringify(lib.stats)}`);
-  log(`registry ids=${TEXTURE_IDS.length} tuned=${TUNED_IDS.length}`);
+  log(`registry ids=${TEXTURE_IDS.length} tuned=${TUNED_IDS.length} shown=${IDS.length} size=${sel.size}`);
 
   const baker = new TextureBaker(renderer);
-  const size = 256;
+  const size = sel.size;
   const stats: Stat[] = [];
   const baked: Array<{ id: string; target: THREE.WebGLRenderTarget }> = [];
 
@@ -145,7 +177,8 @@ async function main(): Promise<void> {
     return { min: mn, max: mx, mean: (sum / (b.length / 16)) | 0 };
   };
 
-  for (const id of TUNED_IDS) {
+  for (const id of IDS) {
+    await frame();
     const def = materialDef(id);
     const r = baker.bake(id, def, { size, anisotropy: 4, aoTaps: 8 });
     baked.push({ id, target: r.target });
@@ -229,32 +262,38 @@ async function main(): Promise<void> {
   geo.setAttribute('uv1', geo.getAttribute('uv'));
 
   // Re-bake through the public API so the lit preview exercises get()/applyPbrMaps.
+  const litBaker = new TextureBaker(r2);
+  const mats: THREE.MeshStandardMaterial[] = [];
+
+  // Bake with a yield between materials, but draw every sphere in ONE
+  // uninterrupted pass: this canvas has no preserveDrawingBuffer, so any yield
+  // between the scissored draws discards everything already rendered and the
+  // sheet comes out with only the last sphere on it.
+  for (const id of IDS) {
+    await frame();
+    const r = litBaker.bake(id, materialDef(id), { size, anisotropy: 4, aoTaps: 8 });
+    mats.push(
+      new THREE.MeshStandardMaterial({
+        map: r.albedo,
+        normalMap: r.normal,
+        roughnessMap: r.orm,
+        aoMap: r.orm,
+        metalnessMap: r.orm,
+        roughness: 1,
+        metalness: 1,
+      }),
+    );
+  }
+
   r2.setScissorTest(true);
   r2.clear();
-  const litBaker = new TextureBaker(r2);
-  const mats: THREE.Material[] = [];
-  TUNED_IDS.forEach((id, i) => {
-    const def = materialDef(id);
-    const r = litBaker.bake(id, def, { size, anisotropy: 4, aoTaps: 8 });
-    const mat = new THREE.MeshStandardMaterial({
-      map: r.albedo,
-      normalMap: r.normal,
-      roughnessMap: r.orm,
-      aoMap: r.orm,
-      metalnessMap: r.orm,
-      roughness: 1,
-      metalness: 1,
-    });
-    mats.push(mat);
+  mats.forEach((mat, i) => {
     const mesh = new THREE.Mesh(geo, mat);
     scene.add(mesh);
-
     const col = i % COLS;
     const row = Math.floor(i / COLS);
-    const x = col * SPHERE;
-    const y = lit.height - (row + 1) * SPHERE;
-    r2.setViewport(x, y, SPHERE, SPHERE);
-    r2.setScissor(x, y, SPHERE, SPHERE);
+    r2.setViewport(col * SPHERE, lit.height - (row + 1) * SPHERE, SPHERE, SPHERE);
+    r2.setScissor(col * SPHERE, lit.height - (row + 1) * SPHERE, SPHERE, SPHERE);
     r2.render(scene, cam);
     scene.remove(mesh);
   });

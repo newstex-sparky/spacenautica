@@ -2,6 +2,53 @@ import * as THREE from 'three';
 import { PostPass, makeTarget } from '../FrameContext';
 import type { FrameContext } from '../FrameContext';
 import { PrepassMaterialCache } from '../PrepassMaterials';
+import { DEPTH_GLSL } from '../shaders/Common';
+
+/**
+ * Camera-only velocity for pixels no geometry covered.
+ *
+ * Without this, the background (sky dome, open water, the whole upper half of a
+ * typical underwater frame) reports zero motion, so TAA fetches its history at
+ * the same uv no matter how fast the camera turns and the background smears; the
+ * same hole makes camera motion blur stop dead at the terrain silhouette.
+ *
+ * Drawn as the classic far-plane quad: `gl_Position.z == w` puts the fragment at
+ * window depth 1.0, so the default LessEqual depth test passes only where the
+ * cleared depth buffer is still 1.0. Nothing that wrote depth is touched, and the
+ * coverage mask stays 0 so GTAO/SSR still treat these pixels as sky.
+ */
+const SKY_VELOCITY_VERT = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 1.0, 1.0);
+}
+`;
+
+const SKY_VELOCITY_FRAG = /* glsl */ `
+${DEPTH_GLSL}
+layout(location = 0) out vec4 outNormal;
+layout(location = 1) out vec4 outVelocity;
+
+varying vec2 vUv;
+
+uniform mat4 uProjInv;
+uniform mat4 uViewInv;
+uniform mat4 uPrevViewProj;
+uniform float uSkyDistance;
+
+void main() {
+  // A point far down the view ray: at sky distance the camera's translation is
+  // negligible and rotation dominates, which is exactly how a sky dome moves.
+  vec3 dirView = viewRay(vUv, uProjInv) * uSkyDistance;
+  vec4 world = uViewInv * vec4(dirView, 1.0);
+  vec4 prevClip = uPrevViewProj * world;
+  vec2 prevUv = prevClip.xy / max(abs(prevClip.w), 1e-5) * sign(prevClip.w) * 0.5 + 0.5;
+
+  outNormal = vec4(0.0);
+  outVelocity = vec4(vUv - prevUv, 0.0, 1.0);
+}
+`;
 
 interface Swap {
   mesh: THREE.Mesh;
@@ -45,8 +92,33 @@ export class GeometryPrepass extends PostPass {
   private pruneCountdown = 240;
   private readonly clearColor = new THREE.Color();
 
+  /**
+   * Set by `PostStack` when a system *outside* the stack samples these buffers
+   * (the water system's god rays and caustics do). Keeps the prepass running even
+   * when every in-stack consumer has been shed.
+   */
+  keepAlive = false;
+
+  private readonly skyVelocityMat: THREE.ShaderMaterial;
+
   constructor(frame: FrameContext, width: number, height: number) {
     super(frame);
+    this.skyVelocityMat = new THREE.ShaderMaterial({
+      name: 'prepass/sky-velocity',
+      glslVersion: THREE.GLSL3,
+      vertexShader: SKY_VELOCITY_VERT,
+      fragmentShader: SKY_VELOCITY_FRAG,
+      uniforms: {
+        uProjInv: { value: new THREE.Matrix4() },
+        uViewInv: { value: new THREE.Matrix4() },
+        uPrevViewProj: { value: new THREE.Matrix4() },
+        uSkyDistance: { value: 3000 },
+      },
+      depthTest: true,
+      depthWrite: false,
+      toneMapped: false,
+      blending: THREE.NoBlending,
+    });
     this.depthTexture = new THREE.DepthTexture(width, height);
     this.depthTexture.type = THREE.FloatType;
     this.depthTexture.format = THREE.DepthFormat;
@@ -93,8 +165,9 @@ export class GeometryPrepass extends PostPass {
 
   override configure(frame: FrameContext): void {
     const g = frame.settings;
-    // The prepass only pays for itself when something downstream samples it.
-    this.enabled = g.taa || g.gtao || g.ssr || g.dof || g.motionBlur || g.godRays;
+    // The prepass only pays for itself when something samples it.
+    this.enabled =
+      this.keepAlive || g.taa || g.gtao || g.ssr || g.dof || g.motionBlur || g.godRays;
   }
 
   protected execute(frame: FrameContext): void {
@@ -137,6 +210,16 @@ export class GeometryPrepass extends PostPass {
     renderer.autoClear = false;
     renderer.render(scene, frame.camera);
     renderer.autoClear = prevAutoClear;
+
+    // Fill camera-only velocity everywhere the scene left the depth buffer at 1.0.
+    const sv = this.skyVelocityMat.uniforms;
+    (sv.uProjInv.value as THREE.Matrix4).copy(frame.projInv);
+    (sv.uViewInv.value as THREE.Matrix4).copy(frame.viewInv);
+    (sv.uPrevViewProj.value as THREE.Matrix4).copy(
+      frame.historyValid ? frame.prevViewProj : frame.viewProj,
+    );
+    sv.uSkyDistance.value = Math.min(3000, frame.far * 0.75);
+    frame.blit.draw(renderer, this.skyVelocityMat, this.target);
 
     this.restoreSwaps();
     scene.background = prevBackground;
@@ -234,6 +317,7 @@ export class GeometryPrepass extends PostPass {
   }
 
   override dispose(): void {
+    this.skyVelocityMat.dispose();
     this.target.dispose();
     this.depthTexture.dispose();
     this.cache.dispose();

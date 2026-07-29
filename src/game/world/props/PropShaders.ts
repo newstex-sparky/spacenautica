@@ -109,6 +109,66 @@ float propAO = 1.0;
 
 vec3 propViewToWorldDir(vec3 v){ return (vec4(v, 0.0) * viewMatrix).xyz; }
 
+/* --- screen-space band limiting ----------------------------------- *
+ *
+ * Every layer in this file is evaluated per fragment, so a layer whose period
+ * falls below the size of a pixel stops adding detail and becomes a fixed
+ * pattern locked to the sampling grid — a regular speckle that crawls when the
+ * camera moves. Mip-mapping is what saves a sampled texture from this; a
+ * procedural surface has to band-limit itself.
+ *
+ * propFootprint measures one pixel in the pattern's own units, and every
+ * layer fades toward its own mean before its period can reach that size.
+ */
+float propFootprint(vec3 p){
+  vec3 d = fwidth(p);
+  return max(max(d.x, d.y), d.z);
+}
+
+/** 1 while a period still spans several pixels, 0 once it cannot be resolved. */
+float propNyquist(float freq, float fw){
+  return 1.0 - smoothstep(0.20, 0.50, freq * fw);
+}
+
+/** Band-limited fbm. Unresolvable octaves converge to the mean, not to noise. */
+float propFbm(vec3 p, float freq, int octaves, float fw){
+  float a = 0.5, s = 0.0, n = 0.0, f = freq;
+  for (int i = 0; i < 6; i++){
+    if (i >= octaves) break;
+    s += a * propNyquist(f, fw) * snoise(p * f);
+    n += a;
+    f *= 2.02;
+    a *= 0.5;
+  }
+  return s / max(n, 1e-4);
+}
+
+/**
+ * One band-limited bump layer, in WORLD space.
+ *
+ * slope is the tangent of the largest tilt the layer may add, which is the
+ * only stable way to specify a procedural bump. The previous version specified
+ * a noise *amplitude* and multiplied it by a finite difference taken with a
+ * step 0.48x the noise period — so the "gradient" was an aliased secant, not a
+ * derivative, and its mean magnitude reached 1.2 (a 50 degree normal tilt, 76
+ * degrees at the peak) for what was meant to be micro grain. That decoupled the
+ * shading normal from the surface and is what produced the dithered speckle on
+ * the boulders. Here the step is a fixed fraction of the period and the tilt is
+ * bounded by construction.
+ */
+vec3 propBump(vec3 wpos, vec3 n, float freq, float slope, float fw){
+  float lod = propNyquist(freq, fw);
+  if (lod < 0.004) return n;
+  vec3 q = wpos * freq;
+  const float e = 0.14;                  // well inside one period
+  float h = snoise(q);
+  vec3 g = vec3(snoise(q + vec3(e, 0.0, 0.0)) - h,
+                snoise(q + vec3(0.0, e, 0.0)) - h,
+                snoise(q + vec3(0.0, 0.0, e)) - h) / e;
+  g -= n * dot(g, n);                    // tangential component only
+  return normalize(n - g * (slope * lod));
+}
+
 /* --- cellular / bump helpers ------------------------------------- */
 
 // 3D cellular noise. x = F1, y = F2, z = cell id.
@@ -130,27 +190,19 @@ vec3 propWorley3(vec3 p){
   return vec3(f1, f2, id);
 }
 
-/** Two-octave relief used for the analytic normal gradient. */
-float propRelief(vec3 p){
-  return snoise(p * 2.6) * 0.62 + snoise(p * 6.9) * 0.27;
-}
-
-// Perturbs n by the gradient of propRelief, plus a micro grain pass.
-vec3 propReliefNormal(vec3 p, vec3 n, float amp, float micro){
-  float e = 0.07;
-  float h = propRelief(p);
-  vec3 g = vec3(propRelief(p + vec3(e, 0.0, 0.0)) - h,
-                propRelief(p + vec3(0.0, e, 0.0)) - h,
-                propRelief(p + vec3(0.0, 0.0, e)) - h) / e;
-  g -= n * dot(g, n);                       // keep it a perturbation
-  vec3 nn = normalize(n - g * amp);
-  if (micro > 0.0){
-    vec3 t1 = normalize(cross(nn, vec3(0.0, 1.0, 0.0001)));
-    vec3 t2 = cross(nn, t1);
-    float m1 = snoise(p * 23.0);
-    float m2 = snoise(p * 23.0 + vec3(11.3, 5.7, 2.1));
-    nn = normalize(nn + (t1 * m1 + t2 * m2) * micro);
-  }
+/**
+ * Three band-limited bump scales in one call: metre lumps, decimetre relief and
+ * centimetre grain. k scales all three tilts together so a material can be
+ * smoother or rougher without changing the frequency spread. Layers switch
+ * themselves off as they stop being resolvable, so this is *cheaper* at
+ * distance, not just cleaner.
+ */
+vec3 propReliefNormal(vec3 wpos, vec3 n, float k, float grainK){
+  float fw = propFootprint(wpos);
+  vec3 nn = n;
+  nn = propBump(wpos, nn,  1.7, 0.30 * k, fw);
+  nn = propBump(wpos, nn,  6.1, 0.20 * k, fw);
+  if (grainK > 0.0) nn = propBump(wpos, nn, 21.0, 0.13 * grainK, fw);
   return nn;
 }
 
@@ -158,9 +210,14 @@ vec3 propReliefNormal(vec3 p, vec3 n, float amp, float micro){
  * Single-cell barnacle / coral encrustation. Cheap on purpose (one hash, no
  * 3x3 search): the gaps between cells read as natural clumping.
  * Returns coverage; outDir is the unnormalised bump direction.
+ *
+ * fw is one pixel measured in cell units. The shell edge is widened by it so
+ * a barnacle softens into the rock instead of hard-clipping, and the whole layer
+ * fades out once a shell is smaller than a couple of pixels — otherwise a
+ * boulder at 20 m wears a field of single-pixel dots.
  */
-float propEncrust(vec3 wp, float scale, out vec3 outDir, out float cellId){
-  vec3 bp = wp * scale;
+float propEncrust(vec3 wpos, float scale, float fw, out vec3 outDir, out float cellId){
+  vec3 bp = wpos * scale;
   vec3 bi = floor(bp);
   vec3 bf = fract(bp) - 0.5;
   vec3 bh = hash33(bi);
@@ -170,7 +227,12 @@ float propEncrust(vec3 wp, float scale, out vec3 outDir, out float cellId){
   cellId = bh.z;
   outDir = d;
   float rad = 0.16 + bh.x * 0.20;
-  return smoothstep(rad, rad * 0.35, r) * step(0.44, bh.y);
+  // Written as an ascending smoothstep on purpose: a descending one (edge0 >
+  // edge1) is undefined in the GLSL spec even though drivers tolerate it.
+  float aa = fw * 1.2;
+  float inner = max(0.012, rad * 0.35);
+  float shell = 1.0 - smoothstep(inner - aa, rad + aa, r);
+  return shell * step(0.44, bh.y) * (1.0 - smoothstep(0.16, 0.40, fw));
 }
 
 /* --- panel frame for stamped / plated surfaces -------------------- */
@@ -182,8 +244,14 @@ void propPanelFrame(vec3 op, vec3 on, out vec2 uv, out vec3 tu, out vec3 tv){
   else { uv = op.xy; tu = vec3(1.0, 0.0, 0.0); tv = vec3(0.0, 1.0, 0.0); }
 }
 
-/** Panel seam + rivet height field. x = height, y = seam mask, z = rivet mask. */
-vec3 propPanelField(vec2 pc){
+/**
+ * Panel seam + rivet height field. x = height, y = seam mask, z = rivet mask.
+ * aa is one pixel in cell units; the thin features widen by it so a hull plate
+ * at 40 m has soft seams rather than a shimmering grid. Every smoothstep here is
+ * written ascending — a descending one (edge0 > edge1) is undefined in the GLSL
+ * spec even though every driver happens to tolerate it.
+ */
+vec3 propPanelField(vec2 pc, float aa){
   float row = floor(pc.y);
   pc.x += 0.5 * mod(row, 2.0) + hash11(row * 7.3) * 0.3;   // stagger: no lattice
   vec2 cell = floor(pc);
@@ -192,12 +260,13 @@ vec3 propPanelField(vec2 pc){
   if (ch > 0.58) f.x = fract(f.x * 2.0);                   // some panels split
   if (ch < 0.17) f.y = fract(f.y * 2.0);
   float lineD = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
-  float seam = 1.0 - smoothstep(0.0, 0.04, lineD);
+  float seam = 1.0 - smoothstep(0.0, 0.04 + aa, lineD);
   vec2 q = abs(f - 0.5);
   float edge = max(q.x, q.y);
   float along = (q.x > q.y) ? f.y : f.x;
   float rr = abs(fract(along * 11.0) - 0.5);
-  float rivet = smoothstep(0.05, 0.0, abs(edge - 0.44)) * smoothstep(0.3, 0.1, rr);
+  float rivet = (1.0 - smoothstep(0.0, 0.05 + aa, abs(edge - 0.44)))
+              * (1.0 - smoothstep(0.1, 0.3, rr));
   float h = -seam * 0.55 + rivet * 0.75 + (hash12(cell) - 0.5) * 0.12;
   return vec3(h, seam, rivet);
 }
@@ -216,35 +285,57 @@ const SURFACE_ROCK = /* glsl */ `
   float dScale    = uPropParams2.x;
   float crustAmt  = uPropParams2.y;
 
+  // Object space for the *scalar* strata field only: bedding planes have to
+  // follow the boulder's own tipped axis, so they cannot live in world space.
   vec3 sp = op * dScale * vPropInst.w + vPropInst.xyz;
+  // World space, offset by the instance seed, for everything that ends up in the
+  // normal. Two reasons: grain is a property of the stone rather than of the
+  // boulder, so it must not stretch with instance scale; and the old code built
+  // its gradient in object space and then subtracted it from a *world* normal,
+  // which made the lighting depend on each rock's placement yaw.
+  vec3 gp = wp + vPropInst.xyz;
+  float fwS = propFootprint(sp);
+  float fwG = propFootprint(gp);
 
-  // macro: warped bedding planes. Flat, near-horizontal strata in object
-  // space read as sedimentary layering once the rock is tipped by placement.
-  float bandN = fbm3(sp * 0.24, 3);
+  // macro: warped bedding planes.
+  float bandN = propFbm(sp, 0.24, 3, fwS);
   float band  = sin((op.y * 1.05 * dScale + bandN * 1.7) * PI);
   float strata = smoothstep(-0.3, 0.3, band);
 
-  // mid: plate fracture. Cell walls become chipped, darker, rougher edges.
-  vec3 cel = propWorley3(sp * 0.8 + 3.1);
-  float crack = 1.0 - smoothstep(0.02, 0.15, cel.y - cel.x);
+  // mid: plate fracture. Cell walls become chipped, darker, rougher edges. The
+  // wall is a thin F2-F1 ridge, so it has to thicken with the pixel footprint or
+  // it turns into a crawling one-pixel wire at any distance.
+  float cellF = 0.8;
+  vec3 cel = propWorley3(sp * cellF + 3.1);
+  float crack = (1.0 - smoothstep(0.02, 0.15 + fwS * cellF * 3.0, cel.y - cel.x))
+              * propNyquist(cellF * 1.7, fwS);
 
   // micro
-  float grain = fbm3(sp * 5.2, 3);
+  float grain = propFbm(sp, 5.2, 3, fwS);
+  // Igneous stone has no strata, so bedding cross-fades between a mottled
+  // patchwork and layered banding rather than between banding and a flat 0.5.
+  float mottle = propFbm(sp + 7.0, 1.35, 3, fwS) * 0.5 + 0.5;
 
-  float tint = clamp(mix(0.5, strata, bedding) + bandN * 0.28, 0.0, 1.0);
+  float tint = clamp(mix(mottle, strata, bedding) + bandN * 0.28, 0.0, 1.0);
   albedo = mix(uPropColA, uPropColB, tint);
-  albedo *= 0.76 + 0.36 * (grain * 0.5 + 0.5);
+  albedo *= 0.70 + 0.46 * (grain * 0.5 + 0.5);
   albedo = mix(albedo, uPropColDark, crack * 0.7);
+  // Cavity darkening in the albedo as well as the lighting: without it a rock
+  // reads as a painted ball however good the normal is.
+  albedo *= 0.72 + 0.28 * clamp(vPropSurf.x, 0.0, 1.0);
   albedo *= 0.8 + 0.4 * fract(vPropInst.x * 0.113 + vPropInst.z * 0.037);
 
-  rough = baseRough * (0.86 + 0.24 * (grain * 0.5 + 0.5));
+  // Roughness has to break up at its own frequency or the specular reads as one
+  // uniform plastic sheen across the whole boulder.
+  rough = baseRough * (0.80 + 0.34 * (grain * 0.5 + 0.5));
+  rough *= 0.92 + 0.16 * (propFbm(sp + 3.3, 13.0, 2, fwS) * 0.5 + 0.5);
   metal = 0.0;
-  nrm = propReliefNormal(sp, nrm, 0.16 + 0.1 * bedding, 0.035);
+  nrm = propReliefNormal(gp, nrm, 0.85 + 0.35 * bedding, 1.0);
   // crease the fracture walls into the normal
-  nrm = normalize(nrm - on * crack * 0.22);
+  nrm = normalize(nrm - wn * crack * 0.22);
 
   // ore: blobby veins with a metallic glint, the "mine me" read
-  float oreN = fbm3(sp * 8.5 + 21.0, 2) * 0.5 + 0.5;
+  float oreN = propFbm(sp + 21.0, 8.5, 2, fwS) * 0.5 + 0.5;
   float ore = accentAmt * smoothstep(0.52, 0.72, oreN) * (1.0 - crack * 0.5);
   albedo = mix(albedo, uPropAccent, ore * 0.92);
   metal = ore * 0.86;
@@ -254,11 +345,11 @@ const SURFACE_ROCK = /* glsl */ `
   // sediment settled on upward faces, keyed to the biome floor colour
   float up = clamp(wn.y, 0.0, 1.0);
   float silt = smoothstep(0.24, 0.95, up) * siltLevel
-             * (0.42 + 0.58 * (fbm3(wp * 0.5, 3) * 0.5 + 0.5));
+             * (0.42 + 0.58 * (propFbm(wp, 0.5, 3, propFootprint(wp)) * 0.5 + 0.5));
   silt *= 1.0 - crack * 0.55;
   albedo = mix(albedo, uPropSilt, silt * 0.82);
   rough = mix(rough, 0.97, silt);
-  nrm = normalize(mix(nrm, on, silt * 0.4));
+  nrm = normalize(mix(nrm, wn, silt * 0.4));
 
   propAO = vPropSurf.x * (1.0 - crack * 0.35) * (1.0 - silt * 0.12);
 
@@ -289,24 +380,31 @@ const SURFACE_METAL = /* glsl */ `
   vec2 pc; vec3 tu, tv;
   propPanelFrame(op, on, pc, tu, tv);
   pc /= panelSize;
-  vec3 pf = propPanelField(pc);
-  float seam = pf.y;
-  float rivet = pf.z;
+  // One pixel measured in panel-cell units: the seam and rivet masks are thin
+  // hard-edged features and have to widen with it or they alias.
+  float fwP = max(fwidth(pc.x), fwidth(pc.y));
+  vec3 pf = propPanelField(pc, fwP);
+  float seam = pf.y * (1.0 - smoothstep(0.35, 0.9, fwP));
+  float rivet = pf.z * (1.0 - smoothstep(0.10, 0.30, fwP));
 
-  // Panel-space normal from the seam/rivet height field.
-  float e = 0.012 / panelSize;
-  float hu = propPanelField(pc + vec2(e, 0.0)).x - pf.x;
-  float hv = propPanelField(pc + vec2(0.0, e)).x - pf.x;
-  nrm = normalize(nrm - (tu * hu + tv * hv) * (0.9 / e) * 0.02);
+  // Panel-space normal from the seam/rivet height field. The finite-difference
+  // step has to stay inside the (now footprint-widened) seam or the difference
+  // stops being a derivative.
+  float e = max(0.012 / panelSize, fwP * 0.6);
+  float hu = propPanelField(pc + vec2(e, 0.0), fwP).x - pf.x;
+  float hv = propPanelField(pc + vec2(0.0, e), fwP).x - pf.x;
+  nrm = normalize(nrm - (tu * hu + tv * hv) * (0.018 / e));
 
   // paint -> primer -> bare metal chipping, seeded off seams and torn edges
-  float wearN = fbm3(op * 2.1 * dScale + vPropInst.xyz, 4) * 0.5 + 0.5;
+  float fwO = propFootprint(op);
+  float wearN = propFbm(op * dScale + vPropInst.xyz, 2.1, 4, fwO * dScale) * 0.5 + 0.5;
   float chip = smoothstep(chipBias, chipBias + 0.18, wearN + wear * 0.6 + seam * 0.2);
 
   // rust: world-space vertical columns so every streak runs downward
-  vec3 rp = vec3(wp.x, wp.y * 0.055, wp.z) * 1.3;
-  float colN = fbm3(rp, 4) * 0.5 + 0.5;
-  float src  = fbm3(vec3(wp.x, wp.y * 0.85, wp.z) * 0.45, 3) * 0.5 + 0.5;
+  vec3 rp = vec3(wp.x, wp.y * 0.055, wp.z);
+  vec3 sp2 = vec3(wp.x, wp.y * 0.85, wp.z);
+  float colN = propFbm(rp, 1.3, 4, propFootprint(rp)) * 0.5 + 0.5;
+  float src  = propFbm(sp2, 0.45, 3, propFootprint(sp2)) * 0.5 + 0.5;
   float rust = clamp(smoothstep(0.44, 0.9, colN * 0.62 + src * 0.52 + wear * 0.45 + seam * 0.22) * rustAmt, 0.0, 1.0);
   rust = clamp(rust + smoothstep(0.45, 1.0, wn.y) * rustAmt * 0.4 * colN, 0.0, 1.0);
 
@@ -317,13 +415,13 @@ const SURFACE_METAL = /* glsl */ `
   metal  = mix(0.06, 0.92, smoothstep(0.5, 1.0, chip));
   rough  = mix(baseRough, baseRough * 0.72, smoothstep(0.5, 1.0, chip));
 
-  vec3 rustCol = mix(uPropColDark, uPropAccent, fbm3(wp * 2.6, 2) * 0.5 + 0.5);
+  vec3 rustCol = mix(uPropColDark, uPropAccent, propFbm(wp, 2.6, 2, propFootprint(wp)) * 0.5 + 0.5);
   albedo = mix(albedo, rustCol, rust);
   metal *= 1.0 - rust * 0.95;
   rough = mix(rough, 0.95, rust);
 
-  // brushed micro scratches, then dents
-  nrm = propReliefNormal(op * dScale * 0.7 + vPropInst.xyz, nrm, 0.07, 0.05 + rust * 0.06);
+  // dents and brushed micro scratches — plate metal stays much flatter than rock
+  nrm = propReliefNormal(wp + vPropInst.xyz, nrm, 0.26, 0.45 + rust * 0.55);
   albedo *= 1.0 - seam * 0.4;
   albedo *= 0.85 + 0.3 * rivet;
 
@@ -345,19 +443,28 @@ const SURFACE_ALIEN = /* glsl */ `
   vec2 pc; vec3 tu, tv;
   propPanelFrame(op, on, pc, tu, tv);
 
+  // One pixel in panel units; both cell networks below are thin edge detects and
+  // need it, or the inlay becomes a shimmering pixel lattice at any distance.
+  float fwA = max(fwidth(pc.x), fwidth(pc.y));
+
   // macro: tessellated dark facets
   vec3 cv = voronoi(pc / cellSize);
-  float facetEdge = 1.0 - smoothstep(0.0, 0.06, cv.y - cv.x);
+  float aFacet = fwA / cellSize;
+  float facetEdge = (1.0 - smoothstep(0.0, 0.06 + aFacet * 2.0, cv.y - cv.x))
+                  * (1.0 - smoothstep(0.25, 0.6, aFacet));
 
   // the inlay: a second, finer cell network whose walls glow and pulse
-  vec3 cv2 = voronoi(pc / (cellSize * 0.34) + 17.0);
-  float trace = smoothstep(0.055, 0.012, cv2.y - cv2.x);
+  float traceCell = cellSize * 0.34;
+  vec3 cv2 = voronoi(pc / traceCell + 17.0);
+  float aTrace = fwA / traceCell;
+  float trace = (1.0 - smoothstep(0.012, 0.055 + aTrace * 2.0, cv2.y - cv2.x))
+              * (1.0 - smoothstep(0.25, 0.6, aTrace));
   trace *= step(0.35, fract(cv2.z * 13.0));
 
   float pulse = 0.45 + 0.55 * sin(uwTime * 1.7 - wp.y * 0.5 + cv2.z * 24.0);
   pulse = pulse * pulse;
 
-  float sheen = fbm3(op * 3.0 * dScale, 3) * 0.5 + 0.5;
+  float sheen = propFbm(op * dScale, 3.0, 3, propFootprint(op) * dScale) * 0.5 + 0.5;
   albedo = mix(uPropColA, uPropColB, sheen);
   albedo = mix(albedo, uPropColDark, facetEdge * 0.7);
   rough = mix(baseRough, baseRough * 2.2, facetEdge);
@@ -367,8 +474,9 @@ const SURFACE_ALIEN = /* glsl */ `
   float fres = pow(1.0 - clamp(dot(nrm, normalize(propViewToWorldDir(normalize(vViewPosition)))), 0.0, 1.0), 4.0);
   albedo += uPropAccent2 * fres * 0.14;
 
-  nrm = propReliefNormal(op * dScale * 1.4, nrm, 0.05, 0.02);
-  nrm = normalize(nrm - on * facetEdge * 0.3);
+  // Precursor alloy is machined: almost no relief, and no grain at all.
+  nrm = propReliefNormal(wp * 1.4, nrm, 0.14, 0.0);
+  nrm = normalize(nrm - wn * facetEdge * 0.3);
 
   emis += uPropAccent * trace * (0.35 + 1.65 * pulse) * glowAmt * uPropParams2.w;
   albedo = mix(albedo, uPropAccent * 0.5, trace * 0.5);
@@ -384,15 +492,19 @@ const SURFACE_CRYSTAL = /* glsl */ `
   float dScale    = uPropParams2.x;
 
   vec3 sp = op * dScale * vPropInst.w + vPropInst.xyz;
-  float milk = fbm3(sp * 3.4, 4) * 0.5 + 0.5;
-  float veins = 1.0 - smoothstep(0.0, 0.1, abs(fbm3(sp * 1.6, 3)));
+  float fwS = propFootprint(sp);
+  float milk = propFbm(sp, 3.4, 4, fwS) * 0.5 + 0.5;
+  // The vein is a zero-crossing band, so it thins to nothing on screen unless it
+  // widens with the footprint.
+  float veins = 1.0 - smoothstep(0.0, 0.1 + fwS * 2.0, abs(propFbm(sp, 1.6, 3, fwS)));
 
   albedo = mix(uPropColA, uPropColB, milk);
   albedo = mix(albedo, uPropColDark, veins * 0.35);
   rough = mix(baseRough, baseRough * 3.5, milk * 0.6 + veins * 0.4);
   metal = 0.0;
 
-  nrm = propReliefNormal(sp * 0.6, nrm, 0.05, 0.015);
+  // Crystal facets are glassy: a whisper of relief, no grain.
+  nrm = propReliefNormal(wp * 0.6, nrm, 0.14, 0.0);
 
   // Fake internal scatter: bright rim, warm core, brighter where the crystal
   // is thin. Reads as translucency without paying for real transmission.
@@ -410,10 +522,12 @@ const SURFACE_ORGANIC = /* glsl */ `
   float dScale    = uPropParams2.x;
 
   vec3 sp = op * dScale * vPropInst.w + vPropInst.xyz;
+  float fwS = propFootprint(sp);
   vec3 cel = propWorley3(sp * 2.4);
-  float vein = 1.0 - smoothstep(0.0, 0.13, cel.y - cel.x);
-  float blotch = fbm3(sp * 1.5, 3) * 0.5 + 0.5;
-  float mottle = fbm3(sp * 7.0, 2) * 0.5 + 0.5;
+  float vein = (1.0 - smoothstep(0.0, 0.13 + fwS * 2.4 * 3.0, cel.y - cel.x))
+             * propNyquist(2.4 * 1.7, fwS);
+  float blotch = propFbm(sp, 1.5, 3, fwS) * 0.5 + 0.5;
+  float mottle = propFbm(sp, 7.0, 2, fwS) * 0.5 + 0.5;
 
   albedo = mix(uPropColA, uPropColB, blotch);
   albedo = mix(albedo, uPropColDark, vein * 0.55);
@@ -421,8 +535,9 @@ const SURFACE_ORGANIC = /* glsl */ `
   rough = baseRough * (0.8 + 0.4 * mottle);
   metal = 0.0;
 
-  nrm = propReliefNormal(sp * 0.9, nrm, 0.12, 0.03);
-  nrm = normalize(nrm - on * vein * 0.25);
+  // Leathery shell: soft mid relief, fine pore grain.
+  nrm = propReliefNormal(wp * 0.9, nrm, 0.4, 0.6);
+  nrm = normalize(nrm - wn * vein * 0.25);
 
   vec3 vdirW = normalize(propViewToWorldDir(normalize(vViewPosition)));
   float fres = pow(1.0 - clamp(dot(nrm, vdirW), 0.0, 1.0), 1.6);
@@ -445,8 +560,9 @@ const SURFACES: Record<PropMatKind, string> = {
 const ENCRUST_BLOCK = /* glsl */ `
   #ifdef PROP_ENCRUST
   {
+    const float bScale = 3.1;
     vec3 bdir; float bid;
-    float cover = propEncrust(wp, 3.1, bdir, bid);
+    float cover = propEncrust(wp, bScale, propFootprint(wp) * bScale, bdir, bid);
     cover *= clamp(vPropSurf.z, 0.0, 1.0) * crustAmt;
     cover *= smoothstep(-0.35, 0.55, wn.y) * 0.85 + 0.15;
     if (cover > 0.001){
@@ -458,7 +574,7 @@ const ENCRUST_BLOCK = /* glsl */ `
       albedo = mix(albedo, cCol, cover);
       rough = mix(rough, mix(0.55, 0.82, isCoral), cover);
       metal *= 1.0 - cover;
-      nrm = normalize(nrm + normalize(bdir + on * 0.35) * cover * 0.85);
+      nrm = normalize(nrm + normalize(bdir + wn * 0.35) * cover * 0.55);
       emis += coralCol * isCoral * cover * 0.05 * uPropParams2.w;
       propAO *= 1.0 - cover * 0.25;
     }

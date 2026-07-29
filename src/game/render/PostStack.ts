@@ -29,9 +29,13 @@ interface WaterLike {
   underwater?: boolean;
   cameraDepth?: number;
   sharedUniforms?: Record<string, THREE.IUniform>;
-  /** Optional: volumetric light-shaft buffer for the composite slot. */
-  volumetricTexture?: THREE.Texture | null;
-  volumetricIntensity?: number;
+  /**
+   * Half-res god-ray/caustic buffer published by `world.water`. Already
+   * sun-coloured radiance — the composite slot must not re-tint it.
+   */
+  volumetricsTexture?: THREE.Texture | null;
+  /** Setting this true makes the water hide its own in-scene additive quad. */
+  externalVolumetricComposite?: boolean;
 }
 interface TextureLibraryLike {
   blueNoise?: THREE.Texture;
@@ -106,10 +110,19 @@ export class PostStack implements GameSystem {
   private effective!: GraphicsSettings;
   private slowStreak = 0;
   private fastStreak = 0;
-  /** 0 = everything the settings ask for; 4 = only bloom + grade survive. */
+  /** 0 = everything the settings ask for; 4 = SSR/GTAO/DOF/blur/rays shed. */
   budgetLevel = 0;
   /** Frame-time ceiling (ms) before the guard starts shedding passes. */
   budgetMs = 55;
+  /** Set false to pin the stack to exactly what `settings.graphics` asks for. */
+  budgetGuard = true;
+  /** Frames of grace after boot/resize before the guard may shed anything. */
+  private warmup = 180;
+  /** The water system whose composite slot we may have claimed. */
+  private water: (GameSystem & WaterLike) | null = null;
+  private claimedVolumetric = false;
+  private claimAge = 0;
+  private manualVolumetric = false;
 
   /* ------------------------------------------------------------------ *
    * Lifecycle
@@ -292,6 +305,16 @@ export class PostStack implements GameSystem {
     return this.prepass.depthTexture;
   }
 
+  /**
+   * True when the prepass actually ran this frame, i.e. `depthTexture`,
+   * `normalTexture` and `velocityTexture` hold this frame's geometry rather than
+   * a cleared buffer. `depthTexture` is never null (systems bind it once and keep
+   * the reference), so consumers that need to branch must ask this.
+   */
+  get depthValid(): boolean {
+    return this.frame?.prepassValid ?? false;
+  }
+
   /** RGBA16F: `rgb` = world-space normal, `a` = coverage mask (1 geometry / 0 sky). */
   get normalTexture(): THREE.Texture {
     return this.prepass.normalTexture;
@@ -323,6 +346,7 @@ export class PostStack implements GameSystem {
    * fall back to the stack's own screen-space shafts.
    */
   setVolumetric(texture: THREE.Texture | null, intensity = 1): void {
+    this.manualVolumetric = texture !== null;
     this.volumetric.external = texture;
     this.volumetric.externalStrength = intensity;
   }
@@ -353,6 +377,12 @@ export class PostStack implements GameSystem {
     if (tier !== this.lastTier) {
       this.lastTier = tier;
       this.grade.setLutSize(ctx.settings.at('high') ? 32 : 16);
+      // Rebuilding three LUT cubes on the CPU costs one long frame, and the new
+      // tier changes what the passes cost anyway — re-measure from scratch.
+      this.budgetLevel = 0;
+      this.slowStreak = 0;
+      this.fastStreak = 0;
+      this.warmup = Math.max(this.warmup, 90);
     }
   }
 
@@ -412,6 +442,11 @@ export class PostStack implements GameSystem {
 
     // --- configure, then let the composer walk the chain ---
     frame.ao = null;
+    // The prepass must survive the budget guard: `world.water` marches its god
+    // rays against our depth buffer and decides whether materials apply their own
+    // caustics from whether we expose one. Key its liveness on what the *user*
+    // asked for, not on what the guard has shed.
+    this.prepass.keepAlive = ctx.settings.graphics.godRays || ctx.settings.graphics.taa;
     for (const p of this.passes) p.configure(frame);
 
     try {
@@ -431,33 +466,60 @@ export class PostStack implements GameSystem {
 
   /**
    * Frame-time guard. The quality tiers are the user's intent, but a scene can
-   * still blow the budget (a kelp forest at ultra on a laptop, or a software
-   * rasteriser in CI). Rather than letting the frame rate collapse, shed the
-   * most expensive passes in a fixed order with heavy hysteresis so it never
-   * visibly pumps. Everything comes back once there is headroom again.
+   * still blow the budget (a kelp forest at ultra on a laptop). Rather than
+   * letting the frame rate collapse, shed the most expensive passes in a fixed
+   * order with heavy hysteresis so it never visibly pumps. Everything comes back
+   * once there is headroom again.
+   *
+   * Two deliberate refusals to act:
+   *
+   *  - **Warm-up.** Boot frames (shader compilation, first terrain build) are
+   *    pathologically slow and say nothing about steady state. Nothing is shed
+   *    until the frame counter has moved on.
+   *  - **Catastrophic frames.** Above ~8x budget the frame is dominated by
+   *    rasterisation, not by post; turning off SSR will not take 1.4 s down to
+   *    16 ms, it will only make the frame look like a web demo. That regime
+   *    belongs to the engine's adaptive resolution, so the guard stands down.
+   *    This is also what keeps the whole stack visible under a software
+   *    rasteriser in CI, where every capture would otherwise be graded from a
+   *    scene render with nothing on top of it.
+   *
+   * TAA is never shed. It is the cheapest pass in the stack (one full-res
+   * gather) and the single largest contributor to not looking like a web demo,
+   * and the geometry prepass it keeps alive is what other systems sample.
    */
   private updateBudget(ctx: GameContext): void {
     const ms = (ctx as unknown as { frameMs?: number }).frameMs ?? 16.7;
     const budget = this.budgetMs;
-    if (ms > budget * 6) this.slowStreak += 12;
-    else if (ms > budget * 2) this.slowStreak += 4;
-    else if (ms > budget) this.slowStreak += 1;
-    else this.slowStreak = Math.max(0, this.slowStreak - 2);
 
-    if (this.slowStreak >= 48 && this.budgetLevel < 4) {
-      this.budgetLevel++;
+    if (this.warmup > 0) {
+      this.warmup--;
+    } else if (!this.budgetGuard || ms > budget * 8) {
+      // Stand down: either pinned by the caller, or the frame cost is not ours.
       this.slowStreak = 0;
       this.fastStreak = 0;
-    }
-    if (ms < budget * 0.45) this.fastStreak++;
-    else this.fastStreak = 0;
-    if (this.fastStreak > 420 && this.budgetLevel > 0) {
-      this.budgetLevel--;
-      this.fastStreak = 0;
+    } else {
+      if (ms > budget * 3) this.slowStreak += 4;
+      else if (ms > budget * 1.5) this.slowStreak += 2;
+      else if (ms > budget) this.slowStreak += 1;
+      else this.slowStreak = Math.max(0, this.slowStreak - 2);
+
+      if (this.slowStreak >= 90 && this.budgetLevel < 4) {
+        this.budgetLevel++;
+        this.slowStreak = 0;
+        this.fastStreak = 0;
+      }
+      if (ms < budget * 0.45) this.fastStreak++;
+      else this.fastStreak = 0;
+      if (this.fastStreak > 420 && this.budgetLevel > 0) {
+        this.budgetLevel--;
+        this.fastStreak = 0;
+      }
     }
 
     const g = ctx.settings.graphics;
     Object.assign(this.effective, g);
+    if (!this.budgetGuard) return;
     const lvl = this.budgetLevel;
     if (lvl >= 1) this.effective.ssr = false;
     if (lvl >= 2) this.effective.gtao = false;
@@ -465,10 +527,7 @@ export class PostStack implements GameSystem {
       this.effective.dof = false;
       this.effective.motionBlur = false;
     }
-    if (lvl >= 4) {
-      this.effective.godRays = false;
-      this.effective.taa = false;
-    }
+    if (lvl >= 4) this.effective.godRays = false;
   }
 
   private readEnvironment(ctx: GameContext): void {
@@ -479,6 +538,7 @@ export class PostStack implements GameSystem {
     if (sky?.sunColor) frame.sunColor.copy(sky.sunColor);
 
     const water = ctx.tryGet<GameSystem & WaterLike>('world.water');
+    this.water = water ?? null;
     if (water) {
       if (typeof water.underwater === 'boolean') frame.underwater = water.underwater;
       if (typeof water.cameraDepth === 'number') frame.cameraDepth = Math.max(0, water.cameraDepth);
@@ -487,21 +547,75 @@ export class PostStack implements GameSystem {
       if (inscatter && (inscatter as THREE.Color).isColor) frame.waterInscatter.copy(inscatter);
       const ext = su?.uwExtinction?.value as THREE.Vector3 | undefined;
       if (ext && (ext as THREE.Vector3).isVector3) frame.waterExtinction.copy(ext);
-      if (water.volumetricTexture !== undefined) {
-        this.volumetric.external = water.volumetricTexture;
-        this.volumetric.externalStrength = water.volumetricIntensity ?? 1;
-      }
+      this.syncVolumetricSlot(water, frame.settings.godRays);
     } else {
       frame.underwater = ctx.camera.position.y < 0;
       frame.cameraDepth = Math.max(0, -ctx.camera.position.y);
+      // No water system this frame: drop any buffer we were compositing rather
+      // than keep re-presenting a texture nobody is refreshing.
+      if (this.claimedVolumetric) {
+        this.claimedVolumetric = false;
+        this.claimAge = 0;
+      }
+      if (!this.manualVolumetric) this.volumetric.external = null;
     }
 
     // Sun screen position for the fallback shafts, computed before jitter.
+    // (see syncVolumetricSlot for the composite hand-off)
     const cam = ctx.camera;
     _dir.copy(frame.sunDirection).transformDirection(cam.matrixWorldInverse);
     const inFront = _dir.z < -0.02;
     _v3.copy(cam.position).addScaledVector(frame.sunDirection, 5000).project(cam);
     frame.sunScreen.set(_v3.x * 0.5 + 0.5, _v3.y * 0.5 + 0.5, inFront ? 1 : 0);
+  }
+
+  /**
+   * Volumetric composite hand-off with `world.water`.
+   *
+   * The water system owns the physically-motivated shafts (it knows the surface
+   * geometry, the shadow map, the caustic phase and the Jerlov extinction) and
+   * publishes them as `volumetricsTexture`. Compositing them *here* rather than
+   * as an additive quad inside the scene render is strictly better: the shafts
+   * land in the linear HDR buffer before TAA (so they are temporally stabilised
+   * rather than fizzing), before DOF (so they defocus with the rest of the
+   * frame) and before bloom (so a shaft can bloom).
+   *
+   * The claim is released the moment this pass cannot run — otherwise shedding
+   * god rays under the budget guard would delete them from the frame entirely
+   * instead of falling back to the water's own quad.
+   */
+  private syncVolumetricSlot(water: GameSystem & WaterLike, wantRays: boolean): void {
+    if (this.manualVolumetric) return;
+    const frame = this.frame;
+    const tex = water.volumetricsTexture ?? null;
+    // Mirror the water system's own gate. It keeps the last buffer around after
+    // it stops marching, so compositing outside these conditions would smear a
+    // stale set of shafts across the frame.
+    const claim =
+      wantRays &&
+      tex !== null &&
+      frame.underwater &&
+      frame.sunDirection.y > 0.02 &&
+      frame.cameraDepth < 420;
+
+    if (claim !== this.claimedVolumetric) {
+      this.claimedVolumetric = claim;
+      this.claimAge = 0;
+    } else if (claim) {
+      this.claimAge++;
+    }
+    // Re-asserted every frame rather than only on the edge: the water system
+    // rebuilds its volumetrics on a tier change, and the fresh instance would
+    // otherwise come up with the flag cleared and draw its quad under ours.
+    if ('externalVolumetricComposite' in water) {
+      (water as { externalVolumetricComposite: boolean }).externalVolumetricComposite = claim;
+    }
+
+    // The water system only acts on the flag the next time it renders, so wait a
+    // frame before compositing — otherwise the hand-off frame draws the shafts
+    // twice (its quad plus ours).
+    this.volumetric.external = claim && this.claimAge > 0 ? tex : null;
+    this.volumetric.externalStrength = 1;
   }
 
   /* ------------------------------------------------------------------ *
@@ -520,6 +634,9 @@ export class PostStack implements GameSystem {
     this.pool.setSize(w, h);
     for (const p of this.passes) p.setSize(w, h);
     this.frame.historyValid = false;
+    // Reallocating every target in the chain costs one very slow frame; do not
+    // let the budget guard read that as the scene being too heavy.
+    this.warmup = Math.max(this.warmup, 30);
     this.frame.depth = this.prepass.depthTexture;
     this.frame.normal = this.prepass.normalTexture;
     this.frame.velocity = this.prepass.velocityTexture;
@@ -528,6 +645,12 @@ export class PostStack implements GameSystem {
   dispose(): void {
     const engine = this.ctx as unknown as Engine | undefined;
     if (engine && engine.renderOverride) engine.renderOverride = null;
+    // Hand the shafts back to the water system before we stop compositing them.
+    if (this.claimedVolumetric && this.water && 'externalVolumetricComposite' in this.water) {
+      (this.water as { externalVolumetricComposite: boolean }).externalVolumetricComposite = false;
+      this.claimedVolumetric = false;
+    }
+    this.water = null;
     for (const p of this.passes) p.dispose();
     this.passes.length = 0;
     this.composer?.dispose();

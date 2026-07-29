@@ -71,8 +71,13 @@ void main() {
 
   // Bend the outermost rings down so the mesh edge sinks under the haze
   // instead of ending in a hard line against the sky.
+  //
+  // Only when the eye is in air. Seen from below this would drop the far rings
+  // several metres *under* the eye at shallow depths, flipping them onto the
+  // above-water shading branch and painting a bright band across the horizon.
+  float inAir = step(uwSurfaceY, cameraPosition.y);
   float outer = clamp((r - uFade.y) / max(1.0, uRadiusMax - uFade.y), 0.0, 1.0);
-  wp.y -= outer * outer * 9.0;
+  wp.y -= outer * outer * 9.0 * inAir;
 
   vWorld = wp;
   vNrm = nrm;
@@ -220,6 +225,10 @@ void main() {
     refractDir(V, -N, 1.3255, dr);
     refractDir(V, -N, 1.3395, db);
     vec3 window = vec3(waterSkyColor(dr).r, waterSkyColor(dg).g, waterSkyColor(db).b);
+    // Radiance gain across the interface: the whole upper hemisphere is squeezed
+    // into a 97 degree cone, so the disc is genuinely brighter than the sky it
+    // shows, most strongly at its rim where the compression is greatest.
+    window *= 1.35 + 0.9 * (1.0 - clamp((cosI - COS_CRIT) / (1.0 - COS_CRIT), 0.0, 1.0));
 
     // Total internal reflection: mirror the underwater scene. The grab is
     // flipped about the screen centre and pushed around by the wave normal,
@@ -241,14 +250,16 @@ void main() {
 
     // The rim of the window carries a bright caustic ring.
     float rim = exp(-pow((cosI - COS_CRIT) * 22.0, 2.0));
-    col += uSunColor * uSunIntensity * rim * 0.035 * daylight;
+    col += uSunColor * uSunIntensity * rim * 0.045 * daylight;
 
     // Refracted sun disc punching through the window, and the shimmering
-    // bright network the underside of a wavy surface always shows.
+    // bright network the underside of a wavy surface always shows. The network
+    // is what makes the underside read as a moving liquid ceiling rather than a
+    // painted dome, so it fades in with the wave detail rather than with range.
     float specW = ggx(N, V, L, max(rough * 1.4, 0.02));
     col += uSunColor * uSunIntensity * specW * trans * 0.45 * daylight;
     vec3 shimmer = waterCaustics(vWorld + vec3(0.0, 0.05, 0.0), vec3(0.0, 1.0, 0.0));
-    col += shimmer * (0.18 + 0.5 * trans) * daylight;
+    col += shimmer * (0.10 + 0.30 * trans) * daylight * (0.35 + 0.65 * microFade);
 
     // Underside of foam: bright bubble rafts.
     col = mix(col, vec3(0.55, 0.66, 0.7) * (0.3 + 0.7 * daylight), foam * 0.6);

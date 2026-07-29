@@ -63,9 +63,9 @@ float matHeight(vec2 uv){
     lp += bk_warp(lp, uP[3].xy, 0.6);
     vec4 v = bk_voronoi(lp, uP[3].xy, 0.9);
     h += (v.z - 0.5) * uP[1].z * 0.6;
-    h -= bk_cellEdge(v, 0.12) * uP[1].z;
+    h -= bk_cellEdge(v, 0.12, uP[3].xy) * uP[1].z;
     vec4 v2 = bk_voronoi(lp * 2.5, uP[3].xy * 2.5, 0.9);
-    h -= bk_cellEdge(v2, 0.10) * uP[1].z * 0.45;
+    h -= bk_cellEdge(v2, 0.10, uP[3].xy * 2.5) * uP[1].z * 0.45;
     vec4 sc = bk_voronoi(uv * dC, dC, 1.0);
     float scar = step(1.0 - uP[5].w, sc.z);
     h -= scar * (1.0 - smoothstep(0.0, 0.26, sc.x)) * uP[1].z * 1.4;
@@ -122,7 +122,7 @@ void matSurface(MatCtx c, inout MatOut o){
     vec4 v = bk_voronoi(lp, uP[3].xy, 0.9);
     base *= 0.80 + v.z * 0.40;                       // per-plate value
     base = bk_hueShift(base, (v.w - 0.5) * uP[4].w * 0.6);
-    base = mix(base, base * 0.35, bk_cellEdge(v, 0.14) * 0.8);
+    base = mix(base, base * 0.35, bk_cellEdge(v, 0.14, uP[3].xy) * 0.8);
     // barnacle/lamprey scars: pale rings
     vec4 sc = bk_voronoi(uv * dC, dC, 1.0);
     float scar = step(1.0 - uP[5].w, sc.z) * (1.0 - smoothstep(0.20, 0.30, sc.x));

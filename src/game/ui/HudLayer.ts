@@ -56,6 +56,8 @@ export interface HudState {
   elapsed: number;
   /** Gameplay mode string for the mode chip. */
   mode: string;
+  /** True while a modal has the engine paused — freezes UI dwell timers. */
+  paused: boolean;
 }
 
 export interface PromptSpec {
@@ -65,12 +67,27 @@ export interface PromptSpec {
 
 interface Toast {
   root: HTMLElement;
+  /** `kind|text` — the coalescing identity. */
+  key: string;
   life: number;
   ttl: number;
+  count: number;
+  countEl: HTMLElement | null;
 }
 
 const O2_WARN = 0.34;
 const O2_DANGER = 0.14;
+
+/** Simultaneous toasts. Past this the oldest is evicted rather than scrolled. */
+const MAX_TOASTS = 4;
+
+/**
+ * A depth change larger than this in a single frame is not swimming — it is a
+ * teleport (save load, respawn, or the capture harness repositioning the
+ * player). The readout snaps instead of easing, so it never displays a depth the
+ * player was never at.
+ */
+const DEPTH_TELEPORT_M = 25;
 
 export class HudLayer {
   readonly root: HTMLDivElement;
@@ -291,6 +308,28 @@ export class HudLayer {
    * ------------------------------------------------------------------ */
 
   notify(text: string, kind: 'info' | 'warn' | 'danger' | 'success' = 'info', ttl = 4.2): void {
+    const key = `${kind}|${text}`;
+
+    // Coalesce. A message repeated while it is still on screen must not push a
+    // second identical card — it refreshes the one that is already there and
+    // grows a ×N counter. Without this, anything that fires on a timer (pressure
+    // warnings, "picked up X") builds a stack the player has to read twice.
+    for (const t of this.toasts) {
+      if (t.key !== key) continue;
+      t.life = 0;
+      t.ttl = Math.max(t.ttl, ttl);
+      t.count++;
+      if (!t.countEl) t.countEl = add(t.root, el('span', 'hud-toast-count', ''));
+      setText(t.countEl, `×${t.count}`);
+      if (!this.prefs.reducedMotion) {
+        // A short nudge so the refresh is visible without re-running the slide.
+        this.anim.tween(0.26, (k) => {
+          t.root.style.transform = `translateX(${Math.sin(k * Math.PI) * 7}px)`;
+        });
+      }
+      return;
+    }
+
     const root = div(`hud-toast hud-toast-${kind}`);
     add(root, div('hud-toast-accent'));
     const body = add(root, div('hud-toast-body'));
@@ -298,9 +337,9 @@ export class HudLayer {
     add(body, el('span', 'hud-toast-text', text));
     brackets(root);
     this.toastHost.appendChild(root);
-    const t: Toast = { root, life: 0, ttl };
-    this.toasts.push(t);
-    while (this.toasts.length > 5) {
+    this.toasts.push({ root, key, life: 0, ttl, count: 1, countEl: null });
+    // Evict from the top so the newest message is always fully readable.
+    while (this.toasts.length > MAX_TOASTS) {
       const old = this.toasts.shift();
       old?.root.remove();
     }
@@ -382,7 +421,15 @@ export class HudLayer {
    * Frame update
    * ------------------------------------------------------------------ */
 
+  /**
+   * `dt` is real elapsed seconds from HudSystem's WallClock, *not* the clamped
+   * simulation dt — every dwell, fade and damping in here is presentation, and
+   * "4 seconds" has to mean four seconds on the wall regardless of frame rate.
+   * It is 0 while a modal has the engine paused, which freezes everything.
+   */
   update(dt: number, s: HudState): void {
+    if (s.paused) return;
+
     /* ---- biome banner hold ---- */
     if (this.biomeTimer > 0) {
       this.biomeTimer -= dt;
@@ -394,7 +441,11 @@ export class HudLayer {
     this.dOxy = damp(this.dOxy, oxyFrac, 14, dt);
     this.o2Ring.set(this.dOxy);
     setText(this.o2Value, fmtInt(Math.max(0, s.oxygen)));
-    setText(this.o2Sub, s.underwater ? 'O₂ SEC' : 'O₂ FULL');
+    // The unit label must always describe the number next to it. It used to flip
+    // to "O₂ FULL" at the surface, which reads as a unit and contradicted the
+    // ring whenever the tank was not actually full. Refill state is a class.
+    setText(this.o2Sub, 'O₂ SEC');
+    setClass(this.root, 'o2-refill', !s.underwater && oxyFrac < 0.999);
     const warn = oxyFrac <= O2_WARN;
     const danger = oxyFrac <= O2_DANGER;
     setClass(this.root, 'o2-warn', warn && !danger);
@@ -434,9 +485,17 @@ export class HudLayer {
     this.applyBar('water', this.dWater, s.water);
 
     /* ---- depth ---- */
-    this.dDepth = damp(this.dDepth, s.depth, 9, dt);
-    setText(this.depthValue, fmtInt(this.dDepth));
-    const band = depthBand(s.depth);
+    // Snap across discontinuities (load / respawn / teleport); ease otherwise.
+    if (Math.abs(s.depth - this.dDepth) > DEPTH_TELEPORT_M) this.dDepth = s.depth;
+    else this.dDepth = damp(this.dDepth, s.depth, 9, dt);
+    // The band is keyed off the *rounded, displayed* metre value, not the raw
+    // target and not the unrounded float. Using the target is how "130 m /
+    // SURFACE" happened; using the unrounded float still lets the readout show
+    // "200" beside "Twilight Zone" at dDepth = 199.6. Reading the same integer
+    // the player reads makes the two incapable of disagreeing.
+    const shown = Math.max(0, Math.round(this.dDepth));
+    setText(this.depthValue, String(shown));
+    const band = depthBand(shown);
     setText(this.depthBandEl, band.label);
     setText(this.depthNote, band.note ?? '');
     setProp(this.depthValue, 'color', band.color);

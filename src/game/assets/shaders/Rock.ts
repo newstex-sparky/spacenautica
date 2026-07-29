@@ -17,8 +17,8 @@ float rockJoints(vec2 uv, vec2 cells, float width, out float cellId){
   vec4 v1 = bk_voronoi(p, cells, 0.9);
   vec4 v2 = bk_voronoi(p * 2.0, cells * 2.0, 0.92);
   cellId = v1.z;
-  float j1 = bk_cellEdge(v1, width);
-  float j2 = bk_cellEdge(v2, width * 0.8) * 0.55;
+  float j1 = bk_cellEdge(v1, width, cells);
+  float j2 = bk_cellEdge(v2, width * 0.8, cells * 2.0) * 0.55;
   return clamp(max(j1, j2), 0.0, 1.0);
 }
 
@@ -43,7 +43,7 @@ float matHeight(vec2 uv){
     // Basalt: columnar jointing plus gas vesicles.
     vec4 col = bk_voronoi(uv * dC, dC, 0.42);
     h += (col.z - 0.5) * uP[1].z * 0.8;
-    h -= bk_cellEdge(col, 0.10) * uP[1].z * 0.5;
+    h -= bk_cellEdge(col, 0.10, dC) * uP[1].z * 0.5;
     vec4 ves = bk_voronoi(uv * uC * 0.55, uC * 0.55, 1.0);
     float pit = step(1.0 - uP[4].w, ves.z) * (1.0 - smoothstep(0.0, 0.30, ves.x));
     h -= pit * 0.10;
@@ -68,14 +68,14 @@ float matHeight(vec2 uv){
     h += (lam - 0.5) * uP[1].z;
     vec4 flake = bk_voronoi(bk_shear(uv, 2.0, 0.0) * dC * vec2(1.0, 3.0), dC * vec2(1.0, 3.0), 0.95);
     h += (flake.z - 0.5) * uP[1].z * 0.7;
-    h -= bk_cellEdge(flake, 0.09) * uP[1].z * 0.8;
+    h -= bk_cellEdge(flake, 0.09, dC * vec2(1.0, 3.0)) * uP[1].z * 0.8;
   } else {
     // Crystal: flat facets. Each Voronoi cell becomes a plane tilted by its own
     // hash, with a sharp break along the cell boundary.
     vec4 v = bk_voronoi(uv * dC, dC, 0.75);
     vec2 tilt = bk_h22(vec2(v.z, v.w) * 37.0) - 0.5;
     h = 0.55 + dot(fract(uv * dC) - 0.5, tilt) * uP[1].z * 3.0 + (v.z - 0.5) * 0.12;
-    h -= bk_cellEdge(v, 0.05) * 0.10;
+    h -= bk_cellEdge(v, 0.05, dC) * 0.10;
     // conchoidal micro-fracture on the facets
     h += bk_fbm(uv * uC, uC, 2, 0.5) * uP[2].z * 0.5;
   }
@@ -161,7 +161,7 @@ void matSurface(MatCtx c, inout MatOut o){
   if (uSub == 4) {
     // faceted crystal: glassy faces with per-facet variation, matte on breaks
     vec4 v = bk_voronoi(uv * uP[1].xy, uP[1].xy, 0.75);
-    rough = mix(0.06 + v.w * 0.16, rough, bio * 0.8 + bk_cellEdge(v, 0.06) * 0.7);
+    rough = mix(0.06 + v.w * 0.16, rough, bio * 0.8 + bk_cellEdge(v, 0.06, uP[1].xy) * 0.7);
     o.aux = 0.8;
   }
 

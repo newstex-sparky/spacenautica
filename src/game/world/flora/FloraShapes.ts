@@ -125,7 +125,10 @@ function buildKelp(seed: number, lod: number, o: KelpOpts): THREE.BufferGeometry
   const bladeSegs = hi ? 11 : 5;
   const cross = hi ? 2 : 1;
   const outDir = new THREE.Vector3();
-  const scaleK = H / 18;
+  // Blade dimensions do not scale linearly with stipe length: a 3 m kelp still
+  // carries hand-sized laminae, it does not carry 1/6-scale ones. A linear
+  // H/18 made short kelp read as a bare twig with confetti stuck to it.
+  const scaleK = Math.pow(H / 18, 0.55);
 
   for (let bi = 0; bi < nBlades; bi++) {
     const u = lerp(o.firstBlade, 0.985, bi / Math.max(1, nBlades - 1)) + (rnd() - 0.5) * 0.03;
@@ -536,7 +539,12 @@ export const buildFanCoral: ShapeBuilder = (seed, lod) => {
     length: H * 0.34,
     radius: H * (0.016 + rnd() * 0.014),
     levels,
-    children: [2, 3],
+    // 2-3 children over three levels is ~9 tips, which silhouettes as a dead
+    // twig rather than a gorgonian. 3-4 nearly doubles the tip count for a
+    // fraction of the vertices a fourth level would cost, and because `planar`
+    // keeps the whorl in one plane the extra children spread the fan instead of
+    // bushing it out.
+    children: [3, 4],
     spread: 0.42 + rnd() * 0.32,
     lengthDecay: 0.66 + rnd() * 0.14,
     planar: 0.80 + rnd() * 0.17,

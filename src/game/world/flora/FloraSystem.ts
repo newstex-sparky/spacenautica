@@ -59,6 +59,19 @@ const BAND = 0.13;
 /** Instance-slot share of the global budget per LOD level. */
 const LOD_SHARE = [0.16, 0.20, 0.26];
 const BASE_BUDGET = 6000;
+/**
+ * Radius in metres that is always populated at full density. Budget pressure is
+ * absorbed entirely by the far field, so a tight foliage budget makes the
+ * distance thin out — it never hollows out the plants at your mask.
+ */
+const NEAR_FULL = 26;
+/** Wall-clock cell-generation budget, milliseconds: [burst, high, low]. */
+const STREAM_MS = [26, 3.5, 2.2];
+/** Cells around the camera that are generated unconditionally, ignoring the clock. */
+const CORE_CELLS = 2;
+
+const nowMs = (): number =>
+  typeof performance !== 'undefined' ? performance.now() : Date.now();
 
 interface Bucket {
   species: number;
@@ -100,6 +113,8 @@ export class FloraSystem implements GameSystem {
   private field: FloraField | null = null;
   private liveCells: FloraCell[] = [];
   private cellOffsets: Int32Array = new Int32Array(0);
+  /** Index (in `cellOffsets` units) one past the last core-ring cell. */
+  private coreEnd = 0;
   private fallbackNoise: THREE.Texture | null = null;
 
   private cellSize = 24;
@@ -110,10 +125,22 @@ export class FloraSystem implements GameSystem {
   private densityScale = 1;
   private settingsRevision = -1;
 
+  /**
+   * Streaming/LOD origin. `player.position` when the player system publishes it,
+   * because `player.camera` resolves `ctx.camera` in `Phase.Camera` — a whole
+   * frame *after* `Phase.World` — so keying off the camera makes flora stream to
+   * where the player was last frame. Harmless at 60 fps, fatal on a teleport at
+   * low frame rates: the plants get placed and culled for the old viewpoint and
+   * the new one renders bare.
+   */
+  private anchor = new THREE.Vector3(1e9, 1e9, 1e9);
+  /** One fill that ignores the frustum, used right after a teleport. */
+  private wideFill = true;
   private lastFillPos = new THREE.Vector3(1e9, 1e9, 1e9);
   private lastFillDir = new THREE.Vector3();
   private lastFillTime = -1e9;
   private lastStreamCell = { x: 1e9, z: 1e9 };
+  private warm = false;
   private drawn = 0;
   private cullCam = new THREE.PerspectiveCamera();
 
@@ -155,7 +182,12 @@ export class FloraSystem implements GameSystem {
 
     this.applyQuality(ctx, aniso);
     this.settingsRevision = ctx.settings.revision;
-    this.candidateRes = ctx.settings.at('medium') ? 16 : 12;
+    // Candidate sites per cell edge. This is the hard ceiling on plants per
+    // square metre (1 / step^2), so 16 over a 24 m cell caps a seagrass meadow
+    // at 0.44 plants/m^2 — and saturating a jittered grid is exactly what makes
+    // foliage read as "gridded". A finer grid both raises the ceiling and leaves
+    // the Poisson rejection room to scatter.
+    this.candidateRes = ctx.settings.at('high') ? 22 : ctx.settings.at('medium') ? 18 : 13;
     this.buildCellOffsets();
   }
 
@@ -171,7 +203,7 @@ export class FloraSystem implements GameSystem {
           cellSize: this.cellSize,
           gridRes: 13,
           candidates: this.candidateRes,
-          plantsPerM2: 0.14,
+          plantsPerM2: 0.17,
           seed: 20260728,
         },
         ctx.world,
@@ -353,9 +385,13 @@ export class FloraSystem implements GameSystem {
     }
     list.sort((a, b) => a[2] - b[2]);
     this.cellOffsets = new Int32Array(list.length * 2);
+    this.coreEnd = 0;
     for (let i = 0; i < list.length; i++) {
       this.cellOffsets[i * 2] = list[i][0];
       this.cellOffsets[i * 2 + 1] = list[i][1];
+      // Core ring: never deferred by the streaming clock, so the ground you can
+      // actually reach out and touch is populated on the frame you arrive.
+      if (list[i][2] <= CORE_CELLS + 0.5) this.coreEnd = (i + 1) * 2;
     }
   }
 
@@ -381,15 +417,23 @@ export class FloraSystem implements GameSystem {
       this.lastFillTime = -1e9;
     }
 
+    // Resolve the streaming origin before anything reads it.
+    const player = ctx.tryGet<GameSystem & { position?: THREE.Vector3 }>('player');
+    _v3d.copy(player?.position ?? ctx.camera.position);
+    // A teleport (spawn, load, vehicle exit) needs one omnidirectional fill: the
+    // camera's own orientation still lags a frame, so a frustum-culled fill would
+    // populate the direction we *were* facing.
+    if (_v3d.distanceToSquared(this.anchor) > 900) this.wideFill = true;
+    this.anchor.copy(_v3d);
+
     this.updateUniforms(ctx);
     this.stream(ctx);
 
-    const cam = ctx.camera;
-    cam.getWorldDirection(_v3a);
-    const moved = cam.position.distanceToSquared(this.lastFillPos);
+    ctx.camera.getWorldDirection(_v3a);
+    const moved = this.anchor.distanceToSquared(this.lastFillPos);
     const turned = 1 - _v3a.dot(this.lastFillDir);
-    if (moved > 2.25 || turned > 0.045 || ctx.time - this.lastFillTime > 0.3) {
-      this.lastFillPos.copy(cam.position);
+    if (this.wideFill || moved > 2.25 || turned > 0.045 || ctx.time - this.lastFillTime > 0.3) {
+      this.lastFillPos.copy(this.anchor);
       this.lastFillDir.copy(_v3a);
       this.lastFillTime = ctx.time;
       this.fill(ctx);
@@ -438,24 +482,44 @@ export class FloraSystem implements GameSystem {
     }
   }
 
-  /** Generates a few cells per frame, nearest first, and rebuilds the live list. */
+  /**
+   * Fills cells nearest-first against a **wall-clock** budget rather than a
+   * fixed per-frame quota.
+   *
+   * A fixed quota is wrong at the two moments that matter most: the first frame
+   * after load and the frame after a teleport. The streaming disc holds a few
+   * hundred cells, so two cells a frame means the world is visibly bare for
+   * seconds — and if the frame rate is low (a slow GPU, or a headless capture
+   * where a frame costs a second) it is bare more or less permanently. So a
+   * jump of more than one cell, or a cold field, triggers a one-off burst that
+   * populates as much of the disc as fits in ~26 ms; steady swimming then costs
+   * only a couple of milliseconds a frame.
+   */
   private stream(ctx: GameContext): void {
     const field = this.field!;
-    const cam = ctx.camera;
-    const ccx = Math.floor(cam.position.x / this.cellSize);
-    const ccz = Math.floor(cam.position.z / this.cellSize);
+    const ccx = Math.floor(this.anchor.x / this.cellSize);
+    const ccz = Math.floor(this.anchor.z / this.cellSize);
 
-    let quota = ctx.settings.at('high') ? 4 : 2;
+    const jumped =
+      !this.warm ||
+      Math.abs(ccx - this.lastStreamCell.x) > 1 ||
+      Math.abs(ccz - this.lastStreamCell.z) > 1;
+    const budgetMs = jumped ? STREAM_MS[0] : ctx.settings.at('high') ? STREAM_MS[1] : STREAM_MS[2];
+    // Always make progress even if the clock says the budget is already gone.
+    const minCells = jumped ? 12 : 1;
+
+    const t0 = nowMs();
     let generated = 0;
     const offsets = this.cellOffsets;
-    for (let i = 0; i < offsets.length && quota > 0; i += 2) {
+    for (let i = 0; i < offsets.length; i += 2) {
       const cx = ccx + offsets[i];
       const cz = ccz + offsets[i + 1];
       if (field.has(cx, cz)) continue;
+      if (i >= this.coreEnd && generated >= minCells && nowMs() - t0 > budgetMs) break;
       field.ensure(cx, cz);
-      quota--;
       generated++;
     }
+    this.warm = true;
 
     if (generated > 0 || ccx !== this.lastStreamCell.x || ccz !== this.lastStreamCell.z) {
       this.lastStreamCell.x = ccx;
@@ -468,7 +532,12 @@ export class FloraSystem implements GameSystem {
       this.lastFillTime = -1e9;
     }
     for (const cell of this.liveCells) cell.touched = ctx.frame;
-    if (ctx.frame % 240 === 0) field.evictUntouched(ctx.frame, 900);
+    // A teleport leaves a whole disc of cells behind it. `cellOffsets` holds two
+    // ints per cell, so its length is exactly 2x the live disc — use it as a
+    // "twice the working set" cap and drop everything stale the moment we exceed
+    // it, rather than waiting for the slow periodic sweep.
+    if (field.cells.size > this.cellOffsets.length) field.evictUntouched(ctx.frame, 0);
+    else if (ctx.frame % 240 === 0) field.evictUntouched(ctx.frame, 900);
   }
 
   /**
@@ -491,20 +560,30 @@ export class FloraSystem implements GameSystem {
     _projView.multiplyMatrices(this.cullCam.projectionMatrix, this.cullCam.matrixWorldInverse);
     _frustum.setFromProjectionMatrix(_projView);
 
-    const camX = cam.position.x;
-    const camY = cam.position.y;
-    const camZ = cam.position.z;
+    // Distances are measured from the streaming anchor, which leads the camera.
+    const camX = this.anchor.x;
+    const camY = this.anchor.y;
+    const camZ = this.anchor.z;
+    const wide = this.wideFill;
+    this.wideFill = false;
     const radius2 = this.radius * this.radius;
     const density = this.densityScale;
+    // The budget controller shortens the thinning ramp instead of scaling it.
+    // Scaling a fixed ramp thins the whole disc uniformly, which puts holes in
+    // the bed at your mask; shortening it keeps `NEAR_FULL` metres at full
+    // density and pulls the falloff in toward you as the budget tightens.
+    const fadeEnd = NEAR_FULL + Math.max(14, (this.radius - NEAR_FULL) * density);
     let total = 0;
 
     for (const cell of this.liveCells) {
       const dxC = cell.centreX - camX;
       const dzC = cell.centreZ - camZ;
       if (dxC * dxC + dzC * dzC > (this.radius + this.cellSize) * (this.radius + this.cellSize)) continue;
-      _sphere.center.set(cell.centreX, cell.centreY, cell.centreZ);
-      _sphere.radius = cell.radius;
-      if (!_frustum.intersectsSphere(_sphere)) continue;
+      if (!wide) {
+        _sphere.center.set(cell.centreX, cell.centreY, cell.centreZ);
+        _sphere.radius = cell.radius;
+        if (!_frustum.intersectsSphere(_sphere)) continue;
+      }
 
       const { species, variant, pos, nrm, data, warp, tint, xform } = cell;
       for (let i = 0; i < cell.count; i++) {
@@ -524,14 +603,15 @@ export class FloraSystem implements GameSystem {
 
         // Stable, hash-based distance thinning: never flickers, always the same
         // plants survive at the same range.
-        const keep =
-          density * (dist < 42 ? 1 : 1 - 0.72 * smoothstep(42, this.radius, dist));
+        const keep = 1 - 0.97 * smoothstep(NEAR_FULL, fadeEnd, dist);
         if (data[i * 4 + 3] > keep) continue;
 
         const scale = xform[i * 2];
-        _sphere.center.set(x, y + rt.height * scale * 0.5, z);
-        _sphere.radius = rt.height * scale * 0.62 + 1.5;
-        if (!_frustum.intersectsSphere(_sphere)) continue;
+        if (!wide) {
+          _sphere.center.set(x, y + rt.height * scale * 0.5, z);
+          _sphere.radius = rt.height * scale * 0.62 + 1.5;
+          if (!_frustum.intersectsSphere(_sphere)) continue;
+        }
 
         // Which LOD bands does this distance fall in?
         const lo = lodLow(dist, rt.bounds);
@@ -577,6 +657,9 @@ export class FloraSystem implements GameSystem {
           ta[k * 3 + 2] = tint[i * 3 + 2];
         }
       }
+      // `liveCells` is ordered nearest-first, so an overrun only ever drops the
+      // furthest cells — and it bounds the walk on very dense sea floors.
+      if (total > this.budget * 1.6) break;
     }
 
     for (const b of this.buckets) {
@@ -590,7 +673,10 @@ export class FloraSystem implements GameSystem {
     }
 
     this.drawn = total;
-    // Self-tuning density so the budget is respected on any terrain.
+    // Self-tuning density so the budget is respected on any terrain. A wide fill
+    // covers the whole sphere instead of the view cone, so its count says nothing
+    // about the steady-state cost — never let it drive the controller.
+    if (wide) return;
     if (total > this.budget * 1.05) this.densityScale = Math.max(0.06, this.densityScale * 0.9);
     else if (total < this.budget * 0.72) this.densityScale = Math.min(1, this.densityScale * 1.06);
   }

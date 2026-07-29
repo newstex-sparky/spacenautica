@@ -71,9 +71,13 @@ export class TextureBaker {
     this.scene.add(this.mesh);
   }
 
-  /** Compiles (once) and returns the program for a family. */
-  private program(family: MaterialFamily, displace: boolean): THREE.ShaderMaterial {
-    const key = `${family}${displace ? '+d' : ''}`;
+  /**
+   * Compiles (once) and returns the program for a family. There is exactly one
+   * program per family regardless of how many attachments the material wants —
+   * see the note on `oAux` in `BakeCore.ts`.
+   */
+  private program(family: MaterialFamily): THREE.ShaderMaterial {
+    const key = family;
     let mat = this.programs.get(key);
     if (mat) return mat;
 
@@ -99,7 +103,6 @@ export class TextureBaker {
         FAMILY_GLSL[family],
         BAKE_EPILOGUE,
       ].join('\n'),
-      defines: displace ? { WANT_DISPLACEMENT: '' } : {},
       depthTest: false,
       depthWrite: false,
       side: THREE.DoubleSide,
@@ -144,7 +147,7 @@ export class TextureBaker {
       t.colorSpace = i === 0 && !def.dataAlbedo ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     }
 
-    const mat = this.program(def.family, displace);
+    const mat = this.program(def.family);
     const u = mat.uniforms;
     setVec4(scratchP[0], def.macro);
     setVec4(scratchP[1], def.mid);

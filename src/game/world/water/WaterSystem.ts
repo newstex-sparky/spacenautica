@@ -8,6 +8,7 @@ import { CausticsRenderer } from './Caustics';
 import { Volumetrics } from './Volumetrics';
 import { Particulate } from './Particulate';
 import { SurfaceOverlay } from './SurfaceOverlay';
+import { WaterBackdrop } from './WaterBackdrop';
 import { ProfileBlender, bandForDepth } from './WaterProfiles';
 import { patchScene } from './MaterialPatch';
 
@@ -100,6 +101,7 @@ export class WaterSystem implements GameSystem {
 
   private waves = new WaveField();
   private blender = new ProfileBlender();
+  private backdrop: WaterBackdrop | null = null;
   private surface: OceanSurface | null = null;
   private caustics: CausticsRenderer | null = null;
   private volumetrics: Volumetrics | null = null;
@@ -120,6 +122,8 @@ export class WaterSystem implements GameSystem {
   private lastPatchFrame = -999;
   private causticsFrameSkip = 0;
   private pixelScale = 540;
+  private frameNow = 0;
+  private externalReadFrame = -999;
 
   /* ---------------------------------------------------------------- *
    * Lifecycle
@@ -150,6 +154,11 @@ export class WaterSystem implements GameSystem {
 
     this.teardown();
 
+    // Drawn before all scene geometry: the water's own far field, so nothing
+    // else in the frame can disagree with the fog applied to solid surfaces.
+    this.backdrop = new WaterBackdrop(this.sharedUniforms);
+    this.group.add(this.backdrop.mesh);
+
     this.surface = new OceanSurface(this.tier, this.sharedUniforms, this.waves);
     this.surface.useGrab = ctx.settings.at('medium');
     this.group.add(this.surface.mesh);
@@ -173,6 +182,11 @@ export class WaterSystem implements GameSystem {
   }
 
   private teardown(): void {
+    if (this.backdrop) {
+      this.group.remove(this.backdrop.mesh);
+      this.backdrop.dispose();
+      this.backdrop = null;
+    }
     if (this.surface) {
       this.group.remove(this.surface.mesh);
       this.surface.dispose();
@@ -202,6 +216,7 @@ export class WaterSystem implements GameSystem {
     const pw = Math.max(2, Math.floor(width * ctx.pixelRatio));
     const ph = Math.max(2, Math.floor(height * ctx.pixelRatio));
     this.surface?.setResolution(pw, ph);
+    this.backdrop?.setResolution(pw, ph);
     this.volumetrics?.setSize(pw, ph);
     const fovRad = (ctx.camera.fov * Math.PI) / 180;
     this.pixelScale = (0.5 * ph) / Math.tan(fovRad * 0.5);
@@ -212,6 +227,7 @@ export class WaterSystem implements GameSystem {
    * ---------------------------------------------------------------- */
 
   update(dt: number, ctx: GameContext): void {
+    this.frameNow = ctx.frame;
     if (!this.post) this.post = ctx.tryGet<PostLike>('render.post') ?? null;
     if (!this.sky) this.sky = ctx.tryGet<SkyLike>('world.sky') ?? null;
 
@@ -307,12 +323,23 @@ export class WaterSystem implements GameSystem {
       }
     }
     const cp = u.uwCausticsParams.value as THREE.Vector4;
-    cp.x = 1.15 * causticGain;
+    // Calibrated for a consumer that samples the tile directly and subtracts a
+    // constant (world/terrain). `waterCaustics()` scales this back up by
+    // UW_CAUSTIC_GAIN, since its combine is already mean-subtracted.
+    cp.x = 0.45 * causticGain;
     cp.z = Math.max(0.004, (profile.downwelling.z + profile.downwelling.y) * 0.35);
-    // Materials only apply caustics themselves when no depth buffer is exposed
-    // for the screen-space pass.
-    const hasDepth = Boolean(this.post?.depthTexture);
-    cp.w = hasDepth ? 0 : 1;
+    // Caustics are applied *in-material*, always (cp.w = 1).
+    //
+    // They used to be handed to the screen-space pass whenever `render.post`
+    // exposed a depth texture, which it always does — but that pass only runs
+    // when `graphics.godRays` is on, only sees valid depth once the geometry
+    // prepass has been enabled by some *other* consumer, and is one frame stale.
+    // Any of those failing silently removed caustics from the entire frame, which
+    // is what happened in round 1. Every receiving material already implements
+    // `waterCaustics()`, so the in-material path is the one that cannot fail; the
+    // volumetric pass keeps only the job it is uniquely able to do, which is the
+    // light shafts in the medium itself.
+    cp.w = 1;
 
     // --- volumetrics -------------------------------------------------
     const wantRays =
@@ -330,14 +357,22 @@ export class WaterSystem implements GameSystem {
           depthTexture: this.post?.depthTexture ?? null,
           blueNoise: this.textures?.blueNoise ?? null,
           strength: 0.85 * (1 - 0.6 * storm),
-          causticSurface: hasDepth ? 1.35 * causticGain : 0,
+          // Surfaces get their caustics in-material now (see cp.w above), so the
+          // screen-space term would only double them up.
+          causticSurface: 0,
           maxDist: Math.min(320, Math.max(60, ctx.settings.graphics.viewDistance * 0.4)),
         });
+        // If the post stack is pulling `volumetricTexture` for its own composite
+        // slot, stay out of the way; otherwise composite in-scene ourselves.
+        this.volumetrics.externalComposite = ctx.frame - this.externalReadFrame < 8;
         this.volumetrics.setCompositeAmount(1);
       } else {
         this.volumetrics.hide();
       }
     }
+
+    // --- far field ---------------------------------------------------
+    this.backdrop?.update(cam as THREE.PerspectiveCamera, this.underwater ? this.cameraDepth : 0, profile.turbidity);
 
     // --- particulate -------------------------------------------------
     if (this.particulate) {
@@ -350,7 +385,10 @@ export class WaterSystem implements GameSystem {
     }
 
     // --- surfacing response ------------------------------------------
-    this.overlay?.update(dt, ctx.time, Math.max(0.2, ctx.width / Math.max(1, ctx.height)));
+    if (this.overlay) {
+      this.overlay.setDepth(this.underwater ? this.cameraDepth : 0);
+      this.overlay.update(dt, ctx.time, Math.max(0.2, ctx.width / Math.max(1, ctx.height)));
+    }
 
     // --- contract enforcement ----------------------------------------
     if (this.autoPatchSceneMaterials && ctx.frame - this.lastPatchFrame > 45) {
@@ -456,6 +494,25 @@ export class WaterSystem implements GameSystem {
   /** Half-resolution god-ray/caustics buffer, for the post stack to composite. */
   get volumetricsTexture(): THREE.Texture | null {
     return this.volumetrics?.texture ?? null;
+  }
+
+  /**
+   * Same buffer under the name `render.post` looks for.
+   *
+   * Reading it is the handshake: `PostStack.syncFrame` polls this every frame when
+   * it intends to composite the shafts itself, so a recent read means "someone
+   * else is drawing this" and the in-scene additive quad stands down. If nothing
+   * reads it, we composite ourselves and the shafts still appear. Either way they
+   * are drawn exactly once, without needing main.ts to be told which.
+   */
+  get volumetricTexture(): THREE.Texture | null {
+    this.externalReadFrame = this.frameNow;
+    return this.volumetrics?.texture ?? null;
+  }
+
+  /** Companion to `volumetricTexture`, read by `render.post`. */
+  get volumetricIntensity(): number {
+    return 1;
   }
 
   /** Hands the water an equirectangular sky panorama for accurate reflections. */

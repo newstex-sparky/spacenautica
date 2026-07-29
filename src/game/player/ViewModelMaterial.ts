@@ -213,18 +213,31 @@ uniform float uVmFogDist;
 uniform float uVmCausticsTexMix;
 uniform sampler2D uVmCausticsTex;
 uniform float uVmWetness;
+uniform float uVmFill;
 `;
 
 const VM_FUNCS = /* glsl */ `
-float vmHeightField(vec3 lp, out float macro, out float mid, out float micro) {
+/**
+ * Three-scale height field, band-limited to the pixel footprint.
+ *
+ * px is the local-space size of one screen pixel, so px * frequency is
+ * cycles-per-pixel. Any octave above ~0.35 cycles/pixel cannot be resolved and
+ * is faded out; leaving it in makes the derivative bump below alias into a
+ * stipple as the hands fill the frame. This is the shader equivalent of a mip
+ * chain for procedural detail.
+ */
+float vmHeightField(vec3 lp, float px, out float macro, out float mid, out float micro) {
+  float fMid   = 1.0 - smoothstep(0.30, 0.90, px * uVmDetail.y);
+  float fMicro = 1.0 - smoothstep(0.30, 0.90, px * uVmDetail.z);
+  float fRib   = 1.0 - smoothstep(0.30, 0.90, px * uVmWear.w);
   macro = fbm3(lp * uVmDetail.x, 3);
-  mid   = fbm3(lp * uVmDetail.y, 2);
-  micro = snoise(lp * uVmDetail.z);
+  mid   = fbm3(lp * uVmDetail.y, 2) * fMid;
+  micro = snoise(lp * uVmDetail.z) * fMicro;
   // Ribs / panel lines: a triangle wave along the part's long axis, warped by
   // the mid noise so the lines are never perfectly straight.
   float rib = abs(fract(lp.z * uVmWear.w + mid * 0.35) - 0.5) * 2.0;
   rib = smoothstep(0.25, 0.75, rib);
-  return mid * 0.55 + micro * 0.22 + (rib - 0.5) * uVmWear.z;
+  return mid * 0.55 + micro * 0.22 + (rib - 0.5) * uVmWear.z * fRib;
 }
 
 /** Animated caustic dapple. Procedural, with an optional blend of the water
@@ -308,7 +321,11 @@ export function createViewModelMaterial(style: VmStyle, opts: VmMaterialOptions 
     uVmMetalWear: { value: def.metalWear },
     uVmAO: { value: def.ao },
     uVmCaustics: { value: opts.caustics ?? 0.55 },
-    uVmFogDist: { value: 2.6 },
+    // The hands sit ~0.5 m away; a straight 0.5 m of inscatter is not enough to
+    // seat them in the volume, so the optical path is stretched a little. Too
+    // much and they turn into fog-coloured cutouts.
+    uVmFogDist: { value: 1.6 },
+    uVmFill: { value: 1 },
     uVmCausticsTexMix: { value: 0 },
     uVmCausticsTex: { value: white1px() },
     uVmWetness: { value: 1 },
@@ -367,14 +384,19 @@ ${NOISE_GLSL}
 ${UW_FUNCS}
 ${VM_FUNCS}
 float vmAOFactor = 1.0;
-float vmBumpHeight = 0.0;`,
+float vmBumpHeight = 0.0;
+float vmPixel = 1.0;`,
       )
       .replace(
         '#include <metalnessmap_fragment>',
         `#include <metalnessmap_fragment>
   {
     float macro, mid, micro;
-    float hgt = vmHeightField(vVmLocal, macro, mid, micro);
+    // Local-space footprint of one pixel, used to band-limit the octaves and to
+    // turn the height field into a real slope further down.
+    vec3 fw = fwidth(vVmLocal);
+    vmPixel = max(1e-7, max(fw.x, max(fw.y, fw.z)));
+    float hgt = vmHeightField(vVmLocal, vmPixel, macro, mid, micro);
     // vmMask.x stores *occlusion*, so a geometry that forgot the attribute
     // (all zeros) shades neutrally instead of turning black.
     float ao = 1.0 - clamp(vVmMask.x, 0.0, 1.0);
@@ -409,15 +431,39 @@ float vmBumpHeight = 0.0;`,
         `#include <normal_fragment_maps>
   {
     // Surface-gradient bump (Mikkelsen) in view space — no tangents needed.
+    //
+    // The sigmas MUST be normalised. The view-space derivative of a surface
+    // 0.3 m from the eye has magnitude ~2e-4, so the raw determinant lands
+    // around 4e-8 where the cross-product cancellation has already eaten the
+    // float32 mantissa: sign(det) then flips at random from one 2x2 derivative
+    // quad to the next and the whole part renders as a checkerboard stipple.
+    // Normalising makes det O(1) and its sign stable, and makes the bump
+    // strength independent of how close the hands are to the lens.
+    // Every derivative is taken in unconditional flow — a dFdx inside a branch
+    // is undefined in GLSL because the 2x2 quad may not agree on the branch.
     vec3 sx = dFdx(vVmView);
     vec3 sy = dFdy(vVmView);
-    float dhx = dFdx(vmBumpHeight);
-    float dhy = dFdy(vmBumpHeight);
+    // True surface slope: the height field stands for a displacement of
+    // uVmDetail.w millimetres, so dividing the per-pixel delta by the pixel's
+    // own footprint gives d(height)/d(arclength) — a slope that does not change
+    // when the hands move toward or away from the lens. Clamped so a residual
+    // octave can never rotate the normal past the tangent plane and go black.
+    vec2 dh = clamp(
+      vec2(dFdx(vmBumpHeight), dFdy(vmBumpHeight)) * (uVmDetail.w * 0.0012) / vmPixel,
+      vec2(-0.8),
+      vec2(0.8)
+    );
+    sx /= max(length(sx), 1e-12);
+    sy /= max(length(sy), 1e-12);
     vec3 r1 = cross(sy, normal);
     vec3 r2 = cross(normal, sx);
     float det = dot(sx, r1);
-    vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
-    normal = normalize(abs(det) * normal - uVmDetail.w * 0.06 * grad);
+    vec3 grad = sign(det) * (dh.x * r1 + dh.y * r2);
+    vec3 bumped = abs(det) * normal - grad;
+    // A degenerate quad (silhouette edge, or a pixel where the two sigmas are
+    // parallel) leaves det at zero; fall back to the geometric normal instead of
+    // normalising a null vector.
+    normal = dot(bumped, bumped) > 1e-12 ? normalize(bumped) : normal;
   }`,
       )
       .replace(
@@ -432,6 +478,12 @@ float vmBumpHeight = 0.0;`,
     // Light that reaches the hands has already been filtered on the way down.
     float wdepth = max(0.0, uwSurfaceY - vVmWorld.y);
     vec3 down = exp(-uwExtinction * wdepth * uwDensity);
+    // Beer-Lambert alone describes the *direct* beam. Past ~20 m almost all the
+    // light on a diver's own hands is multiply-scattered, and that field decays
+    // far more slowly than the beam because scattering keeps replenishing it. A
+    // spectral floor stands in for it: without one the hands lose every trace of
+    // material identity below ~15 m and merge into the fog as a flat silhouette.
+    down = max(down, vec3(0.05, 0.14, 0.20) * uVmFill);
     vec3 wn = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
     float up = clamp(wn.y * 0.5 + 0.55, 0.0, 1.0);
     float caust = vmCaustics(vVmWorld) * up * uVmCaustics;

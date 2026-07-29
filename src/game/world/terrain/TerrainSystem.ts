@@ -14,6 +14,7 @@ import {
   TERRAIN_LAYERS,
   createTerrainMaterial,
   packTerrainTextures,
+  probeTerrainTextures,
 } from './TerrainMaterial';
 import type { LayerConfig, PackedTerrainTextures, TerrainMaterialBundle } from './TerrainMaterial';
 
@@ -122,6 +123,8 @@ export class TerrainSystem implements GameSystem, WorldQuery {
   private lastSelectZ = Infinity;
   private lastSelectFrame = -999;
   private csmLinked = false;
+  private srcSets: PbrMaps[] = [];
+  private renderer: THREE.WebGLRenderer | null = null;
 
   constructor() {
     this.field = new TerrainField(this.seed);
@@ -201,6 +204,8 @@ export class TerrainSystem implements GameSystem, WorldQuery {
       ctx.settings.graphics.anisotropy,
       ctx.renderer.capabilities.getMaxAnisotropy(),
     );
+    this.srcSets = sets;
+    this.renderer = ctx.renderer;
     this.packed = packTerrainTextures(ctx.renderer, sets, size, aniso);
 
     const detail = lib ? lib.get('detail_grunge', 256).normalMap : new THREE.Texture();
@@ -707,6 +712,16 @@ export class TerrainSystem implements GameSystem, WorldQuery {
 
   resize(): void {
     /* nothing resolution-dependent */
+  }
+
+  /**
+   * Diagnostic: reads one texel per splat layer back off the GPU so a headless
+   * harness can prove the packed arrays hold real content. Never called on a
+   * normal frame.
+   */
+  debugProbeTextures(lod = 0): Record<string, number[]> | null {
+    if (!this.renderer || !this.packed) return null;
+    return probeTerrainTextures(this.renderer, this.packed, this.srcSets, lod);
   }
 
   dispose(): void {

@@ -343,7 +343,7 @@ const DEFS: Record<string, MaterialDef> = {
     macro: [4, 4, 0.2, 0.7], mid: [20, 20, 0.12, 0], micro: [88, 88, 0.020, 0.04],
     a: [1, 1, 0, 0], b: Z, c: Z,
     surf: [0.7, 0.2, 0, 0], vary: [0, 0, 0, 0], aniso: Z,
-    relief: [0.3, 0.22, 6], colA: 0xffffff, colB: 0x3e3a34, colC: 0x8a8478, colD: 0x2a2622,
+    relief: [0.44, 0.26, 6], colA: 0xffffff, colB: 0x3e3a34, colC: 0x8a8478, colD: 0x2a2622,
     seed: 71, displace: true,
   },
   detail_noise: {
@@ -370,6 +370,33 @@ const DEFS: Record<string, MaterialDef> = {
     relief: [0.2, 0.1, 6], colA: 0xffffff, colB: 0xa8d8ff, colC: 0x8fc8ff, colD: 0xffffff,
     seed: 74, dataAlbedo: true,
   },
+  /**
+   * Pure detail-normal source, for tiling at ~0.3 m under a splat layer.
+   *
+   * `macro` is deliberately 1 cell with zero amplitude: a detail texture tiled
+   * thirty times per metre must carry NO low-frequency content, or its own tile
+   * period becomes a visible grid. All the energy is in `mid` (grain clumping)
+   * and `micro` (individual grains), both of which sit inside the band the bake
+   * resolution can resolve. `relief[0]` is high because this map exists to be a
+   * normal — the albedo is near-neutral on purpose.
+   */
+  detail_grain: {
+    family: 'utility', sub: 5,
+    macro: [1, 1, 0, 0], mid: [22, 22, 0.055, 0], micro: [46, 46, 0.16, 0.10],
+    a: [9, 4, 0.035, 0], b: Z, c: Z,
+    surf: [0.80, 0.16, 0, 0], vary: [0, 0, 0.18, 0.12], aniso: Z,
+    relief: [0.62, 0.34, 7], colA: 0xf4f0e8, colB: 0xbdb6a8, colC: 0xffffff, colD: 0x9c968a,
+    seed: 76, displace: true,
+  },
+  detail_grain_coarse: {
+    family: 'utility', sub: 5,
+    macro: [1, 1, 0, 0], mid: [11, 11, 0.09, 0], micro: [26, 26, 0.22, 0.07],
+    a: [5, 2, 0.05, 0], b: Z, c: Z,
+    surf: [0.84, 0.18, 0, 0], vary: [0, 0, 0.24, 0.16], aniso: Z,
+    relief: [0.70, 0.40, 7], colA: 0xeeeae0, colB: 0xada698, colC: 0xffffff, colD: 0x8e887c,
+    seed: 77, displace: true,
+  },
+
   wet_ripple: {
     family: 'utility', sub: 4,
     macro: [4, 4, 0.06, 0.5], mid: [12, 12, 0.055, 0], micro: [88, 88, 0.012, 0.02],
@@ -414,11 +441,17 @@ export function hasMaterialDef(id: string): boolean {
 /** Every id with a hand-tuned recipe, in registry order. */
 export const TUNED_IDS: TextureId[] = TEXTURE_IDS.filter((id) => hasMaterialDef(id));
 
-/** Ids worth generating before the first frame: whatever the sea floor needs. */
+/**
+ * Ids worth generating before the first frame: whatever the sea floor needs.
+ *
+ * Order matters slightly — one per family first, so the boot prewarm pays each
+ * family's (synchronous) shader compile early rather than mid-gameplay.
+ */
 export const CORE_PREWARM: TextureId[] = [
-  'sand_fine',
   'sand_rippled',
   'rock_basalt',
+  'detail_grain',
+  'sand_fine',
   'gravel',
   'detail_grunge',
   'caustic_tile',

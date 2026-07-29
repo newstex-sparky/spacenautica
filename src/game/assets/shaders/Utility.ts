@@ -56,12 +56,33 @@ float matHeight(vec2 uv){
     h = 0.4 + pow(clamp(bub, 0.0, 1.0), 1.6) * uP[1].z + thick * uP[0].z;
   } else if (uSub == 3) {
     h = 0.5 + causticWeb(uv, uP[3].xy, 0.8, uP[3].z) * 0.08;
-  } else {
+  } else if (uSub == 4) {
     // Wet ripple: crossed capillary wave trains, the payload is the normal.
     h = 0.5
       + bk_ripple(uv, uP[3].xy, 1.1, dC, 1.6) * uP[1].z
       + bk_ripple(uv, uP[3].xy.yx * vec2(-1.0, 1.0) + vec2(2.0, 1.0), 1.5, dC, 1.4) * uP[1].z * 0.7
       + bk_fbm(uv * uC, uC, 3, 0.6) * uP[2].z;
+  } else {
+    // Grain: a *detail* height field, meant to be tiled at ~0.3 m and blended
+    // over a splat layer with reoriented normal mapping. Deliberately has no
+    // macro band at all — anything low-frequency here would repeat every 30 cm
+    // and read as a grid, which is precisely what a detail layer must not do.
+    //
+    // Three resolvable bands instead:
+    //   grains   packed Worley domes, one dome per sand grain / silt clot
+    //   clumps    a coarser Worley that makes the grains bunch rather than
+    //             distribute evenly, which is what stops it looking like a
+    //             regular stipple
+    //   lineation faint crossed micro-ripples, so the field has a direction for
+    //             the light to rake across
+    float grains = bk_worleyFbm(uv * uC, uC, 2, 1.0);
+    float clumps = bk_worleyFbm(uv * dC, dC, 2, 0.9);
+    float line = bk_ripple(uv, uP[3].xy, 1.6, dC, 1.0)
+               + bk_ripple(uv, uP[3].xy.yx * vec2(1.0, -1.0), 1.9, dC, 1.0) * 0.6;
+    h = 0.5
+      + pow(clamp(grains, 0.0, 1.0), 1.4) * uP[2].z * (0.55 + 0.75 * clumps)
+      + (clumps - 0.5) * uP[1].z
+      + (line - 0.8) * uP[3].z;
   }
   return clamp(h, 0.0, 1.0);
 }
@@ -96,7 +117,7 @@ void matSurface(MatCtx c, inout MatOut o){
   } else if (uSub == 2) {
     float thick = 0.5 + 0.5 * bk_fbm(uv * mC, mC, 4, 0.6);
     vec4 b1 = bk_voronoi(uv * dC, dC, 1.0);
-    float rim = bk_cellEdge(b1, 0.16);
+    float rim = bk_cellEdge(b1, 0.16, dC);
     vec3 col = mix(uColA, uColB, rim * 0.6);
     // thinner at the edges of the raft, and torn by the shear noise
     float cover = smoothstep(0.34, 0.72, thick) * (0.55 + 0.6 * (1.0 - b1.x));
@@ -120,12 +141,29 @@ void matSurface(MatCtx c, inout MatOut o){
     o.opacity = clamp(bk_luma(col), 0.0, 1.0);
     o.rough = 1.0;
     o.aux = clamp(g, 0.0, 1.0);
-  } else {
+  } else if (uSub == 4) {
     float wet = 0.5 + 0.5 * bk_fbm(uv * mC, mC, 3, 0.6);
     o.albedo = mix(uColA, uColB, wet);
     o.opacity = 1.0;
     o.rough = uP[6].x + wet * uP[6].y;
     o.aux = wet;
+  } else {
+    // Grain. The normal is the payload; albedo is a near-neutral multiplier so
+    // this can be layered over any substrate without tinting it, and roughness
+    // varies per grain so the surface never reads as one plastic sheet. Height
+    // goes out in .a for RNM/POM and the sparkle mask in aux.
+    float clumps = bk_worleyFbm(uv * dC, dC, 2, 0.9);
+    float glint = bk_sparkle(uv * uC * 0.9, uC * 0.9, uP[2].w);
+    float shade = 0.86 + 0.28 * c.h + (clumps - 0.5) * 0.14;
+    o.albedo = mix(uColA, uColB, clamp(1.0 - c.h * 1.2, 0.0, 1.0)) * shade;
+    o.opacity = 1.0;
+    // Wet-packed grains in the hollows are smoother than dry proud ones.
+    o.rough = uP[6].x + (c.h - 0.5) * uP[6].y * 2.0 - c.ao * 0.06;
+    o.rough = mix(o.rough, 0.16, glint * 0.85);
+    o.aux = glint;
+    o.metal = 0.0;
+    o.sparkle = glint;
+    return;
   }
 
   o.metal = 0.0;

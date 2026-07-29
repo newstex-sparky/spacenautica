@@ -84,10 +84,14 @@ void main() {
   color *= exposure;
 
   // --- lens vignette (natural falloff), tinted toward the water at the edges ---
-  float vig = pow(sat(1.0 - r2 * 1.35), 1.6);
+  // The tint is normalised to unit luminance so it rotates the *hue* of the
+  // falloff without darkening a second time on top of the falloff itself —
+  // multiplying by both an unnormalised water colour and the falloff cost the
+  // corners nearly 80% of their light and read as a flat, milky wash.
+  float vig = pow(sat(1.0 - r2 * 1.15), 1.35);
   vig = mix(1.0, vig, uVignette);
-  color *= mix(uEdgeTint, vec3(1.0), vig);
-  color *= vig;
+  vec3 edge = uEdgeTint / max(luma(uEdgeTint), 1e-3);
+  color *= mix(edge, vec3(1.0), vig) * vig;
 
   // --- tonemap: scene referred -> linear display referred ---
   vec3 display = uTonemapMode < 0.5
@@ -250,11 +254,12 @@ export class GradePass extends PostPass {
       frame.width / noiseSize,
       frame.height / noiseSize,
     );
-    // Advance the pattern every third frame: animated, but not crawling.
+    // Advance the pattern every third frame by a whole number of texels:
+    // animated, but never resampled, so it cannot crawl.
     const step = Math.floor(frame.frame / 3);
     (u.uNoiseOffset.value as THREE.Vector2).set(
-      ((step * 37) % 128) / 128,
-      ((step * 71) % 128) / 128,
+      ((step * 37) % noiseSize) / noiseSize,
+      ((step * 71) % noiseSize) / noiseSize,
     );
 
     u.uExposureScale.value = this.exposureScale;

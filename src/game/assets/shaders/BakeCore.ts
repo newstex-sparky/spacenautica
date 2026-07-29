@@ -96,9 +96,14 @@ export const BAKE_EPILOGUE = /* glsl */ `
 layout(location = 0) out vec4 oAlbedo;
 layout(location = 1) out vec4 oNormal;
 layout(location = 2) out vec4 oOrm;
-#ifdef WANT_DISPLACEMENT
+// Always declared, even for the materials that allocate only three attachments.
+// GL ES 3.0 discards a write to an output whose draw buffer is NONE, so this is
+// free — and it means there is exactly ONE program per family instead of a
+// with/without-displacement pair. That halves the worst case from twelve shader
+// compiles to six, which is the single largest stall in library boot: a compile
+// is synchronous inside renderer.render(), so it cannot be spread over frames
+// the way the bakes themselves are.
 layout(location = 3) out vec4 oAux;
-#endif
 
 void main(){
   vec2 uv = vUv;
@@ -183,9 +188,7 @@ void main(){
   oAlbedo = vec4(max(o.albedo, vec3(0.0)), clamp(o.opacity, 0.0, 1.0));
   oNormal = vec4(n * 0.5 + 0.5, clamp(hC, 0.0, 1.0));
   oOrm    = vec4(ao, o.rough, o.metal, clamp(o.aux, 0.0, 1.0));
-#ifdef WANT_DISPLACEMENT
   oAux    = vec4(clamp(hC, 0.0, 1.0), clamp(c.curv * 0.5 + 0.5, 0.0, 1.0),
                  clamp(0.5 + dHdu * 0.5, 0.0, 1.0), clamp(o.sparkle, 0.0, 1.0));
-#endif
 }
 `;

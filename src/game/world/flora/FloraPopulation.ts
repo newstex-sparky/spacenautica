@@ -89,6 +89,16 @@ export class FloraField {
   private bufWarp: Float32Array;
   private bufTint: Float32Array;
   private bufXform: Float32Array;
+  /**
+   * `rowStart[j]` = number of accepted candidates before row `j` began.
+   * Candidates are visited in row-major order, so the min-distance test only
+   * ever has to look back a bounded number of rows instead of at every plant
+   * already placed in the cell — which is what keeps a fine candidate grid from
+   * turning the rejection pass into an O(n^2) stall.
+   */
+  private rowStart: Int32Array;
+  /** Widest species separation, metres — sets the look-back window. */
+  private readonly maxSpacing: number;
 
   constructor(
     readonly cfg: FieldConfig,
@@ -107,6 +117,10 @@ export class FloraField {
     this.bufWarp = new Float32Array(max * 4);
     this.bufTint = new Float32Array(max * 3);
     this.bufXform = new Float32Array(max * 2);
+    this.rowStart = new Int32Array(cfg.candidates + 1);
+    let ms = 0;
+    for (const s of SPECIES) ms = Math.max(ms, s.spacing);
+    this.maxSpacing = ms;
   }
 
   get(cx: number, cz: number): FloraCell | undefined {
@@ -215,8 +229,12 @@ export class FloraField {
     let n = 0;
     const bp = this.bufPos;
     const seedBase = this.cfg.seed ^ (cx * 0x9e3779b1) ^ (cz * 0x85ebca6b);
+    // Any accepted plant that could block this one lies within this many rows.
+    const rowSpan = Math.ceil(this.maxSpacing * 0.5 / spacingStep) + 1;
+    const rowStart = this.rowStart;
 
     for (let j = 0; j < k; j++) {
+      rowStart[j] = n;
       for (let i = 0; i < k; i++) {
         const hx = hash2(cx * k + i, cz * k + j, seedBase);
         const hy = hash2(cx * k + i + 7919, cz * k + j - 4271, seedBase);
@@ -262,9 +280,10 @@ export class FloraField {
         const hp = hash2(cx * k + i - 313, cz * k + j + 5171, seedBase ^ 0x27d4eb2d);
         if (hp > pBase * patch) continue;
 
-        // --- min-distance rejection against everything already accepted ---
+        // --- min-distance rejection against the recent rows ---
         let blocked = false;
-        for (let q = 0; q < n; q++) {
+        const from = rowStart[Math.max(0, j - rowSpan)];
+        for (let q = from; q < n; q++) {
           const other = SPECIES[this.bufSpecies[q]];
           const need = Math.max(sp.spacing, other.spacing) * 0.5;
           const dx = bp[q * 3] - x;

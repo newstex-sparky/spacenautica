@@ -666,6 +666,15 @@ html, body, #app {
 .hud-o2-ring .ui-ring-value { stroke: var(--ui-cyan); }
 .o2-warn .hud-o2-ring .ui-ring-value { stroke: var(--ui-warn); }
 .o2-danger .hud-o2-ring .ui-ring-value { stroke: var(--ui-danger); stroke-dasharray: 6 4 !important; }
+/* Surfaced and topping the tank back up: the ring breathes instead of sitting
+   still, which tells the player the number is climbing without a second label. */
+.o2-refill .hud-o2-ring .ui-ring-value { animation: o2-refill-pulse 1.5s ease-in-out infinite; }
+.o2-refill .hud-o2-sub { color: var(--ui-cyan); }
+@keyframes o2-refill-pulse {
+  0%, 100% { opacity: 0.62; }
+  50% { opacity: 1; }
+}
+:root.ui-reduced-motion .o2-refill .hud-o2-ring .ui-ring-value { animation: none; }
 .hud-o2-inner {
   position: absolute;
   inset: calc(24px * var(--ui-scale));
@@ -906,6 +915,25 @@ html, body, #app {
 .hud-toast-danger { background-image: var(--ui-hatch-alt), var(--ui-scan), var(--ui-grain); }
 .hud-toast-success .hud-toast-accent { background: var(--ui-good); }
 .hud-toast-success .hud-toast-kind { color: var(--ui-good); }
+/* Repeat counter on a coalesced toast. A flex item rather than an absolute box,
+   so it reserves its own column and can never overlap the message text. */
+.hud-toast-count {
+  margin-left: auto;
+  align-self: flex-start;
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--ui-scale));
+  letter-spacing: 0.06em;
+  padding: 0 calc(4px * var(--ui-scale));
+  border: 1px solid rgba(127, 232, 255, 0.34);
+  border-radius: 2px;
+  color: var(--ui-cyan);
+  background: rgba(4, 20, 28, 0.6);
+  font-variant-numeric: tabular-nums;
+}
+.hud-toast-warn .hud-toast-count { color: var(--ui-warn); border-color: rgba(255, 190, 90, 0.4); }
+.hud-toast-danger .hud-toast-count { color: var(--ui-danger); border-color: rgba(255, 120, 110, 0.44); }
+.hud-toast-success .hud-toast-count { color: var(--ui-good); border-color: rgba(130, 240, 180, 0.4); }
 
 /* --- subtitles --- */
 .hud-subs {

@@ -46,6 +46,12 @@ export const TEXTURE_IDS = [
   'foam_mask',
   'caustic_tile',
   'wet_ripple',
+  // High-frequency detail-normal sources. Meant to be tiled at ~0.3 m and
+  // blended over a base layer with `mx_blendNormalRNM`, not used as a material
+  // on their own. `detail_grain` is sand/silt grain; `detail_grain_coarse` is
+  // the same field at gravel/rubble scale.
+  'detail_grain',
+  'detail_grain_coarse',
 ] as const;
 
 export type TextureId = (typeof TEXTURE_IDS)[number];

@@ -30,19 +30,26 @@ interface RigLike extends GameSystem {
   addTrauma(amount: number): void;
 }
 
-/** Bare-hand rest poses, used when no tool is equipped. */
+/**
+ * Bare-hand rest poses, used when no tool is equipped.
+ *
+ * Pushed out to ~0.48 m and yawed away from the view axis so the cut end of the
+ * forearm stays at least 0.31 m from the eye. Any closer and the near end of the
+ * arm subtends most of the frame — the pair then reads as two boulders in the
+ * bottom corners rather than as hands.
+ */
 const IDLE_RIGHT = {
-  pos: new THREE.Vector3(0.215, -0.245, -0.4),
-  rot: new THREE.Euler(-0.3, -0.34, 0.34),
+  pos: new THREE.Vector3(0.24, -0.25, -0.48),
+  rot: new THREE.Euler(-0.34, -0.55, 0.34),
 };
 const IDLE_LEFT = {
-  pos: new THREE.Vector3(-0.235, -0.26, -0.395),
-  rot: new THREE.Euler(-0.26, 0.4, -0.42),
+  pos: new THREE.Vector3(-0.26, -0.265, -0.475),
+  rot: new THREE.Euler(-0.3, 0.58, -0.42),
 };
 /** Where the support hand idles while a one-handed tool is held. */
 const SUPPORT_IDLE = {
-  pos: new THREE.Vector3(-0.245, -0.3, -0.36),
-  rot: new THREE.Euler(-0.15, 0.5, -0.5),
+  pos: new THREE.Vector3(-0.26, -0.3, -0.44),
+  rot: new THREE.Euler(-0.2, 0.66, -0.52),
 };
 
 /**
@@ -127,6 +134,10 @@ export class ViewModelSystem implements GameSystem {
       glove: this.pool.mat('glove'),
       metal: this.pool.mat('metal'),
       emissive: this.pool.mat('emissive', { emissive: 0x39d8ff, emissiveIntensity: 1.8 }),
+      // Warm hi-vis accent. Red dies within ~5 m of water so the band reads as
+      // dark amber at depth rather than orange, which is exactly right — but it
+      // still separates the hands from the blue wash instead of dissolving in it.
+      accent: this.pool.mat('painted', { color: 0xd8761f }),
     };
     this.handRight = buildHand(1, mats);
     this.handLeft = buildHand(-1, mats);
@@ -589,6 +600,10 @@ export class ViewModelSystem implements GameSystem {
       u.uVmWetness.value = this.wetness;
       u.uVmCaustics.value = 0.75 * strength;
       u.uVmCausticsTexMix.value = causticMix;
+      // Stand-in for multiply-scattered fill on the suit. It matters more the
+      // deeper you go, because that is where the direct beam has died and the
+      // scattered field is all that is left to read the material by.
+      u.uVmFill.value = 0.55 + 0.45 * Math.min(1, this.player.depth / 60);
       if (caustics) u.uVmCausticsTex.value = caustics;
     }
   }

@@ -47,14 +47,14 @@ float matHeight(vec2 uv){
     vec2 cp = uv * dC;
     cp += bk_warp(cp, dC, 0.7);
     vec4 v = bk_voronoi(cp, dC, 0.88);
-    float crack = bk_cellEdge(v, uP[4].z);
+    float crack = bk_cellEdge(v, uP[4].z, dC);
     // Secondary, finer crack generation inside the primary polygons.
     vec4 v2 = bk_voronoi(cp * 2.0, dC * 2.0, 0.9);
-    crack = max(crack, bk_cellEdge(v2, uP[4].z * 0.7) * 0.55);
+    crack = max(crack, bk_cellEdge(v2, uP[4].z * 0.7, dC * 2.0) * 0.55);
     h -= crack * uP[1].z;
     h += bk_billow(uv * dC * 0.5, dC * 0.5, 3) * 0.035;
     // curled polygon edges lift slightly
-    h += bk_cellEdge(v, uP[4].z * 3.0) * 0.02;
+    h += bk_cellEdge(v, uP[4].z * 3.0, dC) * 0.02;
   } else {
     h += bk_fbm(uv * dC, dC, 4, 0.5) * uP[1].z;
     // faint biogenic pits and worm casts

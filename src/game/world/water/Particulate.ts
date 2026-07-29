@@ -64,7 +64,12 @@ void main() {
     float att = 1.0 / (1.0 + dot(d, d) * 0.18);
     lit += uLightColor[i] * att;
   }
-  lit *= waterTransmittance(dist);
+  // Full scattering, not just extinction. A flake alpha-blends over water that
+  // already carries the inscatter for the whole path, so attenuating the flake
+  // without adding that inscatter back makes every distant flake *darker* than
+  // the medium it floats in — which is why round 1 has black pepper sprinkled
+  // across the deeper frames instead of marine snow.
+  lit = applyUnderwater(lit, dist, wp.y, -toEye);
 
   // Slow twinkle: flakes tumble and catch the light.
   float tw = 0.55 + 0.45 * sin(uwTime * 1.7 + aParam.z * 6.2831);

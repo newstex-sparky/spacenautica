@@ -37,6 +37,8 @@ export interface HandMaterials {
   glove: THREE.Material;
   metal: THREE.Material;
   emissive: THREE.Material;
+  /** High-visibility suit accent. Without it the hands read as water-coloured. */
+  accent: THREE.Material;
 }
 
 export interface HandRig {
@@ -69,14 +71,48 @@ export function buildHand(side: 1 | -1, mats: HandMaterials): HandRig {
   const mirror = (g: THREE.BufferGeometry) => (side === -1 ? mirrorX(g) : g);
 
   /* ---------------- forearm + cuff (suit) ------------------------- */
+  //
+  // The visible forearm is deliberately a *stub*. A full 0.24 m forearm running
+  // back toward the eye puts its elbow end ~9 cm from the lens, where a 13 cm
+  // cylinder subtends most of the frame and the hand reads as a boulder in the
+  // corner. Real first-person arms are cut just past the point where the frustum
+  // would clip them anyway, so nothing gets closer than ~0.3 m.
+  const FOREARM_LEN = 0.075;
+  /** Local Z of the cut end of the forearm. */
+  const FOREARM_END = FOREARM_LEN / 2 + 0.055 + 0.083;
+  /**
+   * Half-extents of the tapered, eroded forearm in a thin Z slice, measured off
+   * the built geometry.
+   *
+   * Anything that has to sit *on* the arm — ribs, accent bands — needs the real
+   * radius, not an analytic guess: the taper is normalised over the capsule's
+   * own bounds so it also squeezes the hemispherical end caps, and the erosion
+   * pass moves every vertex again. Guessing put one accent band 5 mm inside the
+   * neoprene (invisible) and left the other standing 9 mm off it (a flange).
+   */
+  let armRadius: (z: number) => [number, number] = () => [0.055, 0.055];
   {
     const b = new PartBuilder(rnd);
     // Neoprene forearm: tapers out toward the elbow, slightly oval, eroded so
     // the silhouette is not a lathe.
-    const arm = prim.capsule(0.055, 0.24, 6, 16);
-    taper(arm, (t) => [0.94 + t * 0.42, 1.02 + t * 0.36]);
-    transform(arm, { rot: [Math.PI / 2, 0, 0], pos: [0, 0, 0.165] });
+    const arm = prim.capsule(0.055, FOREARM_LEN, 6, 16);
+    taper(arm, (t) => [0.94 + t * 0.24, 1.02 + t * 0.2]);
+    transform(arm, { rot: [Math.PI / 2, 0, 0], pos: [0, 0, 0.083] });
     erode(arm, 0.0016, 26, 3);
+
+    const armPos = arm.attributes.position as THREE.BufferAttribute;
+    armRadius = (z: number): [number, number] => {
+      let mx = 0;
+      let my = 0;
+      for (let i = 0; i < armPos.count; i++) {
+        if (Math.abs(armPos.getZ(i) - z) > 0.007) continue;
+        mx = Math.max(mx, Math.abs(armPos.getX(i)));
+        my = Math.max(my, Math.abs(armPos.getY(i)));
+      }
+      // Fall back to the nominal radius if the slice caught no vertices.
+      return [mx > 1e-4 ? mx : 0.055, my > 1e-4 ? my : 0.055];
+    };
+
     b.add(arm, { occ: 0.2, edge: 0.7, id: 0.31 });
 
     // Sealed wrist cuff: a thick rubber collar with a raised lip.
@@ -89,23 +125,27 @@ export function buildHand(side: 1 | -1, mats: HandMaterials): HandRig {
     transform(lip, { pos: [0, 0, 0.0155] });
     b.add(lip, { occ: 0.26, edge: 1.4, id: 0.7 });
 
-    // Ribbed reinforcement panel along the outside of the forearm.
-    for (let i = 0; i < 5; i++) {
-      const rib = prim.box(0.052 - i * 0.002, 0.006, 0.011, 1);
-      roundBox(rib, [0.026, 0.003, 0.0055], 3, 0.6);
+    // Ribbed reinforcement panel along the top of the forearm. Placed a hair
+    // outside the tapered surface so the ribs actually catch a highlight
+    // instead of hiding inside the neoprene.
+    for (let i = 0; i < 4; i++) {
+      const z = 0.052 + i * 0.021;
+      const surfaceY = armRadius(z)[1];
+      const rib = prim.box(0.05 - i * 0.003, 0.009, 0.013, 1);
+      roundBox(rib, [0.025, 0.0045, 0.0065], 3, 0.6);
       transform(rib, {
-        pos: [0.004 * side, 0.044 + i * 0.0035, 0.075 + i * 0.042],
-        rot: [0.06 * i, 0, 0.04 * side],
+        pos: [0.004 * side, surfaceY - 0.0022, z],
+        rot: [0.05 * i, 0, 0.04 * side],
       });
       b.add(rib, { occ: 0.3, edge: 1.3, id: 0.2 + i * 0.13 });
     }
     // Seam piping down the inner forearm.
     const seam = prim.tube(
       [
-        [-0.03 * side, -0.03, 0.05],
-        [-0.041 * side, -0.02, 0.13],
-        [-0.045 * side, -0.008, 0.22],
-        [-0.04 * side, 0.004, 0.29],
+        [-0.03 * side, -0.032, 0.045],
+        [-0.04 * side, -0.026, 0.09],
+        [-0.045 * side, -0.016, 0.135],
+        [-0.044 * side, -0.008, FOREARM_END],
       ],
       0.0035,
       18,
@@ -121,6 +161,39 @@ export function buildHand(side: 1 | -1, mats: HandMaterials): HandRig {
     mesh.receiveShadow = false;
     mesh.layers.set(VIEWMODEL_LAYER);
     root.add(mesh);
+  }
+
+  /* ---------------- hi-vis accent bands (painted) ----------------- */
+  //
+  // Underwater extinction pulls everything toward one hue, so a suit made only
+  // of dark neoprene dissolves into the water at 15 m. Two warm accent bands
+  // round the forearm survive the blue shift long enough to keep the hands
+  // reading as foreground, and they give the eye something to measure the frame
+  // against. Cut as shallow rings concentric with the tapered arm.
+  {
+    const b = new PartBuilder(rnd);
+    const band = (z: number, width: number, id: number): void => {
+      const t = (z + 0.01) / (FOREARM_END + 0.01);
+      const rx = 0.055 * (0.94 + t * 0.24);
+      const ry = 0.055 * (1.02 + t * 0.2);
+      // Cross-section is the cylinder's X/Z; the rotation then lays its Y axis
+      // down the arm, so the Z scale becomes the vertical radius.
+      const ring = prim.cyl(1, 1, width, 22, 1);
+      transform(ring, {
+        rot: [Math.PI / 2, 0, 0],
+        scale: [rx + 0.0013, 1, ry + 0.0013],
+      });
+      transform(ring, { pos: [0, 0, z] });
+      b.add(ring, { occ: 0.18, edge: 1.35, id });
+    };
+    band(0.052, 0.019, 0.15);
+    band(0.152, 0.011, 0.55);
+    const geo = b.build('hand.accent');
+    geometries.push(geo);
+    const m = new THREE.Mesh(mirror(geo), mats.accent);
+    m.frustumCulled = false;
+    m.layers.set(VIEWMODEL_LAYER);
+    root.add(m);
   }
 
   /* ---------------- wrist unit (metal + LED) ---------------------- */

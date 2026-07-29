@@ -55,26 +55,35 @@ interface BiomeWater {
   hue?: [number, number, number];
 }
 
-/** Optical character per shipped biome id. Unknown ids fall back to depth. */
+/**
+ * Optical character per shipped biome id. Unknown ids fall back to depth.
+ *
+ * These are deliberately toward the *clear* end of the table. The coastal C-types
+ * are physically correct for turbid water and completely unplayable: Kd(blue) of
+ * 0.2 m^-1 leaves 0.15% of surface light at 40 m, which renders a kelp forest at
+ * a perfectly ordinary depth as solid black. Round 1 did exactly that. The reference
+ * game reads as *clear tropical* water everywhere above the Lost River, so the
+ * murk is spent on hue and turbidity rather than on absorption.
+ */
 const BIOME_WATER: Record<string, BiomeWater> = {
-  shallows: { jerlov: 'IB', turbidity: 0.55, caustics: 1.0 },
-  kelp_forest: { jerlov: 'C1', turbidity: 1.0, caustics: 0.7 },
-  grassy_plateau: { jerlov: 'II', turbidity: 0.85, caustics: 0.8 },
-  red_grass: { jerlov: 'III', turbidity: 0.95, caustics: 0.55 },
-  mushroom_forest: { jerlov: 'C1', turbidity: 1.15, caustics: 0.35 },
-  blood_kelp: { jerlov: 'C5', turbidity: 1.5, caustics: 0.08, hue: [1.15, 0.72, 0.9] },
-  lost_river: { jerlov: 'C3', turbidity: 1.35, caustics: 0.02, hue: [0.7, 1.1, 0.95] },
-  lava_zone: { jerlov: 'C7', turbidity: 1.6, caustics: 0.0, hue: [1.4, 0.75, 0.5] },
+  shallows: { jerlov: 'IA', turbidity: 0.55, caustics: 1.15 },
+  kelp_forest: { jerlov: 'II', turbidity: 1.0, caustics: 0.8, hue: [0.85, 1.1, 0.9] },
+  grassy_plateau: { jerlov: 'IB', turbidity: 0.85, caustics: 0.95 },
+  red_grass: { jerlov: 'II', turbidity: 0.95, caustics: 0.7, hue: [1.1, 0.95, 0.9] },
+  mushroom_forest: { jerlov: 'III', turbidity: 1.15, caustics: 0.35 },
+  blood_kelp: { jerlov: 'C1', turbidity: 1.5, caustics: 0.08, hue: [1.15, 0.72, 0.9] },
+  lost_river: { jerlov: 'III', turbidity: 1.35, caustics: 0.02, hue: [0.7, 1.1, 0.95] },
+  lava_zone: { jerlov: 'C3', turbidity: 1.6, caustics: 0.0, hue: [1.4, 0.75, 0.5] },
 };
 
 /** Depth-driven fallback so biomes added later still get sane optics. */
 function jerlovForDepth(depth: number): JerlovType {
-  if (depth < 40) return 'IB';
-  if (depth < 90) return 'II';
-  if (depth < 160) return 'C1';
-  if (depth < 300) return 'C3';
-  if (depth < 600) return 'C5';
-  return 'C7';
+  if (depth < 40) return 'IA';
+  if (depth < 90) return 'IB';
+  if (depth < 160) return 'II';
+  if (depth < 300) return 'III';
+  if (depth < 600) return 'C1';
+  return 'C3';
 }
 
 const _tmpTint = new THREE.Color();
@@ -141,7 +150,7 @@ export class ProfileBlender {
     const r = this.result;
     const w = this.wsum;
     if (w <= 1e-4) {
-      r.downwelling.set(0.37, 0.068, 0.032);
+      r.downwelling.set(0.35, 0.06, 0.022);
       r.tint.setRGB(0.16, 1.03, 1.16);
       r.turbidity = 0.6;
       r.caustics = 1;

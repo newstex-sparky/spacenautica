@@ -52,10 +52,10 @@ float matHeight(vec2 uv){
     // Gorgonian fan: an anisotropic strut lattice with cross-links.
     vec2 sp = uv * uP[3].xy * vec2(1.0, 0.34);
     vec4 v = bk_voronoi(sp, uP[3].xy * vec2(1.0, 0.34), 0.95);
-    float strut = bk_cellEdge(v, uP[3].w);
+    float strut = bk_cellEdge(v, uP[3].w, uP[3].xy * vec2(1.0, 0.34));
     vec4 v2 = bk_voronoi(bk_shear(uv, 1.0, 0.0) * uP[3].xy * vec2(0.34, 1.0),
                          uP[3].xy * vec2(0.34, 1.0), 0.9);
-    strut = max(strut, bk_cellEdge(v2, uP[3].w) * 0.8);
+    strut = max(strut, bk_cellEdge(v2, uP[3].w, uP[3].xy * vec2(0.34, 1.0)) * 0.8);
     h = 0.30 + strut * uP[1].z * 1.4;
     // polyps studded along the struts
     h += strut * bk_ripple(uv, uP[4].xy, 0.6, uC, 2.0) * uP[4].z;
@@ -89,7 +89,7 @@ float matHeight(vec2 uv){
     // Bioluminescent tissue: cellular vesicles with bright cores.
     vec4 v = bk_voronoi(uv * uP[3].xy, uP[3].xy, 0.9);
     h += (1.0 - smoothstep(0.0, 0.42, v.x)) * uP[1].z;
-    h -= bk_cellEdge(v, 0.10) * uP[1].z * 0.5;
+    h -= bk_cellEdge(v, 0.10, uP[3].xy) * uP[1].z * 0.5;
   }
 
   h += bk_fbm(uv * uC, uC, 3, 0.55) * uP[2].z;
@@ -133,7 +133,7 @@ void matSurface(MatCtx c, inout MatOut o){
   } else if (uSub == 2) {
     vec4 v = bk_voronoi(uv * uP[3].xy * vec2(1.0, 0.34), uP[3].xy * vec2(1.0, 0.34), 0.95);
     base = bk_hueShift(base, (v.z - 0.5) * 0.35);
-    o.opacity = clamp(bk_cellEdge(v, uP[3].w * 1.6) * 1.6, 0.0, 1.0);
+    o.opacity = clamp(bk_cellEdge(v, uP[3].w * 1.6, uP[3].xy * vec2(1.0, 0.34)) * 1.6, 0.0, 1.0);
   } else if (uSub == 3) {
     float pore = bk_worleyFbm(uv * uP[3].xy, uP[3].xy, 3, 1.0);
     base = mix(base, base * vec3(0.35, 0.30, 0.34), pore * 0.8);

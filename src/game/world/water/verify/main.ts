@@ -235,7 +235,25 @@ class StubPost implements GameSystem {
   resize(w: number, h: number, ctx: GameContext): void {
     const pw = Math.max(2, Math.floor(w * ctx.pixelRatio));
     const ph = Math.max(2, Math.floor(h * ctx.pixelRatio));
-    this.rt?.setSize(pw, ph);
+    if (!this.rt) return;
+    // three 0.185's RenderTarget.setSize() resizes `textures[]` but NOT an
+    // attached depthTexture, so the FBO's attachments end up different sizes and
+    // the driver rejects every draw into it with
+    //   GL_INVALID_FRAMEBUFFER_OPERATION: Framebuffer is incomplete:
+    //   Attachments are not all the same size
+    // The engine's adaptive resolution changes the buffer size within the first
+    // second, so this fires immediately and the frame goes pure black.
+    if (this.depthTexture.image.width !== pw || this.depthTexture.image.height !== ph) {
+      this.depthTexture.dispose();
+      const d = new THREE.DepthTexture(pw, ph);
+      d.type = THREE.FloatType;
+      d.format = THREE.DepthFormat;
+      d.minFilter = THREE.NearestFilter;
+      d.magFilter = THREE.NearestFilter;
+      this.depthTexture = d;
+      this.rt.depthTexture = d;
+    }
+    this.rt.setSize(pw, ph);
   }
 
   dispose(): void {

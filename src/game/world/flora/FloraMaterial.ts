@@ -341,7 +341,10 @@ const FLORA_MAP = /* glsl */ `
     diffuseColor.rgb *= mix(vec3(1.0), 0.55 + 0.95 * floraMacro.gbr, uMacroAmt);
   #endif
   diffuseColor.rgb *= vFloraTint;
-  diffuseColor.rgb *= mix(1.0, vFloraAo, uAoAmt);
+  // Contact darkening toward the holdfast. Remapped rather than used raw: a bare
+  // multiply by an AO of 0.2 removes 80% of the albedo, which crushed whole
+  // plants to near-black silhouettes instead of shading their bases.
+  diffuseColor.rgb *= mix(1.0, 0.34 + 0.66 * vFloraAo, uAoAmt);
   #ifdef FLORA_ALPHA_BLADE
     diffuseColor.a *= mix(1.0, floraTex.a, vFloraBlade);
   #endif
@@ -389,13 +392,20 @@ const FLORA_SHADE = /* glsl */ `
 #endif
 
   // ---- back-scatter: sunlight travelling THROUGH the lamina ----
+  // Two lobes. The sharp one needs the sun behind the blade *and* in front of
+  // you, and is what makes a kelp forest ignite when you turn into the light.
+  // The broad one only needs the sun on the far face, so a lamina always reads
+  // as a thin translucent membrane rather than an opaque cut-out — with the sun
+  // overhead and the view level, the sharp lobe alone is zero and every blade
+  // went flat and black.
   float back = pow(clamp(dot(-fL, fV), 0.0, 1.0), uTransPower);
+  float thru = 0.26 + 0.74 * back;
   // Wrapped diffuse from the *geometric* normal: the normal-mapped one is too
   // noisy for a term this soft and would sparkle as the blade flexes.
   float wrapped = clamp(0.5 - 0.5 * dot(fNg, fL), 0.0, 1.0);
   float rim = 1.0 - abs(dot(fN, fV)) * 0.45;
   vec3 trans = uTransColor * diffuseColor.rgb * uwSunColor * fDown;
-  gl_FragColor.rgb += trans * (back * (0.30 + 0.70 * wrapped) * vFloraThick * rim * uTransStrength);
+  gl_FragColor.rgb += trans * (thru * (0.30 + 0.70 * wrapped) * vFloraThick * rim * uTransStrength);
 
   // ---- wet specular sheen ----
   vec3 fH = normalize(fL + fV);

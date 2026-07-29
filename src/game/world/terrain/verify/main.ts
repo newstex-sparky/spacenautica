@@ -21,6 +21,7 @@ declare global {
     __TERRAIN__?: TerrainSystem;
     __TVIEW__?: (x: number, y: number, z: number, yaw: number, pitch: number) => void;
     __TPROBE__?: () => string;
+    __TTEX__?: () => string;
   }
 }
 
@@ -71,6 +72,12 @@ async function boot(): Promise<void> {
     sun.target.updateMatrixWorld();
   };
 
+  window.__TTEX__ = () =>
+    JSON.stringify({
+      lod0: terrain.debugProbeTextures(0),
+      lod3: terrain.debugProbeTextures(3),
+    });
+
   window.__TPROBE__ = () => {
     const p = engine.camera.position;
     const h = terrain.heightAt(p.x, p.z);
@@ -104,7 +111,7 @@ async function boot(): Promise<void> {
 
   let frames = 0;
   const mark = () => {
-    if (++frames < 12) {
+    if (++frames < 4) {
       requestAnimationFrame(mark);
       return;
     }

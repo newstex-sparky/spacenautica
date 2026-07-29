@@ -79,6 +79,8 @@ export class TextureLibrary implements GameSystem {
   private tierScale = 1;
   private aoTaps = 8;
   private maxSize = 1024;
+  /** Resolution the background queue and bare get() calls bake at. */
+  private defaultSize = 512;
   private softwareGpu = false;
   private failed = new Set<string>();
   private unsubscribe: (() => void) | null = null;
@@ -96,7 +98,12 @@ export class TextureLibrary implements GameSystem {
     this.softwareGpu = detectSoftwareRenderer(ctx.renderer);
     this.applyTier(ctx);
     this.maxSize = Math.min(1024, ctx.renderer.capabilities.maxTextureSize);
-    if (this.softwareGpu) this.maxSize = Math.min(this.maxSize, 256);
+    // A software rasteriser is slow per pixel, not short of memory, so the cap
+    // exists to bound bake *time*. 384 keeps a whole-library bake in the same
+    // ballpark as 256 did (the noise is band-limited to the resolution now, so
+    // the extra texels cost proportionally less) while staying above the point
+    // where a material stops having a mid *and* a micro band at all.
+    if (this.softwareGpu) this.maxSize = Math.min(this.maxSize, 384);
 
     this.white = solid(255, 255, 255);
     this.flatNormal = solid(128, 128, 255);
@@ -117,8 +124,21 @@ export class TextureLibrary implements GameSystem {
 
     this.baker = new TextureBaker(ctx.renderer);
 
+    // Bake at the size the sea floor will actually ask for. The cache is keyed
+    // by id *and* resolution, so prewarming at 512 while the terrain requests
+    // 256 bakes every one of these twice and warms nothing.
+    this.defaultSize = ctx.settings.at('high') ? 512 : 256;
+
     // Bake what the very first frame is guaranteed to need; queue the rest.
-    this.prewarm(CORE_PREWARM, this.softwareGpu ? 2000 : 700);
+    //
+    // The budget is checked *before* each bake, so it can overrun by one
+    // material — and the first bake of a family also pays that family's shader
+    // compile, which is synchronous inside renderer.render() and can be a
+    // second or more under a software rasteriser. Keeping the budget small
+    // bounds how much of that lands in one task; the rest is absorbed by the
+    // background queue, and any system that calls get() during its own init
+    // still gets a correct set immediately.
+    this.prewarm(CORE_PREWARM, this.softwareGpu ? 400 : 250);
 
     this.unsubscribe = ctx.settings.onChange(() => this.applyTier(ctx));
 
@@ -127,7 +147,7 @@ export class TextureLibrary implements GameSystem {
         `[assets.textures] boot bake ${this.stats.generated} materials in ` +
           `${this.stats.totalMs.toFixed(0)} ms (blue noise ${this.stats.blueNoiseMs.toFixed(0)} ms), ` +
           `${(this.stats.bytes / 1048576).toFixed(1)} MB, ${this.queue.length} queued, ` +
-          `tier=${ctx.settings.graphics.tier} size=${this.sizeFor(512)}` +
+          `tier=${ctx.settings.graphics.tier} size=${this.sizeFor(this.defaultSize)}` +
           (this.softwareGpu ? ' [software GPU: reduced]' : ''),
       );
     }
@@ -144,7 +164,7 @@ export class TextureLibrary implements GameSystem {
     const t0 = now();
     while (this.queue.length > 0 && now() - t0 < budget) {
       const id = this.queue.shift() as TextureId;
-      this.get(id);
+      this.get(id, this.defaultSize);
     }
     this.stats.queued = this.queue.length;
   }
@@ -170,7 +190,7 @@ export class TextureLibrary implements GameSystem {
    * Returns a cached procedural PBR map set, generating on first request.
    * `size` is the *requested* base resolution; the quality tier scales it.
    */
-  get(id: TextureId, size = 512): PbrMaps {
+  get(id: TextureId, size = this.defaultSize): PbrMaps {
     const px = this.sizeFor(size);
     const key = `${id}@${px}`;
     const hit = this.cache.get(key);
@@ -184,7 +204,7 @@ export class TextureLibrary implements GameSystem {
    * spent, then hands the remainder to the background queue. Safe to call from
    * any system's `init` — duplicate ids are free.
    */
-  prewarm(ids: readonly TextureId[], budgetMs = 400, size = 512): void {
+  prewarm(ids: readonly TextureId[], budgetMs = 400, size = this.defaultSize): void {
     const t0 = now();
     for (const id of ids) {
       const key = `${id}@${this.sizeFor(size)}`;
@@ -201,7 +221,7 @@ export class TextureLibrary implements GameSystem {
   /** Queue every hand-tuned material for background generation. */
   prewarmAll(): void {
     for (const id of TUNED_IDS) {
-      if (!this.cache.has(`${id}@${this.sizeFor(512)}`) && !this.queue.includes(id)) {
+      if (!this.cache.has(`${id}@${this.sizeFor(this.defaultSize)}`) && !this.queue.includes(id)) {
         this.queue.push(id);
       }
     }
@@ -273,7 +293,10 @@ export class TextureLibrary implements GameSystem {
     const tier = ctx.settings.graphics.tier;
     this.tierScale = TIER_SCALE[tier] ?? 1;
     this.aoTaps = ctx.settings.at('medium') && !this.softwareGpu ? 8 : 4;
-    if (this.softwareGpu) this.tierScale = Math.min(this.tierScale, 0.5);
+    // Software rendering is throttled through `maxSize` and `aoTaps`, not by
+    // scaling the tier down as well: halving the resolution on top of the tier
+    // scale is what drove the maps below their own micro band.
+    if (this.softwareGpu) this.tierScale = Math.min(this.tierScale, 0.75);
     this.anisotropy = Math.max(
       1,
       Math.min(ctx.settings.graphics.anisotropy, ctx.renderer.capabilities.getMaxAnisotropy()),
@@ -284,6 +307,15 @@ export class TextureLibrary implements GameSystem {
    * Effective resolution for a requested size. Rounded to a multiple of 64 so
    * mip chains stay clean; NPOT is fine on WebGL2.
    *
+   * The floor is 192, not 64. Callers already pass a tier-appropriate size (the
+   * terrain asks for 256 below 'high' and 512 at 'high'), so the tier scale here
+   * is a *second* reduction on top of that, and the two stacking is how the
+   * round-1 build ended up splatting the sea floor from 128px maps. Every noise
+   * layer is band-limited to the bake resolution, so below ~192 a material loses
+   * its micro band entirely and the surface goes smooth and characterless — the
+   * exact "untextured blob" the review flagged. Better to spend 1.5x the texels
+   * than to ship a material with no grain in it.
+   *
    * Note: already-generated maps are *not* re-baked when the tier changes —
    * live materials keep the textures they were handed. Only new requests pick up
    * the new resolution.
@@ -291,7 +323,7 @@ export class TextureLibrary implements GameSystem {
   private sizeFor(requested: number): number {
     const raw = requested * this.tierScale;
     const snapped = Math.round(raw / 64) * 64;
-    return Math.max(64, Math.min(this.maxSize, snapped));
+    return Math.max(Math.min(192, this.maxSize), Math.min(this.maxSize, snapped));
   }
 }
 

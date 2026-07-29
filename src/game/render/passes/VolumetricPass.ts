@@ -118,17 +118,25 @@ void main() {
   }
   shafts /= wsum;
 
+  // The screen-space fallback is a luminance smear, so it has to be given the
+  // water's colour here.
   vec3 tint = uSunColor * uInscatter * 3.0 + uInscatter * 0.35;
   vec3 add = shafts.rgb * tint * (uFallbackStrength * aniso);
 
+  // The external buffer is already sun-coloured scene radiance marched through
+  // the real extinction profile — re-tinting it would double the sun colour and
+  // double the phase term the march already applied, so only a gentle residual
+  // anisotropy is layered on top.
   vec3 ext = texture2D(tExternal, vUv).rgb;
-  add += ext * uSunColor * (uExternalStrength * aniso) * uHasExternal;
+  float extAniso = mix(1.0, aniso, 0.35);
+  add += ext * (uExternalStrength * extAniso) * uHasExternal;
 
   gl_FragColor = vec4(color + add, 1.0);
 }
 `;
 
 const _sunNdc = new THREE.Vector3();
+const _clearColor = new THREE.Color();
 
 export class VolumetricPass extends PostPass {
   readonly id = 'volumetric';
@@ -142,6 +150,7 @@ export class VolumetricPass extends PostPass {
   private width = 1;
   private height = 1;
   private scale = 0.5;
+  private shaftsCleared = false;
 
   /** Buffer published by the water system, composited in place of the fallback. */
   external: THREE.Texture | null = null;
@@ -230,6 +239,7 @@ export class VolumetricPass extends PostPass {
     const h = Math.max(1, Math.floor(height * this.scale));
     this.maskTarget.setSize(w, h);
     this.shaftTarget.setSize(w, h);
+    this.shaftsCleared = false;
   }
 
   override configure(frame: FrameContext): void {
@@ -249,6 +259,18 @@ export class VolumetricPass extends PostPass {
   protected execute(frame: FrameContext): void {
     const renderer = frame.renderer;
 
+    // A never-rendered half-float target is undefined memory; NaN * 0 is still
+    // NaN, so make sure the shaft buffer is real black before it is ever sampled.
+    if (!this.shaftsCleared) {
+      this.shaftsCleared = true;
+      renderer.getClearColor(_clearColor);
+      const alpha = renderer.getClearAlpha();
+      renderer.setRenderTarget(this.shaftTarget);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, false, false);
+      renderer.setClearColor(_clearColor, alpha);
+    }
+
     // Fade the screen-space fallback out as the sun leaves the frame — a radial
     // smear toward an off-screen origin degenerates into streaks.
     let fallback = 0;
@@ -259,7 +281,9 @@ export class VolumetricPass extends PostPass {
       const outside = Math.sqrt(dx * dx + dy * dy);
       fallback = Math.max(0, 1 - outside / 0.45);
     }
-    if (this.external) fallback *= 0.25;
+    // The water system's marched shafts are strictly better than a radial smear;
+    // when we have them, do not pay for the fallback at all.
+    if (this.external) fallback = 0;
 
     if (fallback > 0.001) {
       const mu = this.maskMat.uniforms;
