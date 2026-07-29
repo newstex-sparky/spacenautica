@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { createProceduralAsteroid, createStationModule, createTool, createContainer } from '../models/img2threejs';
+import { ShuttlePod } from './ShuttlePod';
 
 // ====================== Game Constants ======================
 const PLAYER_HEIGHT = 1.6;
@@ -100,9 +101,11 @@ const STRUCTURE_DIMENSIONS: Record<BuildableStructureType, { width: number; dept
   o2generator: { width: 1, depth: 2 },
   smelter:     { width: 2, depth: 2 },
   refinery:    { width: 2, depth: 2 },
+  fabricator:  { width: 2, depth: 2 },
   storage:     { width: 1, depth: 1 },
   h2tank:      { width: 1, depth: 1 },
   signalrelay: { width: 4, depth: 4 }, // Win condition structure
+  shuttlebay:  { width: 4, depth: 4 }, // Shuttle bay module
 };
 
 interface BuildTypeInfo {
@@ -125,6 +128,7 @@ const BUILD_TYPES: Record<BuildableStructureType, BuildTypeInfo> = {
   storage:     { name: 'Storage Locker',  costIron: 5,  costIce: 0, costRawOre: 0, costH2: 0, hotkey: '7', description: 'Stores raw materials' },
   h2tank:      { name: 'H2 Storage Tank',  costIron: 5, costIce: 0, costRawOre: 0, costH2: 0, hotkey: '8', description: 'Stores H2 power for station' },
   signalrelay: { name: 'Signal Relay',   costIron: 20, costIce: 0, costRawOre: 0, costH2: 10, hotkey: 'R', description: 'Win condition - broadcast distress' },
+  shuttlebay:  { name: 'Shuttle Bay',    costIron: 15, costIce: 0, costRawOre: 0, costH2: 20, hotkey: '9', description: 'Launch/entry to shuttle' },
 };
 
 // Smelting constants
@@ -225,8 +229,24 @@ const SHUTTLE_PODS: Record<ShuttleType, ShuttlePod> = {
 // Shuttle type
 type ShuttleType = 'shuttle-mk1' | 'shuttle-rescue';
 
+// Shuttle control mode
+type ShuttleControlMode = 'free' | 'autopilot';
+
+// Shuttle HUD state
+interface ShuttleHUD {
+  isVisible: boolean;
+  fuelPercent: number;
+  speed: number;
+  heading: number;
+  altitude: number;
+  destination: string;
+}
+
+// Export types for other components
+export type ShuttleControlMode = 'free' | 'autopilot';
+
 // Shuttle state (when player is in shuttle)
-interface ShuttleState {
+export interface ShuttleState {
   inShuttle: boolean;         // Are we inside the shuttle?
   currentShuttleType: ShuttleType; // What shuttle are we in?
   shuttlePosition: [number, number, number]; // Position in world
@@ -248,6 +268,16 @@ interface ShuttleState {
   };
   shuttleMaxH2: number;        // Max H2 in shuttle tank
   shuttleMaxO2: number;        // Max O2 in shuttle tank
+}
+
+// Shuttle HUD state
+export interface ShuttleHUD {
+  isVisible: boolean;
+  fuelPercent: number;
+  speed: number;
+  heading: number;
+  altitude: number;
+  destination: string;
 }
 
 const SHUTTLE_SPAWN_POSITION: THREE.Vector3 = new THREE.Vector3(0, 0, 20); // Spawn position (forward from station)
@@ -467,10 +497,20 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
   const [uiNearSignalRelay, setUiNearSignalRelay] = useState(false); // near signal relay prompt
   const [dialogueSequence, setDialogueSequence] = useState(false); // dialogue cutscene active
   const [dialogueText, setDialogueText] = useState(''); // current typewriter text
-  const [uiNearSignalRelay, setUiNearSignalRelay] = useState(false); // near signal relay prompt
-  const [dialogueSequence, setDialogueSequence] = useState(false); // dialogue cutscene active
-  const [dialogueText, setDialogueText] = useState(''); // current typewriter text
   const [dialogueIndex, setDialogueIndex] = useState(0); // current dialogue message index
+  const [shuttleMode, setShuttleMode] = useState(false); // shuttle flight mode
+  const [uiShuttleFuel, setUiShuttleFuel] = useState(100); // shuttle fuel gauge
+  const [uiShuttleVisible, setUiShuttleVisible] = useState(false); // shuttle UI visibility
+  const [shuttleControlMode, setShuttleControlMode] = useState<ShuttleControlMode>('free'); // shuttle control mode
+  const [shuttleHUD, setShuttleHUD] = useState<ShuttleHUD>({
+    isVisible: false,
+    fuelPercent: 100,
+    speed: 0,
+    heading: 0,
+    altitude: 0,
+    destination: 'Docking',
+  });
+  const [shuttleDocked, setShuttleDocked] = useState(true); // is shuttle docked at station
 
   // Inventory state
   const [uiInventoryOpen, setUiInventoryOpen] = useState(false);
@@ -792,13 +832,33 @@ const createTechTree3D = (): THREE.Group => {
   const shuttleInShuttleRef = useRef(false); // Are we currently inside the shuttle?
   const shuttleCargoRef = useRef<{ iron: number, ice: number, rawOre: number, ironMetal: number, titanium: number, oxygen: number, h2: number }>({ iron: 0, ice: 0, rawOre: 0, ironMetal: 0, titanium: 0, oxygen: 0, h2: 0 });
   const currentShuttleRef = useRef<THREE.Group | null>(null); // Reference to the shuttle mesh
+  const shuttleFuelRef = useRef(100); // Current shuttle fuel
+  const shuttlePositionRef = useRef(new THREE.Vector3(0, 0, 0)); // Shuttle position in world
+  const shuttleVelocityRef = useRef(new THREE.Vector3(0, 0, 0)); // Shuttle velocity
+  const shuttleTargetRef = useRef<THREE.Vector3 | null>(null); // Auto-pilot destination
+  const shuttleEngineOnRef = useRef(false); // Engine thruster state
+  const shuttleAutoPilotRef = useRef(false); // Auto-docking enabled
 
   // Input refs
   const keysRef = useRef<Record<string, boolean>>({});
   const yawRef = useRef(0);    // horizontal look angle (radians) — kept from original
   const pitchRef = useRef(0);  // vertical look angle (radians)   — kept from original
   const gameLoopRef = useRef<number | null>(null);
-  
+  const mouseDeltaRef = useRef({ x: 0, y: 0 });
+  const isPointerLockedRef = useRef(false);
+
+  // Shuttle flight controls
+  const shuttleWKeyRef = useRef(false);
+  const shuttleSKeyRef = useRef(false);
+  const shuttleAKeyRef = useRef(false);
+  const shuttleDKeyRef = useRef(false);
+  const shuttleQKeyRef = useRef(false);
+  const shuttleEKeyRef = useRef(false);
+  const shuttleSpaceKeyRef = useRef(false);
+  const shuttleEnterKeyRef = useRef(false);
+  const shuttleHKeyRef = useRef(false);
+  const shuttlePKeyRef = useRef(false);
+
   // Tech tree refs
   const techTreePanelRef = useRef<THREE.Group | null>(null); // holographic tech tree panel
   const techTreeGroupRef = useRef<THREE.Group | null>(null); // Group to hold all tech tree elements

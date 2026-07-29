@@ -4,7 +4,7 @@ import { TechTree3D } from './components/TechTree3D';
 import { NarratorScene } from './components/NarratorScene';
 import { HullBreach3D } from './components/HullBreach3D';
 import { SettingsPanel } from './components/SettingsPanel';
-import { Shuttle3D } from './components/Shuttle3D';
+import { ShuttleHUD } from './components/ShuttleHUD';
 
 export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
 export type AsteroidType = 'iron' | 'ice' | 'oxygen';
