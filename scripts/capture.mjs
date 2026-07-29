@@ -77,12 +77,85 @@ function serve(root, port) {
   });
 }
 
+/**
+ * Serialises capture runs machine-wide.
+ *
+ * Rendering here is software (swiftshader), so one run already saturates several
+ * cores. Concurrent runs do not share nicely: with eight of them going the load
+ * average hit 36 on a 4-core box, a frame cost over three seconds, and some runs
+ * could not get past boot at all — which makes every screenshot they produce
+ * untrustworthy. Queueing is strictly faster than thrashing, and it makes frame
+ * timings comparable between runs.
+ *
+ * The lock is a directory (mkdir is atomic) holding the owning pid. A lock whose
+ * owner is gone, or which is older than STALE_MS, is reclaimed.
+ */
+const LOCK = join(process.env.TMPDIR ?? '/tmp', 'spacenautica-capture.lock');
+const STALE_MS = 45 * 60 * 1000;
+
+async function acquireLock({ waitMs = 90 * 60 * 1000 } = {}) {
+  const { mkdir: mk, writeFile: wf, readFile: rf, rm, stat } = await import('node:fs/promises');
+  const startedAt = Date.now();
+  let announced = false;
+  for (;;) {
+    try {
+      await mk(LOCK);
+      await wf(join(LOCK, 'pid'), String(process.pid));
+      return async () => {
+        try {
+          await rm(LOCK, { recursive: true, force: true });
+        } catch {
+          /* nothing useful to do if the unlock fails */
+        }
+      };
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+    }
+    // Held by someone. Reclaim it if that someone is dead or it is ancient.
+    let reclaim = false;
+    try {
+      const age = Date.now() - (await stat(LOCK)).mtimeMs;
+      const owner = Number(await rf(join(LOCK, 'pid'), 'utf8').catch(() => '0'));
+      const alive = owner > 0 && (() => { try { process.kill(owner, 0); return true; } catch { return false; } })();
+      reclaim = age > STALE_MS || !alive;
+      if (reclaim) {
+        console.log(`capture: reclaiming ${alive ? 'stale' : 'abandoned'} lock from pid ${owner}`);
+        await rm(LOCK, { recursive: true, force: true });
+        continue;
+      }
+    } catch {
+      continue; // lock vanished under us; retry immediately
+    }
+    if (Date.now() - startedAt > waitMs) {
+      throw new Error(`capture: gave up waiting ${Math.round(waitMs / 60000)} min for ${LOCK}`);
+    }
+    if (!announced) {
+      console.log('capture: another run holds the lock, queueing (software GL does not share cores)');
+      announced = true;
+    }
+    await new Promise((r) => setTimeout(r, 4000));
+  }
+}
+
 async function main() {
   if (!existsSync(ROOT)) {
     console.error(`${ROOT} missing — run \`npm run build\` first`);
     process.exit(1);
   }
   await mkdir(OUT, { recursive: true });
+
+  // Queue behind any other capture run before spending anything.
+  const releaseLock = args['no-lock'] ? async () => {} : await acquireLock();
+  let released = false;
+  const release = async () => {
+    if (released) return;
+    released = true;
+    await releaseLock();
+  };
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.once(sig, () => { release().finally(() => process.exit(130)); });
+  }
+
   const port = 4180 + (process.pid % 400);
   const server = await serve(ROOT, port);
 
@@ -227,7 +300,21 @@ async function main() {
 
   await browser.close();
   server.close();
+  await release();
   if (errors.length) process.exitCode = 2;
 }
 
-main();
+main().catch(async (e) => {
+  console.error(String(e?.stack ?? e));
+  // The lock must never outlive a crashed run; the reclaim path is a backstop,
+  // not the normal route.
+  try {
+    const { rm } = await import('node:fs/promises');
+    const { readFile: rf } = await import('node:fs/promises');
+    const owner = Number(await rf(join(LOCK, 'pid'), 'utf8').catch(() => '0'));
+    if (owner === process.pid) await rm(LOCK, { recursive: true, force: true });
+  } catch {
+    /* best effort */
+  }
+  process.exit(1);
+});
