@@ -4823,6 +4823,12 @@ interface BroadcastState {
             // Consume 2 H2/sec during broadcasting
             resourcesRef.current.h2 -= 2 * 0.016;
             setUiH2(resourcesRef.current.h2);
+            
+            // Stop broadcasting if H2 runs out (no partial broadcasts)
+            if (resourcesRef.current.h2 < 2) {
+              broadcastState.broadcasting = false;
+              broadcastState.powered = false;
+            }
           }
         }
 
@@ -4981,16 +4987,16 @@ interface BroadcastState {
             shipGroup.add(wing2);
 
             // Position ship far away
-            ship.position.set(-40, 0, 30);
-            ship.rotation.y = Math.PI / 4;
+            (group as any).rescueShip.mesh.position.set(-40, 0, 30);
+            (group as any).rescueShip.mesh.rotation.y = Math.PI / 4;
 
-            scene.add(ship);
-            broadcastState.rescueShip.mesh = ship;
+            scene.add((group as any).rescueShip.mesh);
           }
 
           // Approach sequence
           if (broadcastState.rescueShip.mesh) {
             const ship = broadcastState.rescueShip.mesh;
+            const shipGroup = (ship as any); // Get shipGroup reference
             const shipSpeed = 3 * dt;
             
             // Move towards player
