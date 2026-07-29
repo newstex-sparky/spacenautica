@@ -38,23 +38,37 @@ const MIME = {
 
 /** Scripted camera vantage points — these are the frames the critics judge. */
 export const SHOTS = [
-  { id: '01_shallows_surface', pos: [0, -3.5, 0], yaw: 0.6, pitch: 0.25, tod: 12.5,
+  // `pos` is only a seed. What actually decides a vantage point is `biome` (the
+  // camera is walked outward from the seed until it stands in that biome) and
+  // `aboveFloor` (its height is then taken from the live sea floor). Hardcoded Y
+  // values went stale every time terrain changed — one shot ended up 42 m above a
+  // biome whose tallest species is under 2 m, which reads as an empty world and
+  // is easy to mistake for a rendering bug. Give `y` instead of `aboveFloor` to
+  // pin an absolute height, which is what the two surface shots need.
+  { id: '01_shallows_surface', pos: [0, 0, 0], y: -3.5, biome: 'shallows', yaw: 0.6, pitch: 0.25, tod: 12.5,
     intent: 'Sunlit shallows just under the surface looking up-forward: Snell window, god rays, caustics.' },
-  { id: '02_shallows_floor', pos: [18, -16, -22], yaw: 2.1, pitch: -0.22, tod: 12.0,
+  { id: '02_shallows_floor', pos: [18, 0, -22], aboveFloor: 2.5, biome: 'shallows', yaw: 2.1, pitch: -0.16,
+    tod: 12.0,
     intent: 'Sea floor in the shallows: sand detail, coral, caustic dapple, fish.' },
-  { id: '03_kelp_forest', pos: [-120, -42, 96], yaw: 1.1, pitch: -0.05, tod: 11.0,
+  { id: '03_kelp_forest', pos: [-120, 0, 96], aboveFloor: 3.0, biome: 'kelp_forest', yaw: 1.1, pitch: -0.05,
+    tod: 11.0,
     intent: 'Inside a kelp forest: translucent blades, volumetric shafts, depth haze.' },
-  { id: '04_reef_wall', pos: [210, -70, -150], yaw: -1.9, pitch: 0.1, tod: 13.5,
+  { id: '04_reef_wall', pos: [210, 0, -150], aboveFloor: 14, biome: 'coral_reef', yaw: -1.9, pitch: 0.1,
+    tod: 13.5,
     intent: 'Reef wall / drop-off: silhouette against blue, parallax, scale.' },
-  { id: '05_deep_dark', pos: [-320, -240, -280], yaw: 0.3, pitch: -0.15, tod: 12.0,
+  { id: '05_deep_dark', pos: [-320, 0, -280], aboveFloor: 6, biome: 'blood_kelp', yaw: 0.3, pitch: -0.15,
+    tod: 12.0,
     intent: 'Deep zone: near-black water, bioluminescence, torch cone, marine snow.' },
-  { id: '06_surface_above', pos: [0, 2.6, 0], yaw: 0.9, pitch: -0.06, tod: 17.6,
+  { id: '06_surface_above', pos: [0, 0, 0], y: 2.6, biome: 'shallows', yaw: 0.9, pitch: -0.06, tod: 17.6,
     intent: 'Above water at golden hour: ocean surface, sky, sun glitter, horizon.' },
-  { id: '07_night_dive', pos: [40, -28, 40], yaw: 2.6, pitch: -0.1, tod: 22.0,
+  { id: '07_night_dive', pos: [40, 0, 40], aboveFloor: 3.0, biome: 'shallows', yaw: 2.6, pitch: -0.1,
+    tod: 22.0,
     intent: 'Night dive: flashlight cone, bioluminescent flora, moonlight from above.' },
-  { id: '08_wreck', pos: [-60, -55, -190], yaw: 0.2, pitch: -0.05, tod: 12.0,
+  { id: '08_wreck', pos: [-60, 0, -190], landmark: 'aurora_bow', aboveFloor: 8, yaw: 0.2, pitch: -0.05,
+    tod: 12.0,
     intent: 'Man-made wreck: PBR metal, rust, barnacles, interior darkness.' },
 ];
+
 
 function serve(root, port) {
   return new Promise((res) => {
@@ -92,6 +106,82 @@ function serve(root, port) {
  */
 const LOCK = join(process.env.TMPDIR ?? '/tmp', 'spacenautica-capture.lock');
 const STALE_MS = 45 * 60 * 1000;
+
+/**
+ * Turns a shot spec into a concrete camera position using the live world.
+ *
+ * Runs in the page. Walks a spiral out from the seed XZ looking for the target
+ * biome, then takes the height from the sea floor there. Returns why it settled
+ * where it did, so a shot that could not find its biome is visible in the report
+ * rather than silently photographing the wrong place.
+ */
+function resolveShotInPage(s) {
+  const g = window.__GAME__;
+  if (!g) return null;
+  const world = g.world ?? g.tryGet('world');
+  if (!world?.heightAt) return { pos: [s.pos[0], s.y ?? s.pos[1], s.pos[2]], note: 'no world query' };
+
+  const sample = (x, z) => {
+    try {
+      return world.biomeAt ? world.biomeAt(x, z) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  let x = s.pos[0];
+  let z = s.pos[2];
+  let note = null;
+
+  // A shot aimed at a named place should frame that place, not a coordinate that
+  // was correct when it was written. Back-solve the camera position from the
+  // landmark so it lands `standoff` metres away along the authored view axis.
+  if (s.landmark) {
+    const reg = g.tryGet('world.props')?.landmarks;
+    const l = typeof reg?.get === 'function' ? reg.get(s.landmark) : null;
+    const lp = l?.position ?? (l && typeof l.x === 'number' ? { x: l.x, z: l.z } : null);
+    if (lp) {
+      // Yaw convention follows the camera rig: right = (cos y, 0, -sin y), so
+      // forward = (-sin y, 0, -cos y).
+      const d = s.standoff ?? (l.radius ?? 20) + 18;
+      x = lp.x + Math.sin(s.yaw) * d;
+      z = lp.z + Math.cos(s.yaw) * d;
+      note = `framed landmark ${s.landmark} from ${Math.round(d)} m`;
+    } else {
+      note = `landmark ${s.landmark} not found in the registry; using seed XZ`;
+    }
+  }
+
+  if (s.biome) {
+    const here = sample(x, z);
+    if (here?.id !== s.biome) {
+      // Golden-angle spiral: even coverage without favouring an axis.
+      let best = null;
+      for (let i = 1; i <= 900; i++) {
+        const r = 12 * Math.sqrt(i);
+        const a = i * 2.399963229728653;
+        const cx = s.pos[0] + r * Math.cos(a);
+        const cz = s.pos[2] + r * Math.sin(a);
+        const b = sample(cx, cz);
+        if (b?.id !== s.biome) continue;
+        // Prefer a point well inside the region over one on a blend boundary.
+        if (!best || b.weight > best.w) best = { x: cx, z: cz, w: b.weight, r };
+        if (best.w > 0.85) break;
+      }
+      if (best) {
+        x = best.x;
+        z = best.z;
+        note = `relocated ${Math.round(best.r)} m to reach biome ${s.biome} (weight ${best.w.toFixed(2)})`;
+      } else {
+        note = `biome ${s.biome} not found within ~360 m of the seed; using seed XZ (actual: ${here?.id ?? 'unknown'})`;
+      }
+    }
+  }
+
+  const floor = world.heightAt(x, z);
+  const y = s.y !== undefined ? s.y : floor + (s.aboveFloor ?? 3);
+  return { pos: [x, y, z], floor, note };
+}
 
 async function acquireLock({ waitMs = 90 * 60 * 1000 } = {}) {
   const { mkdir: mk, writeFile: wf, readFile: rf, rm, stat } = await import('node:fs/promises');
@@ -200,6 +290,17 @@ async function main() {
     // ~16 ms on a real GPU, seconds under software GL, and worse again when other
     // work is competing for the CPU. The deadline scales with the frame budget
     // instead of being a fixed wall-clock number.
+    // Resolve the vantage point against the live world first, then pin to the
+    // resolved position for the rest of the shot.
+    const resolved = await page.evaluate(resolveShotInPage, shot);
+    if (!resolved) {
+      errors.push(`${shot.id}: window.__GAME__ missing, cannot resolve vantage point`);
+      continue;
+    }
+    if (resolved.note) console.log(`  ${shot.id}: ${resolved.note}`);
+    if (resolved.note && resolved.note.includes('not found')) errors.push(`${shot.id}: ${resolved.note}`);
+    const target = { ...shot, pos: resolved.pos };
+
     const settleFrames = shot.settle ?? SETTLE;
     const deadlineMs = shot.timeout ?? Math.max(60000, settleFrames * 9000);
     const startedAt = Date.now();
@@ -219,7 +320,7 @@ async function main() {
         const sky = g.tryGet('world.sky');
         if (sky) sky.timeOfDay = s.tod;
         return g.frame;
-      }, shot);
+      }, target);
 
     const frame0 = await pin();
     if (frame0 < 0) {
@@ -272,14 +373,25 @@ async function main() {
     });
 
     const file = join(OUT, `${shot.id}.png`);
-    await page.screenshot({ path: file });
-    results.push({ id: shot.id, file, intent: shot.intent, expected: shot.pos, observed });
+    // The default 30 s timeout is not enough under software GL: a single frame can
+    // take seconds, and a capture that trips this fails the whole run.
+    await page.screenshot({ path: file, timeout: 180_000 });
+    results.push({
+      id: shot.id,
+      file,
+      intent: shot.intent,
+      seed: shot.pos,
+      resolved: resolved.pos,
+      floorY: resolved.floor,
+      placement: resolved.note ?? 'seed accepted',
+      observed,
+    });
 
     // Drifted off the mark: the pin failed, so say so loudly.
-    if (observed && Math.hypot(...observed.pos.map((v, i) => v - shot.pos[i])) > 1.5) {
+    if (observed && Math.hypot(...observed.pos.map((v, i) => v - resolved.pos[i])) > 1.5) {
       errors.push(
         `${shot.id}: camera drifted to ${observed.pos.join(', ')} from ` +
-          `${shot.pos.join(', ')} — pose pin is not holding`,
+          `${resolved.pos.map((v) => v.toFixed(1)).join(', ')} — pose pin is not holding`,
       );
     }
     console.log(
