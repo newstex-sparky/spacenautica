@@ -120,7 +120,16 @@ const _hsl = { h: 0, s: 0, l: 0 };
 const _one = new THREE.Vector3(1, 1, 1);
 const _camMat = new THREE.Matrix4();
 
-const CELL = 28;
+/**
+ * Spawn cell size in metres. Cells are claimed nearest-first, so this is also
+ * the spatial resolution of "spend the budget where the diver is looking": with
+ * a 28 m cell the closest shoal in the world still averaged 14 m out, which is
+ * far enough that a 0.5 m fish is a 20 px smudge. 18 m puts one shoal inside
+ * ~10 m and saturates the small-fish cap within about the nearest 30 m.
+ */
+const CELL = 18;
+/** Nothing spawns closer than this, so shoals never materialise in your face. */
+const MIN_SPAWN_DIST = 5;
 /**
  * Expected agents per square metre per unit of `BiomeDef.fauna` density, per
  * behaviour class, at the 'high' budget. These are deliberately high enough that
@@ -669,6 +678,8 @@ export class FaunaSystem implements GameSystem {
         const floor = world.heightAt(x, z);
         const y = Math.min(floor + Math.max(alt, def.altitude[0]), this.env.surfaceY - 1.5);
         if (y <= floor + 0.2) continue;
+        _v.set(x, y, z);
+        if (_v.distanceToSquared(this.env.playerPos) < MIN_SPAWN_DIST * MIN_SPAWN_DIST) continue;
         this.spawn(pool, x, y, z, rnd);
       }
       if (blocked) break;

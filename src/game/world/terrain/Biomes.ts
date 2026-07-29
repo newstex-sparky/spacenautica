@@ -176,6 +176,15 @@ export class BiomeMap {
   private readonly wIdx = new Int32Array(MAX_CONTRIB);
   private readonly wVal = new Float64Array(MAX_CONTRIB);
   private readonly accum: Float64Array;
+  /**
+   * Separate scratch for `regionAt`. It MUST NOT share `accum`: `weigh` zeroes
+   * `accum`, then calls `regionAt` inside its neighbourhood loop, so a shared
+   * buffer let a cache-missing region overwrite the weights being accumulated.
+   * The result was biome weights summed on top of an unrelated region's
+   * depth-suitability values — wrong dominant biome, weights above 1, and a
+   * shelf biome winning at 130 m.
+   */
+  private readonly pickScratch: Float64Array;
 
   /** Coarse cache for `sample()` so fauna/flora can hammer it. */
   private readonly cache = new Map<number, BiomeSample>();
@@ -186,6 +195,7 @@ export class BiomeMap {
     this.seed = seed | 0;
     this.depthFn = depthFn;
     this.accum = new Float64Array(BIOMES.length);
+    this.pickScratch = new Float64Array(BIOMES.length);
   }
 
   /* ---------------------------------------------------------------- *
@@ -207,7 +217,7 @@ export class BiomeMap {
     const depth = this.depthFn(px, pz);
     let total = 0;
     const defs = BIOMES;
-    const acc = this.accum;
+    const acc = this.pickScratch;
     for (let i = 0; i < defs.length; i++) {
       const w = depthSuitability(defs[i], depth) * (defs[i].regionWeight ?? 1);
       acc[i] = w;
