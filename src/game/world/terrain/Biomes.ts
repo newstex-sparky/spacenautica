@@ -109,14 +109,20 @@ export const BIOMES: BiomeDef[] = [
   {
     id: 'sand_dunes', name: 'Sand Dunes', depthRange: [110, 330],
     floorColor: c(0xd2cdba), fogColor: c(0x137384), fogDensity: 0.03, ambientLight: 0.52,
-    flora: [{ id: 'seagrass', density: 0.35 }],
+    flora: [{ id: 'seagrass', density: 0.35 }, { id: 'coral_tube', density: 0.3 }],
     fauna: [{ id: 'sandshark', density: 0.35 }, { id: 'jellyray', density: 0.2 }], music: 'plateau',
     sediment: 1.0, rockColor: c(0xbcb6a8), rippleScale: 1.6, regionWeight: 1.2,
   },
   {
     id: 'boulder_garden', name: 'Boulder Garden', depthRange: [55, 210],
     floorColor: c(0xa3a498), fogColor: c(0x157584), fogDensity: 0.029, ambientLight: 0.58,
-    flora: [{ id: 'algae_mat', density: 0.8 }, { id: 'sponge', density: 0.45 }],
+    flora: [
+      { id: 'algae_mat', density: 0.8 }, { id: 'sponge', density: 0.45 },
+      // Both of these are mid-height on purpose. With only ground-hugging species
+      // any camera more than ~10 m off the floor sees an empty world, which reads
+      // as broken flora rather than as a sparse biome.
+      { id: 'kelp_short', density: 0.6 }, { id: 'coral_tube', density: 0.35 },
+    ],
     fauna: [{ id: 'hoverfish', density: 0.6 }, { id: 'boomerang', density: 0.4 }], music: 'plateau',
     sediment: 0.35, rockColor: c(0x939489), rippleScale: 0.45, regionWeight: 1.05,
   },

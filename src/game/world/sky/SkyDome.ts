@@ -246,7 +246,7 @@ export class SkyDome {
         uCloudTop: { value: 3.6 },
         uCloudDensity: { value: 1.0 },
         uCloudErode: { value: 0.42 },
-        uCloudDetail: { value: 1.35 },
+        uCloudDetail: { value: 2.1 },
         uCloudSigmaE: { value: 26.0 },
         uCloudPowder: { value: 0.7 },
         // The cloud phase function is 4pi-normalised (isotropic == 1), so this

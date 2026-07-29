@@ -19,9 +19,18 @@ import { hash2 } from '../../core/Noise';
 
 export const CLOUD_TEX_SIZE = 256;
 
-/** Tiles per kilometre for the two coverage taps. Mirrored in GLSL below. */
-export const CLOUD_SCALE_A = 1 / 38;
-export const CLOUD_SCALE_B = 1 / 9.3;
+/**
+ * Tiles per kilometre for the two coverage taps. Mirrored in GLSL below.
+ *
+ * The tile spans 1/SCALE kilometres, and the field's largest features are about
+ * a third of that, so these numbers set the size of an individual cloud. At the
+ * original 38 km the "lumps" were 6-12 km across — supercell scale — and the
+ * whole visible sky was one smooth plume. Cumulus are 0.5-2 km, which is what
+ * these give, so a frame now contains many separate clouds at many apparent
+ * sizes instead of one.
+ */
+export const CLOUD_SCALE_A = 1 / 21;
+export const CLOUD_SCALE_B = 1 / 6.1;
 
 /* ------------------------------------------------------------------ *
  * Periodic (tileable) noise bakery

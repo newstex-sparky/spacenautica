@@ -230,7 +230,10 @@ export class TerrainSystem implements GameSystem, WorldQuery {
     this.renderer = ctx.renderer;
     this.packed = packTerrainTextures(ctx.renderer, sets, size, aniso);
 
-    const detail = lib ? lib.get('detail_grunge', 256).normalMap : new THREE.Texture();
+    // detail_grain, not detail_grunge: grunge is a multiply layer whose normal
+    // carries an ~8 cm macro band, and tiled at 0.34 m that band repeats visibly.
+    // detail_grain is a purpose-built detail-normal source with no macro band.
+    const detail = lib ? lib.get('detail_grain', 256).normalMap : new THREE.Texture();
     detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
 
     const water = ctx.tryGet<GameSystem & {
