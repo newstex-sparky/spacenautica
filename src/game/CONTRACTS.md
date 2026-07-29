@@ -42,6 +42,27 @@ export class MySystem implements GameSystem {
 `src/game/main.ts` constructs and registers them in order. Cross-system access:
 `ctx.get<WaterSystem>('world.water')`.
 
+## Two hazards that have already cost real time
+
+**Do not stream, place or cull against `ctx.camera` from a phase before
+`Phase.Camera`.** `player.camera` writes the camera transform in `Phase.Camera`,
+so anything running in `Phase.World` or earlier reads *last frame's* viewpoint.
+This is harmless while the camera drifts and catastrophic when it jumps: flora
+placed and culled plants for the previous vantage point, and fauna culled its
+entire population on a teleport. Both now use `ctx.get<PlayerSystem>('player')
+.position` (or their own cached eye vector) instead. If you need the view
+direction rather than the position, cache it yourself at the end of your own
+update.
+
+**Presentation timers must not use the `dt` handed to `update()`.** That value is
+clamped (`Math.min(raw, 1/15)`) so a stall cannot teleport the player, which is
+correct for simulation and wrong for anything a human watches. Under software
+rendering, where a frame can take over a second, interface timing driven by the
+clamped `dt` runs roughly 21x slow — a HUD depth damper eased 132 m in one frame
+and five-second toasts took 105 s to expire. Use `ctx.rawDt` (unclamped) or a real
+wall clock for dwell, fade and easing; keep simulation and survival clocks on
+`dt`.
+
 ## System table
 
 | name | dir | phase | owner module |
