@@ -196,7 +196,7 @@ float matHeight(vec2 uv){
     h += mmScratches(uv, uC, uP[5].w * 0.6) * 0.03;
   } else if (uSub == 8) {
     // decal on a plate: relief is only the chipped paint edge + substrate grain
-    h += bk_fbm(uv * uC, uC, 3, 0.55) * uP[2].z;
+    h += bk_detailFbm(uv * uC, uC, 3, 0.55) * uP[2].z;
     float stripe = bk_stripe(bk_shear(uv, 1.0, 0.0), vec2(uP[3].xy.x, 0.0), 0.5, 0.03, 0.0, dC);
     h += stripe * uP[3].w * 0.25;
   } else {
@@ -210,7 +210,7 @@ float matHeight(vec2 uv){
     float over = step(1.5, mod(ip.x + 2.0 * ip.y, 3.0));
     h = 0.42 + mix(weft * 0.85, warp, over) * uP[1].z;
     // fibre fuzz and pilling
-    h += bk_fbm(uv * uC, uC, 3, 0.6) * uP[2].z;
+    h += bk_detailFbm(uv * uC, uC, 3, 0.6) * uP[2].z;
     // seams with stitch lines
     float seam = bk_stripe(uv, vec2(0.0, 2.0), 0.06, 0.02, 0.0, dC);
     h += seam * uP[3].w;

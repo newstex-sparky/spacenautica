@@ -56,14 +56,24 @@ float matHeight(vec2 uv){
     // curled polygon edges lift slightly
     h += bk_cellEdge(v, uP[4].z * 3.0, dC) * 0.02;
   } else {
-    h += bk_fbm(uv * dC, dC, 4, 0.5) * uP[1].z;
+    // Fine sand. Isotropic fbm alone reads as lumpy cobbles at any tiling
+    // distance, because nothing in it says "this was worked by water moving in a
+    // direction". So most of the mid band is a low-amplitude oblique lineation —
+    // the residue of a current — with the isotropic component kept as the
+    // irregularity on top of it rather than as the whole story.
+    float lin = bk_ripple(uv, vec2(9.0, 4.0), 2.4, dC, 0.85);
+    float lin2 = bk_ripple(uv, vec2(5.0, -11.0), 3.1, dC, 0.9);
+    h += (lin * 0.62 + lin2 * 0.38 - 0.5) * uP[1].z * 0.85;
+    h += bk_fbm(uv * dC, dC, 4, 0.5) * uP[1].z * 0.55;
     // faint biogenic pits and worm casts
     vec4 pv = bk_voronoi(uv * dC * 1.7, dC * 1.7, 1.0);
     h -= step(0.86, pv.z) * (1.0 - smoothstep(0.0, 0.22, pv.x)) * 0.06;
   }
 
-  // Micro grain, on every variant — this is what holds up at 30 cm.
-  h += bk_fbm(uv * uC, uC, 2, 0.5) * uP[2].z;
+  // Micro grain, on every variant — this is what holds up at 30 cm. Uses the
+  // detail variant so the grain keeps its slope when the bake resolution forces
+  // the cell count down (see bk_detailGain).
+  h += bk_detailFbm(uv * uC, uC, 2, 0.5) * uP[2].z;
   return clamp(h, 0.0, 1.0);
 }
 

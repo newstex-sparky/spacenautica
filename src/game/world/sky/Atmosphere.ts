@@ -37,10 +37,22 @@ export const ATMO = {
   msSize: 32,
   /**
    * Scale from physical radiance (sun irradiance = 1) into the renderer's
-   * linear working range. Chosen so a clear midday zenith lands near 0.9 and
-   * ACES maps it to a deep, saturated blue rather than washing out.
+   * linear working range.
+   *
+   * This is the single most important number in the file and the previous value
+   * (34) was ~3x too high: it put a clear midday zenith near 0.9, which ACES
+   * maps to ~0.9 sRGB — i.e. white. Every channel ratio the scattering integral
+   * worked so hard to get right was then thrown away by the shoulder of the tone
+   * curve, and because the post stack's auto-exposure can only travel a factor
+   * of ~11 it could not rescue it either: the sky came out white all day and
+   * black all night.
+   *
+   * Calibrated instead so a clear midday zenith lands near 0.28, which sits in
+   * the near-linear part of the curve and comes out as a deep saturated blue,
+   * and so sun-on-a-horizontal-surface versus sky irradiance lands near the
+   * real-world 6:1 at noon rather than the 2:1 it used to be.
    */
-  skyScale: 34.0,
+  skyScale: 11.0,
 } as const;
 
 /* ------------------------------------------------------------------ *
@@ -186,7 +198,17 @@ AtmoSample atmoMarch(
   float t = 0.0;
   for (int i = 0; i < 64; i++) {
     if (i >= steps) break;
-    float tNew = ((float(i) + jitter) / fSteps) * tMax;
+    /*
+     * Quadratic step distribution. Air density falls off with an 8 km scale
+     * height while tMax runs to hundreds of kilometres, so a uniform march spends
+     * nearly every sample in vacuum and resolves the part that actually scatters
+     * with one or two. That is what flattened the horizon band and erased
+     * twilight entirely: after sunset all the in-scattered light comes from the
+     * 20-60 km slice where the sun is still up, and a uniform march stepped
+     * straight over it.
+     */
+    float f = (float(i) + jitter) / fSteps;
+    float tNew = (f * f * 0.78 + f * 0.22) * tMax;
     float dt = tNew - t;
     if (dt <= 0.0) { t = tNew; continue; }
     float tMid = t + dt * 0.5;

@@ -2,19 +2,24 @@
  * Utility maps other systems layer on top of their own shading.
  *
  * Sub-types (uSub): 0 detail_grunge, 1 detail_noise, 2 foam_mask,
- *                   3 caustic_tile, 4 wet_ripple.
+ *                   3 caustic_tile, 4 wet_ripple, 5 detail_grain.
  *
- * These are *data*, so their albedo attachment is allocated linear (no sRGB
- * transfer) — see `MaterialDefs.dataAlbedo`.
+ * Most of these are *data*, so their albedo attachment is allocated linear (no
+ * sRGB transfer) — see `MaterialDefs.dataAlbedo`.
  *
  *  detail_grunge  rgb = grey grunge multiplier, a = coverage
  *  detail_noise   r = fbm, g = worley, b = ridged, a = white hash
  *  foam_mask      rgb = foam colour, a = coverage
  *  caustic_tile   rgb = caustic irradiance with chromatic dispersion, a = luma
  *  wet_ripple     normal + height are the payload; rgb = wetness tint
+ *  detail_grain   normal + height are the payload; rgb is a near-neutral
+ *                 multiplier, ORM.a = quartz-glint mask. Tile at ~0.3 m and
+ *                 blend over a base layer with `mx_blendNormalRNM` — this is the
+ *                 micro band, so it must NOT be used as a standalone material.
  *
  * Params
  *   uP[3] = primary cells.xy, sharpness.z, secondary weight.w
+ *           (grain: lineation wave numbers.xy, lineation amplitude.z)
  *   uP[4] = dispersion.x, bubble density.y, spare.zw
  */
 export const UTILITY_GLSL = /* glsl */ `
@@ -44,7 +49,7 @@ float matHeight(vec2 uv){
     h = 0.42
       + bk_fbm(uv * mC, mC, 4, 0.6) * uP[0].z
       + bk_worleyFbm(uv * dC, dC, 3, 1.0) * uP[1].z
-      + bk_fbm(uv * uC, uC, 3, 0.55) * uP[2].z;
+      + bk_detailFbm(uv * uC, uC, 3, 0.55) * uP[2].z;
   } else if (uSub == 1) {
     h = 0.5 + bk_fbm(uv * dC, dC, 5, 0.55) * uP[1].z;
   } else if (uSub == 2) {
@@ -61,7 +66,7 @@ float matHeight(vec2 uv){
     h = 0.5
       + bk_ripple(uv, uP[3].xy, 1.1, dC, 1.6) * uP[1].z
       + bk_ripple(uv, uP[3].xy.yx * vec2(-1.0, 1.0) + vec2(2.0, 1.0), 1.5, dC, 1.4) * uP[1].z * 0.7
-      + bk_fbm(uv * uC, uC, 3, 0.6) * uP[2].z;
+      + bk_detailFbm(uv * uC, uC, 3, 0.6) * uP[2].z;
   } else {
     // Grain: a *detail* height field, meant to be tiled at ~0.3 m and blended
     // over a splat layer with reoriented normal mapping. Deliberately has no

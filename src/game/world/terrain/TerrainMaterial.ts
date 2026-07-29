@@ -384,8 +384,8 @@ void triGrid(vec2 uv, out vec3 w, out vec2 v1, out vec2 v2, out vec2 v3) {
   v3 = base + vec2(1.0 - s, s);
 }
 
-vec4 tapArray(sampler2DArray T, vec2 uv, float layer, vec2 dx, vec2 dy) {
-  if (uStochastic < 0.5) return textureGrad(T, vec3(uv, layer), dx, dy);
+vec4 tapArray(sampler2DArray T, vec2 uv, float layer, vec2 dx, vec2 dy, float stoch) {
+  if (stoch < 0.5) return textureGrad(T, vec3(uv, layer), dx, dy);
   vec3 w;
   vec2 v1, v2, v3;
   triGrid(uv * uHexScale, w, v1, v2, v3);
@@ -407,8 +407,13 @@ struct SplatSample {
   float ao;
 };
 
-/** Triplanar sample of one packed layer, returning world-space normal. */
-void sampleLayer(int layer, vec3 wp, vec3 wn, vec3 tw, out SplatSample o) {
+/**
+ * Triplanar sample of one packed layer, returning world-space normal.
+ * `stoch` is passed rather than read from the uniform so the caller can spend
+ * the 3-tap anti-tiling budget on the dominant layer only — the second layer is
+ * mostly buried by the height blend, so its repetition is not visible anyway.
+ */
+void sampleLayer(int layer, vec3 wp, vec3 wn, vec3 tw, float stoch, out SplatSample o) {
   float sc = uLayerScale[layer];
   float fl = float(layer);
 
@@ -422,8 +427,8 @@ void sampleLayer(int layer, vec3 wp, vec3 wn, vec3 tw, out SplatSample o) {
 
   if (tw.y > 0.004) {
     vec2 dx = dFdx(uvY), dy = dFdy(uvY);
-    vec4 a = tapArray(tAlbH, uvY, fl, dx, dy);
-    vec4 n = tapArray(tNRA, uvY, fl, dx, dy);
+    vec4 a = tapArray(tAlbH, uvY, fl, dx, dy, stoch);
+    vec4 n = tapArray(tNRA, uvY, fl, dx, dy, stoch);
     albAcc += a * tw.y;
     nraAcc += n * tw.y;
     vec2 t = n.xy * 2.0 - 1.0;
@@ -431,8 +436,8 @@ void sampleLayer(int layer, vec3 wp, vec3 wn, vec3 tw, out SplatSample o) {
   }
   if (tw.x > 0.004) {
     vec2 dx = dFdx(uvX), dy = dFdy(uvX);
-    vec4 a = tapArray(tAlbH, uvX, fl, dx, dy);
-    vec4 n = tapArray(tNRA, uvX, fl, dx, dy);
+    vec4 a = tapArray(tAlbH, uvX, fl, dx, dy, stoch);
+    vec4 n = tapArray(tNRA, uvX, fl, dx, dy, stoch);
     albAcc += a * tw.x;
     nraAcc += n * tw.x;
     vec2 t = n.xy * 2.0 - 1.0;
@@ -440,8 +445,8 @@ void sampleLayer(int layer, vec3 wp, vec3 wn, vec3 tw, out SplatSample o) {
   }
   if (tw.z > 0.004) {
     vec2 dx = dFdx(uvZ), dy = dFdy(uvZ);
-    vec4 a = tapArray(tAlbH, uvZ, fl, dx, dy);
-    vec4 n = tapArray(tNRA, uvZ, fl, dx, dy);
+    vec4 a = tapArray(tAlbH, uvZ, fl, dx, dy, stoch);
+    vec4 n = tapArray(tNRA, uvZ, fl, dx, dy, stoch);
     albAcc += a * tw.z;
     nraAcc += n * tw.z;
     vec2 t = n.xy * 2.0 - 1.0;
@@ -491,6 +496,8 @@ void rippleBand(
 vec3 floorRelief(
   vec3 wp, vec3 wn, float amount, float footprint, out float crest
 ) {
+  crest = 0.0;
+  if (amount <= 0.01) return wn;
   // Local current direction, rotated by a slow field so neighbouring dune
   // patches do not all march in lockstep the way a single global vector would.
   float swing = snoise(wp.xz * 0.0042) * 0.85;
@@ -531,6 +538,8 @@ vec3 floorRelief(
  * distance. Faded on footprint like the ripples.
  */
 vec3 rockRelief(vec3 wp, vec3 wn, float amount, float footprint) {
+  // Eight gradient-noise taps; skip the lot on sand and beyond the mip floor.
+  if (amount <= 0.01) return wn;
   float f1 = bandFade(9.0, footprint);
   float f2 = bandFade(2.6, footprint);
   if (f1 + f2 <= 0.004) return wn;
@@ -596,8 +605,8 @@ const TERRAIN_SPLAT_BODY = /* glsl */ `
   vec3 tw = blendWeights(wn, uTriSharp);
 
   SplatSample s0, s1;
-  sampleLayer(i0, wp, wn, tw, s0);
-  sampleLayer(i1, wp, wn, tw, s1);
+  sampleLayer(i0, wp, wn, tw, uStochastic, s0);
+  sampleLayer(i1, wp, wn, tw, 0.0, s1);
 
   float mixT = b1 / max(b0 + b1, 1e-4);
   // Height blend so the coarser material pokes through instead of cross-fading.

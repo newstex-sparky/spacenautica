@@ -77,10 +77,10 @@ float matHeight(vec2 uv){
     h = 0.55 + dot(fract(uv * dC) - 0.5, tilt) * uP[1].z * 3.0 + (v.z - 0.5) * 0.12;
     h -= bk_cellEdge(v, 0.05, dC) * 0.10;
     // conchoidal micro-fracture on the facets
-    h += bk_fbm(uv * uC, uC, 2, 0.5) * uP[2].z * 0.5;
+    h += bk_detailFbm(uv * uC, uC, 2, 0.5) * uP[2].z * 0.5;
   }
 
-  h += bk_fbm(uv * uC, uC, 3, 0.5) * uP[2].z;
+  h += bk_detailFbm(uv * uC, uC, 3, 0.5) * uP[2].z;
   return clamp(h, 0.0, 1.0);
 }
 

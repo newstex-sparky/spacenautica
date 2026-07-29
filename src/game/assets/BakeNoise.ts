@@ -116,6 +116,27 @@ bool bk_atCeiling(vec2 per, float minTexels){
 }
 
 /**
+ * Amplitude compensation for the period clamp, for use on a *detail* layer.
+ *
+ * A height layer contributes amplitude * cells to the normal map, so when the
+ * resolution ceiling cuts a layer's cell count in half, leaving its amplitude
+ * alone halves its slope too — and the material quietly loses its grain as the
+ * bake gets smaller. That is the wrong degradation: the feature has to get
+ * bigger (it cannot be helped) but it should not also get flatter, or a 192px
+ * bake reads as a washed-out different material instead of the same one seen
+ * coarsely. Multiplying the layer by this keeps the slope, and therefore the lit
+ * appearance, roughly constant across bake sizes.
+ *
+ * Only for high-frequency detail. Do not apply it to a macro layer: there the
+ * amplitude is the silhouette, not the grain.
+ */
+float bk_detailGain(vec2 per){
+  float lim = max(bk_cellCeiling(BK_TEXELS_LATTICE).x, 1.0);
+  float cells = max(max(per.x, per.y), 1.0);
+  return cells / max(min(cells, lim), 1.0);
+}
+
+/**
  * Clamps an integer wave-number pair so a directional wave train stays
  * resolvable. Kept integer so the train still tiles.
  */
@@ -155,6 +176,11 @@ float bk_fbm(vec2 p, vec2 per, int oct, float gain){
     p *= 2.0; per *= 2.0; a *= gain;
   }
   return s / max(n, 1e-4);
+}
+
+/** Band-limited detail fbm with the slope compensation already applied. */
+float bk_detailFbm(vec2 p, vec2 per, int oct, float gain){
+  return bk_fbm(p, per, oct, gain) * bk_detailGain(per);
 }
 
 /** Ridged multifractal — sharp crests for fractures, reef spines, veins. */

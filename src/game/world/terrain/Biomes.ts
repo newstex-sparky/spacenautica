@@ -191,9 +191,24 @@ export class BiomeMap {
   private static readonly CACHE_CELL = 6;
   private static readonly CACHE_MAX = 12000;
 
-  constructor(seed: number, depthFn: (x: number, z: number) => number) {
+  /**
+   * Depth used to gate a *point* sample. Defaults to `depthFn`, but the terrain
+   * passes the real floor height here: `depthFn` is the smooth macro profile,
+   * which is the right basis for choosing a region's character but is wrong for
+   * asking "how deep is it actually here". On a ridged drop-off the two disagree
+   * by tens of metres, which let a shelf biome win on a 130 m slope and handed
+   * the water system clear-shallows optics at depth.
+   */
+  private readonly pointDepthFn: (x: number, z: number) => number;
+
+  constructor(
+    seed: number,
+    depthFn: (x: number, z: number) => number,
+    pointDepthFn?: (x: number, z: number) => number,
+  ) {
     this.seed = seed | 0;
     this.depthFn = depthFn;
+    this.pointDepthFn = pointDepthFn ?? depthFn;
     this.accum = new Float64Array(BIOMES.length);
     this.pickScratch = new Float64Array(BIOMES.length);
   }
@@ -328,7 +343,7 @@ export class BiomeMap {
     const hit = this.cache.get(key);
     if (hit) return hit;
 
-    const depth = this.depthFn(qx * cell, qz * cell);
+    const depth = this.pointDepthFn(qx * cell, qz * cell);
     const best = this.weigh(qx * cell, qz * cell, depth);
     const weights: Record<string, number> = {};
     for (let i = 0; i < BIOMES.length; i++) {

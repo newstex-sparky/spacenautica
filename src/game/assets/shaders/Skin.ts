@@ -77,7 +77,7 @@ float matHeight(vec2 uv){
     h += bk_ripple(uv, uP[5].xy, 1.2, dC, 1.0) * uP[1].z * 0.3;
   }
 
-  h += bk_fbm(uv * uC, uC, 2, 0.5) * uP[2].z * 0.7;
+  h += bk_detailFbm(uv * uC, uC, 2, 0.5) * uP[2].z * 0.7;
   return clamp(h, 0.0, 1.0);
 }
 

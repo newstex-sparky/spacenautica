@@ -144,7 +144,13 @@ export class TerrainSystem implements GameSystem, WorldQuery {
 
   constructor() {
     this.field = new TerrainField(this.seed);
-    this.biomeMap = new BiomeMap(this.seed, (x, z) => this.field.macroDepth(x, z));
+    this.biomeMap = new BiomeMap(
+      this.seed,
+      (x, z) => this.field.macroDepth(x, z),
+      // Point queries gate on the real floor, so `biomeAt` agrees with the depth
+      // the player reads on the HUD and with the vertex tint the mesher bakes.
+      (x, z) => -this.field.height(x, z),
+    );
   }
 
   /* ---------------------------------------------------------------- *

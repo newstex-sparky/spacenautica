@@ -33,6 +33,35 @@ wrong biome labels are all consistent with that rather than with real defects.
 Re-derive the finding list from a settled capture before assigning more work.
 Owner: integrator.
 
+## Relayed to owners, awaiting their pass
+
+**terrain — caustics baseline.** `world/terrain/TerrainMaterial.ts` combines
+caustics as `max(c1*c2*2.4 - 0.42, 0)`, which against a unit-mean tile leaves a
+baseline near 2.0, so it lifts the whole sea floor instead of dappling it. Prefer
+the shared `waterCaustics(worldPos, normal)`; if the local combine is kept it
+should be `max(sqrt(c1*c2) - 0.75, 0.0) * 2.6`. Water has already set
+`uwCausticsParams.x` so terrain's current exposure is unchanged either way.
+
+**sky — dome fog path length.** `world/sky/SkyDome.ts` computes
+`path = uwCameraDepth / max(0.10, abs(rd.y))`, which under-fogs downward rays
+given the dome sits 3000 m out. Largely moot now that the water backdrop covers
+the dome below a few centimetres of depth; if kept, use a constant around 480.
+
+**sky — publish the panorama to water.** Once the dome renders, call
+`water.setSkyTexture(equirect, 1)` on sky-state changes, or the ocean's analytic
+sky will not match the atmosphere at the horizon.
+
+**terrain — mid-height flora species.** `boulder_garden` and `sand_dunes` list
+only ground-hugging species, so any camera more than ~10 m off the floor sees an
+empty world. Flora suggests adding `kelp_short` (0.6) and `coral_tube` (0.35) to
+boulder_garden, and `coral_tube` (0.3) to sand_dunes. Every species id already
+exists.
+
+**render — prepass depth texture resize.** Relayed directly to the render agent.
+three 0.185's `RenderTarget.setSize()` never touches an attached `depthTexture`,
+so the prepass FBO goes incomplete on the first adaptive-resolution change and the
+driver rejects every operation against it. Confirmed against the installed source.
+
 ## Per-subsystem
 
 **systems** — Creative mode does not auto-unlock the tech tree. Arguably it

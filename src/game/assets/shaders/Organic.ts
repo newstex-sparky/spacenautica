@@ -92,7 +92,7 @@ float matHeight(vec2 uv){
     h -= bk_cellEdge(v, 0.10, uP[3].xy) * uP[1].z * 0.5;
   }
 
-  h += bk_fbm(uv * uC, uC, 3, 0.55) * uP[2].z;
+  h += bk_detailFbm(uv * uC, uC, 3, 0.55) * uP[2].z;
   return clamp(h, 0.0, 1.0);
 }
 
