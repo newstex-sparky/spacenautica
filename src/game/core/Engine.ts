@@ -35,6 +35,13 @@ export class Engine implements GameContext {
   readonly settings: Settings;
 
   time = 0;
+  /**
+   * Frames presented since boot. The capture harness waits on this rather than on
+   * wall-clock time: under software rendering a single frame can exceed a second,
+   * so a millisecond wait may span only one frame and catch every smoothed or
+   * streamed system — biome crossfades, HUD easing, terrain LOD, background
+   * texture bakes, temporal accumulation — mid-transition.
+   */
   frame = 0;
   width = 1;
   height = 1;
