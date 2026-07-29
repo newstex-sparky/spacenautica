@@ -120,13 +120,38 @@ const _hsl = { h: 0, s: 0, l: 0 };
 const _one = new THREE.Vector3(1, 1, 1);
 const _camMat = new THREE.Matrix4();
 
-const CELL = 36;
-/** Expected agents per square metre, per behaviour class, at the 'high' budget. */
+const CELL = 28;
+/**
+ * Expected agents per square metre per unit of `BiomeDef.fauna` density, per
+ * behaviour class, at the 'high' budget. These are deliberately high enough that
+ * every class saturates its share of the budget well inside KEEP_RADIUS: cells
+ * are spawned nearest-first, so a cap-limited density is what puts the animals
+ * in front of the diver instead of smeared over the horizon.
+ */
 const DENSITY: Record<string, number> = {
-  school: 0.0030,
-  drifter: 0.00016,
-  predator: 0.00013,
+  school: 0.0075,
+  drifter: 0.0006,
+  predator: 0.0005,
 };
+/**
+ * Radius in metres inside which each behaviour class is populated, and outside
+ * which it is despawned. The budget is a fixed number of animals, so the radius
+ * is really a density knob: a 0.5 m fish subtends under 4 px past 80 m and is
+ * the same colour as the water there, so agents spent out at 250 m buy nothing
+ * and starve the near field where the eye actually is. Rays and predators are
+ * metres long and read much further out, so they get more room.
+ */
+const KEEP_RADIUS: Record<string, number> = {
+  school: 82,
+  drifter: 170,
+  predator: 115,
+};
+/**
+ * Hysteresis for eviction: an existing animal is only recycled to make room for
+ * a nearer one if it is at least this much farther away, so a diver hovering on
+ * a cell boundary does not thrash the population.
+ */
+const EVICT_MARGIN = 26;
 const NEIGHBOUR_CAP = 96;
 
 export class FaunaSystem implements GameSystem {
@@ -151,6 +176,15 @@ export class FaunaSystem implements GameSystem {
   private lastCellScan = -1e9;
   private scanCx = 0;
   private scanCz = 0;
+
+  /**
+   * The point we cull and LOD against. Normally the render camera, but the
+   * camera rig resolves at Phase.Camera — after us — so on the frame the player
+   * is teleported (or on any frame the rig has not caught up) `camera.position`
+   * is still at the old vantage. Culling against that throws away every creature
+   * at the new one, which is exactly how a warp lands on an empty frame.
+   */
+  private readonly eye = new THREE.Vector3();
 
   private seed = 20260728;
   private budget = 280;
@@ -234,15 +268,11 @@ export class FaunaSystem implements GameSystem {
     this.viewmodel = ctx.tryGet<ViewModelLike>('player.viewmodel');
 
     const textures = ctx.tryGet<TexturesLike>('assets.textures');
+    // Presence signal only — the creature shader samples `uwCausticsMap` and
+    // reads the tile size, strength and depth falloff out of `uwCausticsParams`
+    // in the shared block, so the dapple on a fish always matches the dapple on
+    // the sand under it even after a quality change rebuilds the water system.
     const caustics = this.water?.causticsTexture ?? null;
-    // uwCausticsParams.y is the caustics tile size in metres. Reading it keeps
-    // the dapple on a fish the same scale as the dapple on the sand under it.
-    const causticParams = this.sharedUniforms.uwCausticsParams?.value as
-      | { y?: number }
-      | undefined;
-    const causticTile = typeof causticParams?.y === 'number' && causticParams.y > 1
-      ? causticParams.y
-      : 24;
 
     /* --- agent pool ------------------------------------------------ */
     // Sized for the ultra budget so a runtime quality change never reallocates.
@@ -267,7 +297,6 @@ export class FaunaSystem implements GameSystem {
         maps,
         shared: this.sharedUniforms,
         caustics,
-        causticTile,
         halfWidth: base.halfWidth,
         shadows: def.shadow && ctx.settings.at('high'),
       });
@@ -429,7 +458,11 @@ export class FaunaSystem implements GameSystem {
       ? this.water.surfaceHeightAt(env.playerPos.x, env.playerPos.z, ctx.time)
       : 0;
 
-    this.streamRadius = Math.min(ctx.settings.graphics.viewDistance * 0.5, 260);
+    // Only ever queue cells something could actually live in.
+    this.streamRadius = Math.min(ctx.settings.graphics.viewDistance * 0.5, KEEP_RADIUS.drifter + CELL);
+
+    this.eye.copy(ctx.camera.position);
+    if (p && this.eye.distanceToSquared(env.playerPos) > 4) this.eye.copy(env.playerPos);
 
     this.stream(ctx);
     this.simulate(ctx);
@@ -488,28 +521,76 @@ export class FaunaSystem implements GameSystem {
       }
     }
 
-    // Bounded spawn work per frame — spawning is the only expensive part.
-    let work = 3;
+    // Despawn anything outside its own class's keep radius. This runs *before*
+    // spawning so the freed slots are available immediately: a diver who has
+    // just crossed 80 m of water should be swimming into fish, not waiting a
+    // second for the budget to unlock.
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (!a.active) continue;
+      const keep = this.keepRadius(this.pools[a.species].def) * 1.25;
+      if (a.pos.distanceToSquared(this.env.playerPos) > keep * keep) this.despawn(i);
+    }
+
+    // Bounded spawn work per frame. Spawning is a handful of heightAt calls per
+    // animal, so when the population is far below budget — boot, a long swim, a
+    // teleport — there is no reason to trickle three cells a frame and leave the
+    // near field empty for half a second.
+    let work = this.activeCount < this.budget * 0.7 ? 16 : 4;
     while (work-- > 0 && this.cellQueue.length > 0) {
       const key = this.cellQueue.shift() as number;
       this.cellQueueSet.delete(key);
       this.spawnCell(key, ctx);
     }
+  }
 
-    // Despawn out-of-range agents.
-    const cull = this.streamRadius * 1.2;
-    const cull2 = cull * cull;
+  private keepRadius(def: SpeciesDef): number {
+    return Math.min(this.streamRadius, KEEP_RADIUS[def.behaviour] ?? 100);
+  }
+
+  /**
+   * Recycles the farthest agent so a nearer cell can be populated, returning
+   * false if nothing is far enough to be worth taking.
+   *
+   * Without this the budget latches onto wherever the diver happened to be when
+   * it first filled: `spawnCell` bails out the moment `activeCount` hits the
+   * budget, and the cells it skipped are never claimed, so the queue spins
+   * forever while the whole population sits behind you. That is why the round-1
+   * frames had 100+ live agents and no fish anywhere near the camera.
+   */
+  private evictFarther(thanDist: number, pool: Pool | null): boolean {
+    let worst = -1;
+    let worstD = thanDist + EVICT_MARGIN;
     for (let i = 0; i < this.agents.length; i++) {
       const a = this.agents[i];
       if (!a.active) continue;
-      if (a.pos.distanceToSquared(this.env.playerPos) > cull2) this.despawn(i);
+      if (pool && a.species !== pool.index) continue;
+      // Never delete something the diver is currently looking at.
+      if (a.onScreen && a.dist < 160) continue;
+      const d = a.pos.distanceTo(this.env.playerPos);
+      if (d > worstD) {
+        worstD = d;
+        worst = i;
+      }
     }
+    if (worst < 0) return false;
+    this.despawn(worst);
+    return true;
+  }
+
+  /**
+   * Room test for one more animal, distinguishing the two ways it can fail:
+   *   0 = go ahead
+   *   1 = this species is saturated near here (move on to the next species)
+   *   2 = the global budget is full (stop, and leave the cell unclaimed)
+   */
+  private roomFor(pool: Pool, dist: number): number {
+    if (pool.live >= pool.maxCount && !this.evictFarther(dist, pool)) return 1;
+    if (this.activeCount >= this.budget && !this.evictFarther(dist, null)) return 2;
+    return this.freeList.length > 0 ? 0 : 2;
   }
 
   private spawnCell(key: number, ctx: GameContext): void {
-    // If the budget is already spent, leave the cell unclaimed so it is
-    // reconsidered once something despawns.
-    if (this.activeCount >= this.budget) return;
     const cx = ((key / 65536) | 0) - 32768;
     const cz = (key % 65536) - 32768;
     this.activeCells.set(key, 0);
@@ -529,21 +610,15 @@ export class FaunaSystem implements GameSystem {
     const budgetScale = this.budget / 280;
     const area = CELL * CELL;
     const distToPlayer = Math.hypot(centreX - this.env.playerPos.x, centreZ - this.env.playerPos.z);
+    // A cell the budget turned away must not stay claimed, or freeing capacity
+    // later would never repopulate it.
+    let blocked = false;
 
     for (const entry of biome.fauna) {
       const pool = this.poolOf(entry.id);
       if (!pool) continue;
       const def = pool.def;
-      if (pool.live >= pool.maxCount) continue;
-
-      // Big animals stream in a tighter radius than schools of small fish.
-      const radius =
-        def.behaviour === 'school'
-          ? Math.min(this.streamRadius, 130)
-          : def.behaviour === 'drifter'
-            ? Math.min(this.streamRadius, 230)
-            : Math.min(this.streamRadius, 175);
-      if (distToPlayer > radius) continue;
+      if (distToPlayer > this.keepRadius(def)) continue;
 
       const depth = -floorCentre;
       if (depth < def.depth[0] - 20 || depth > def.depth[1] + 60) continue;
@@ -552,20 +627,77 @@ export class FaunaSystem implements GameSystem {
         entry.density * area * DENSITY[def.behaviour] * budgetScale * sample.weight;
       let count = Math.floor(expected);
       if (rnd() < expected - count) count++;
-      // Schools arrive as a cluster, not scattered singles.
-      if (def.behaviour === 'school' && count > 0) count = Math.max(count, 3);
+      if (count <= 0) continue;
+
+      /*
+       * Schooling species arrive as one shoal, not as N loners scattered over a
+       * 28 m cell. Members are seeded inside a cluster comfortably smaller than
+       * the species' cohesion radius, so the boids are already flocking on the
+       * first simulated frame and the group reads as a single animal mass. A
+       * shoal is also what makes small fish visible at all — one 0.5 m peeper at
+       * 30 m is a speck, fourteen of them turning together is a subject.
+       */
+      const shoal = def.behaviour === 'school';
+      if (shoal) count = Math.max(count, 6);
+
+      const sx = cx0 + rnd() * CELL;
+      const sz = cz0 + rnd() * CELL;
+      const spread = def.school.radius * 0.42;
+      const shoalAlt = this.spawnAltitude(def, world.heightAt(sx, sz), rnd);
 
       for (let k = 0; k < count; k++) {
-        if (this.activeCount >= this.budget || pool.live >= pool.maxCount) break;
-        const x = cx0 + rnd() * CELL;
-        const z = cz0 + rnd() * CELL;
+        const room = this.roomFor(pool, distToPlayer);
+        // A saturated species just means this cell is outside the band where
+        // that animal still fits — the next species in the biome may well fit.
+        if (room === 1) break;
+        if (room === 2) {
+          blocked = true;
+          break;
+        }
+        let x: number;
+        let z: number;
+        let alt: number;
+        if (shoal) {
+          x = sx + (rnd() - 0.5) * 2 * spread;
+          z = sz + (rnd() - 0.5) * 2 * spread;
+          alt = shoalAlt + (rnd() - 0.5) * spread * 0.7;
+        } else {
+          x = cx0 + rnd() * CELL;
+          z = cz0 + rnd() * CELL;
+          alt = this.spawnAltitude(def, world.heightAt(x, z), rnd);
+        }
         const floor = world.heightAt(x, z);
-        const alt = THREE.MathUtils.lerp(def.altitude[0], def.altitude[1], rnd());
-        const y = Math.min(floor + alt, this.env.surfaceY - 1.5);
+        const y = Math.min(floor + Math.max(alt, def.altitude[0]), this.env.surfaceY - 1.5);
         if (y <= floor + 0.2) continue;
         this.spawn(pool, x, y, z, rnd);
       }
+      if (blocked) break;
     }
+
+    if (blocked) this.activeCells.delete(key);
+  }
+
+  /**
+   * Picks a spawn height above the sea floor.
+   *
+   * Half the time it is drawn from the species' habitat band, and half the time
+   * it is biased to the diver's own height above the floor (clamped back into a
+   * slightly stretched band). Habitat alone is not enough: in the round-1
+   * shallows vantage the camera hovered 18 m off the bottom while peepers cap out
+   * at 14 m, so every fish in the world was below the frame. Spawning some of
+   * them at eye level is the difference between "the ocean contains fish" and
+   * "there are fish here".
+   */
+  private spawnAltitude(def: SpeciesDef, floorY: number, rnd: () => number): number {
+    const lo = def.altitude[0];
+    const hi = def.altitude[1];
+    if (rnd() < 0.5) {
+      const eyeAlt = this.env.playerPos.y - floorY;
+      if (eyeAlt > lo * 0.5) {
+        return THREE.MathUtils.clamp(eyeAlt + (rnd() - 0.5) * 9, lo, hi * 1.6);
+      }
+    }
+    return THREE.MathUtils.lerp(lo, hi, rnd());
   }
 
   private poolOf(id: string): Pool | undefined {
@@ -652,7 +784,7 @@ export class FaunaSystem implements GameSystem {
 
   private simulate(ctx: GameContext): void {
     const env = this.env;
-    const camPos = _camPos.copy(ctx.camera.position);
+    const camPos = _camPos.copy(this.eye);
 
     // Rebuild the neighbour grid with only the agents that will use it.
     this.hash.clear();
@@ -712,12 +844,13 @@ export class FaunaSystem implements GameSystem {
   private fill(ctx: GameContext): void {
     const cam = ctx.camera;
     // The camera rig resolves at Phase.Camera, after us, so `matrixWorld` may be
-    // a frame stale. Rebuild from the live position/quaternion and pad the test
-    // sphere instead, so nothing pops at the screen edge while turning.
-    _camMat.compose(cam.position, cam.quaternion, _one).invert();
+    // a frame stale. Rebuild from `this.eye` (see its declaration) and the live
+    // quaternion, and pad the test sphere, so nothing pops at the screen edge
+    // while turning and a teleport does not cull the whole population.
+    _camMat.compose(this.eye, cam.quaternion, _one).invert();
     _projView.multiplyMatrices(cam.projectionMatrix, _camMat);
     _frustum.setFromProjectionMatrix(_projView);
-    _camPos.copy(cam.position);
+    _camPos.copy(this.eye);
 
     for (const pool of this.pools) {
       for (const b of pool.hi) b.n = 0;

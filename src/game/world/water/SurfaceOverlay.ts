@@ -86,8 +86,8 @@ void main() {
   // the view height. On a 720p frame that is a 14 px bead, not a 100 px bubble.
   float rimA;
   float rimB;
-  float domeA = beads(vUv, 26.0, 0.30, 0.52, 0.055, rimA);
-  float domeB = beads(vUv * 1.0 + vec2(7.31, 3.17), 58.0, 0.22, 0.44, 0.020, rimB);
+  float domeA = beads(vUv, 26.0, 0.16, 0.52, 0.055, rimA);
+  float domeB = beads(vUv * 1.0 + vec2(7.31, 3.17), 58.0, 0.11, 0.44, 0.020, rimB);
 
   // Gravity streak: a short tail smeared upward from each bead, so beads read as
   // sliding rather than pasted on.

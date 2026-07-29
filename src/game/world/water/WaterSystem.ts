@@ -34,6 +34,8 @@ interface TerrainLike extends GameSystem {
 }
 interface PostLike extends GameSystem {
   readonly depthTexture?: THREE.Texture;
+  /** True only when the prepass actually ran and the depth buffer is this frame's. */
+  readonly depthValid?: boolean;
 }
 interface TexturesLike extends GameSystem {
   readonly blueNoise?: THREE.Texture;
@@ -299,7 +301,11 @@ export class WaterSystem implements GameSystem {
       (su.uSunColor.value as THREE.Color).copy(sunColor);
       su.uSunIntensity.value = sunIntensity;
       su.uStorm.value = storm;
-      su.uFoamAmount.value = 0.45 + 1.1 * storm;
+      // A calm sea has essentially no whitewater. The Jacobian dips below the
+      // foam threshold even at zero storm (choppiness alone gets it there), so
+      // the amount — not the threshold — is what has to start near zero, or the
+      // whole ocean wears permanent grey-green streaks.
+      su.uFoamAmount.value = 0.06 + 1.35 * storm;
       su.uRippleAmp.value = 0.011 + 0.014 * storm;
       su.uSunDisc.value = Math.max(0.05, sunIntensity * 0.35);
       (su.uWindDir.value as THREE.Vector2).set(Math.cos(this.windAngle), Math.sin(this.windAngle));
@@ -326,7 +332,7 @@ export class WaterSystem implements GameSystem {
     // Calibrated for a consumer that samples the tile directly and subtracts a
     // constant (world/terrain). `waterCaustics()` scales this back up by
     // UW_CAUSTIC_GAIN, since its combine is already mean-subtracted.
-    cp.x = 0.45 * causticGain;
+    cp.x = 0.34 * causticGain;
     cp.z = Math.max(0.004, (profile.downwelling.z + profile.downwelling.y) * 0.35);
     // Caustics are applied *in-material*, always (cp.w = 1).
     //
@@ -347,6 +353,11 @@ export class WaterSystem implements GameSystem {
     if (this.volumetrics) {
       if (wantRays) {
         const shadow = sky?.sunLight?.shadow;
+        // If `render.post` is pulling `volumetricTexture` for its own composite
+        // slot, stand down; otherwise composite the in-scene additive quad. Only
+        // ever latches on, so an explicit `externalVolumetricComposite = true`
+        // from main.ts is never undone.
+        if (ctx.frame - this.externalReadFrame < 8) this.volumetrics.externalComposite = true;
         this.volumetrics.render(ctx.renderer, {
           camera: cam,
           time: ctx.time,
@@ -354,7 +365,10 @@ export class WaterSystem implements GameSystem {
           sunIntensity,
           shadowMap: shadow?.map?.texture ?? null,
           shadowMatrix: shadow?.matrix ?? null,
-          depthTexture: this.post?.depthTexture ?? null,
+          // Only when the prepass really ran. A cleared or stale depth buffer
+          // makes the march terminate at random distances, which is far worse
+          // than marching the full range with no occlusion at all.
+          depthTexture: this.post?.depthValid === false ? null : (this.post?.depthTexture ?? null),
           blueNoise: this.textures?.blueNoise ?? null,
           strength: 0.85 * (1 - 0.6 * storm),
           // Surfaces get their caustics in-material now (see cp.w above), so the
@@ -362,9 +376,6 @@ export class WaterSystem implements GameSystem {
           causticSurface: 0,
           maxDist: Math.min(320, Math.max(60, ctx.settings.graphics.viewDistance * 0.4)),
         });
-        // If the post stack is pulling `volumetricTexture` for its own composite
-        // slot, stay out of the way; otherwise composite in-scene ourselves.
-        this.volumetrics.externalComposite = ctx.frame - this.externalReadFrame < 8;
         this.volumetrics.setCompositeAmount(1);
       } else {
         this.volumetrics.hide();

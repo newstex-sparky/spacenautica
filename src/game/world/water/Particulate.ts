@@ -55,8 +55,16 @@ void main() {
   float hg = waterPhaseHG(dot(-toEye, sunDir), 0.35);
   vec3 down = waterDownwelling(max(depth, 0.0));
 
-  vec3 lit = uwSunColor * down * (0.18 + 6.0 * hg) * smoothstep(-0.05, 0.15, sunDir.y);
-  lit += uwInscatter * down * 1.6;
+  // Ambient term: the radiance of the water the flake is floating in, evaluated
+  // with the same integral the rest of the frame uses. A flake is a diffuse
+  // scatterer surrounded by glowing medium, so its base radiance IS the medium's
+  // — a flake lit from some independent budget comes out darker than the haze
+  // behind it and the whole field reads as black pepper rather than marine snow.
+  vec3 medium = applyUnderwater(vec3(0.0), 400.0, wp.y, -toEye);
+  vec3 lit = medium * 1.06;
+  // Forward-scattered sunlight: the reason a flake sparkles when the sun is
+  // behind it.
+  lit += uwSunColor * down * (6.0 * hg) * smoothstep(-0.05, 0.15, sunDir.y);
 
   for (int i = 0; i < ${MAX_LIGHTS}; i++) {
     if (i >= uLightCount) break;

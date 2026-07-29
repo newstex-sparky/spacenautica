@@ -105,7 +105,15 @@ async function main(): Promise<void> {
   lit.height = rows * SPHERE;
 
   /* ---------------- pass 1: bake everything, collect stats ---------------- */
-  const renderer = new THREE.WebGLRenderer({ canvas: atlas, antialias: false, alpha: false });
+  // preserveDrawingBuffer so a harness can read the sheets back with
+  // canvas.toDataURL(); without it the drawing buffer is discarded after each
+  // composite and the capture comes out blank.
+  const renderer = new THREE.WebGLRenderer({
+    canvas: atlas,
+    antialias: false,
+    alpha: false,
+    preserveDrawingBuffer: true,
+  });
   renderer.debug.checkShaderErrors = true;
   renderer.setPixelRatio(1);
   renderer.setSize(atlas.width, atlas.height, false);
@@ -244,7 +252,12 @@ async function main(): Promise<void> {
   renderer.setViewport(0, 0, atlas.width, atlas.height);
 
   /* ---------------- pass 3: lit spheres ---------------- */
-  const r2 = new THREE.WebGLRenderer({ canvas: lit, antialias: true, alpha: false });
+  const r2 = new THREE.WebGLRenderer({
+    canvas: lit,
+    antialias: true,
+    alpha: false,
+    preserveDrawingBuffer: true,
+  });
   r2.setPixelRatio(1);
   r2.setSize(lit.width, lit.height, false);
   r2.outputColorSpace = THREE.SRGBColorSpace;

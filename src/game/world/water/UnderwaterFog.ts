@@ -101,13 +101,16 @@ vec3 applyUnderwater(vec3 color, float dist, float wy, vec3 viewDir) {
 
   vec3 v = normalize(viewDir);
   float cosT = dot(v, normalize(uwSunDir));
-  // Isotropic base (1/4pi) plus a strong forward lobe: this is what makes the
-  // water glow when you turn to face the sun.
-  float phase = 0.0795775 + waterPhaseHG(cosT, 0.62) * 0.85;
+  // Isotropic base (1/4pi) plus a forward lobe: this is what makes the water
+  // glow when you turn to face the sun. g and the weight are held back from a
+  // physical single-scatter magnitude on purpose — at full strength the toward-sun
+  // direction saturates all three channels and the water goes milk-white, losing
+  // exactly the wavelength separation the whole model exists to show.
+  float phase = 0.0795775 + waterPhaseHG(cosT, 0.55) * 0.85;
   float daylight = smoothstep(-0.04, 0.14, uwSunDir.y);
 
   vec3 ambient = uwInscatter * (down * W + UW_FLOOR * (1.0 - T));
-  vec3 sun = uwSunColor * down * W * (phase * 1.15 * daylight);
+  vec3 sun = uwSunColor * down * W * (phase * 0.75 * daylight);
 
   return color * T + ambient + sun;
 }
@@ -172,7 +175,7 @@ export const UNDERWATER_CAUSTICS_GLSL = /* glsl */ `
 // their own combine (world/terrain does); this restores full strength for the
 // mean-subtracted combine below, which starts from zero instead of from the
 // tile's mean.
-#define UW_CAUSTIC_GAIN 2.6
+#define UW_CAUSTIC_GAIN 3.5
 /**
  * Animated caustics at a world position. The texture is a seamless 48 m tile of
  * unit-mean intensity, sampled twice — rotated ~37 degrees and scaled 1.73x, an

@@ -162,10 +162,26 @@ ${ATMOSPHERE_MARCH_GLSL}
 void main() {
   vec3 dir = skyViewDir(vUv);
   AtmoSample s = atmoMarch(uTransLut, uMsLut, uObserverR, dir, uSunDir, uSunIrradiance, uSteps, 0.35, 1.0, 0.0);
-  // Storm haze: extra grey forward-scattering near the horizon.
+
+  /*
+   * Aerosol haze near the horizon — the boundary-layer murk that a pure
+   * Rayleigh+Mie column misses. Three properties matter and the old flat grey
+   * term had none of them:
+   *   - it is *lit*, so it has to vanish when the sun goes down (otherwise a
+   *     grey band sits on the horizon all night and eats the star field),
+   *   - it forward-scatters, so it is much stronger toward the sun's azimuth,
+   *   - at low sun the light reaching it has already been reddened, so the band
+   *     is warm on the sun side and cool on the anti-sun side.
+   */
   float horizon = 1.0 - abs(dir.y);
-  vec3 hazeCol = uSunIrradiance * (0.006 + 0.02 * max(0.0, uSunDir.y));
-  vec3 lum = s.lum + hazeCol * uHaze * pow(horizon, 3.0);
+  float dayGate = smoothstep(-0.10, 0.05, uSunDir.y);
+  vec2 azD = normalize(vec2(dir.x, dir.z) + vec2(1e-5));
+  vec2 azS = normalize(vec2(uSunDir.x, uSunDir.z) + vec2(1e-5));
+  float toSun = max(0.0, dot(azD, azS));
+  float lowSun = 1.0 - smoothstep(0.04, 0.42, uSunDir.y);
+  vec3 warm = mix(vec3(0.94, 0.96, 1.0), vec3(1.30, 0.92, 0.55), toSun * lowSun);
+  vec3 hazeCol = uSunIrradiance * (0.0032 + 0.019 * max(0.0, uSunDir.y)) * dayGate * warm;
+  vec3 lum = s.lum + hazeCol * uHaze * pow(horizon, 3.0) * (0.5 + 0.85 * toSun);
   gl_FragColor = vec4(lum, 1.0);
 }
 `;

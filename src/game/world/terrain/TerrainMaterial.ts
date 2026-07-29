@@ -340,12 +340,18 @@ uniform float uHexScale;
 uniform float uMacroAmt;
 uniform float uDetailAmt;
 uniform float uRippleAmt;
+uniform float uRockReliefAmt;
 uniform float uCausticAmt;
 uniform float uCausticTile;
 uniform float uCausticFall;
 uniform float uWetness;
 uniform float uTerrainTime;
 uniform vec3  uRockTint;
+// Diagnostic view selector. 0 = shipped look. Non-zero values bypass parts of
+// the pipeline so a headless harness can see which stage loses the detail:
+// 1 = no water scattering, 2 = splat albedo only, 3 = splat normal,
+// 4 = dominant layer id, 5 = splat weights (rgb = sand/gravel/rock).
+uniform float uDebugView;
 
 varying vec3  vTWorld;
 varying vec3  vTNormalW;
@@ -451,19 +457,81 @@ void sampleLayer(int layer, vec3 wp, vec3 wn, vec3 tw, out SplatSample o) {
   o.normalW = normalize(wn + nAcc);
 }
 
-/** Analytic normal of the current-aligned sand ripples. */
-vec3 rippleNormal(vec3 wp, vec3 wn, float amount) {
+/* ---- multi-scale analytic sea-floor relief ---------------------------- *
+ * The texture-sampled detail can only survive out to a few metres before the
+ * mip chain averages it to a flat colour, which is why a purely texture-driven
+ * floor reads as an untextured blob at 20 m. So the dune / ripple structure is
+ * generated analytically instead, in four octaves, and each octave is faded out
+ * exactly when its wavelength approaches one pixel footprint. That keeps real
+ * relief on screen at every distance without ever crawling or aliasing.       */
+
+/** 1 while a band of this wavelength is comfortably wider than a pixel. */
+float bandFade(float lambda, float footprint) {
+  return smoothstep(1.5, 4.5, lambda / max(footprint, 1e-4));
+}
+
+/** One current-aligned ripple octave. Accumulates cross-crest slope and height. */
+void rippleBand(
+  float lambda, float amp, float along, float lateral, float bend, float footprint,
+  inout float g, inout float h
+) {
+  float f = bandFade(lambda, footprint);
+  if (f <= 0.002) return;
+  float k = 6.2831853 / lambda;
+  float ph = along * k + bend + lateral * k * 0.07;
+  g += amp * k * cos(ph) * f;
+  h += amp * sin(ph) * f;
+}
+
+/**
+ * Perturbs the world normal with dune + megaripple + ripple + micro-ripple
+ * bands aligned to the local current. Writes a signed crest/trough signal so
+ * albedo can be graded to match (crests winnow pale, troughs collect silt).
+ */
+vec3 floorRelief(
+  vec3 wp, vec3 wn, float amount, float footprint, out float crest
+) {
   vec2 fl = normalize(vTFlow + vec2(1e-4, 0.0));
+  vec2 across = vec2(-fl.y, fl.x);
   float along = dot(wp.xz, fl);
-  float jitter = 2.2 * snoise(wp.xz * 0.045);
-  // two ripple bands: megaripples (~7 m) and ripples (~1.6 m)
-  float k1 = 0.897, k2 = 3.927, k3 = 11.4;
-  float g = 0.42 * k1 * cos(along * k1 + jitter)
-          + 0.13 * k2 * cos(along * k2 + jitter * 2.1)
-          + 0.02 * k3 * cos(along * k3 - jitter * 1.4);
-  // Perturb across the crests only.
-  vec3 tangent = normalize(vec3(fl.x, 0.0, fl.y) - wn * dot(vec3(fl.x, 0.0, fl.y), wn));
+  float lateral = dot(wp.xz, across);
+  // Crest lines meander instead of running dead straight across the basin.
+  float bend = 2.7 * snoise(wp.xz * 0.019) + 1.2 * snoise(wp.xz * 0.0068);
+
+  float g = 0.0;
+  float h = 0.0;
+  rippleBand(24.0, 0.26, along, lateral, bend * 0.55, footprint, g, h);
+  rippleBand(7.3, 0.30, along, lateral, bend, footprint, g, h);
+  rippleBand(1.85, 0.17, along, lateral, bend * 1.7, footprint, g, h);
+  rippleBand(0.47, 0.075, along, lateral, bend * 2.6, footprint, g, h);
+  crest = h;
+
+  vec3 alongW = vec3(fl.x, 0.0, fl.y);
+  vec3 tangent = normalize(alongW - wn * dot(alongW, wn));
   return normalize(wn - tangent * g * amount);
+}
+
+/**
+ * Isotropic meso-relief for ground that is not sand: a cheap two-octave
+ * gradient-noise bump that keeps boulders and basalt from going smooth at
+ * distance. Faded on footprint like the ripples.
+ */
+vec3 rockRelief(vec3 wp, vec3 wn, float amount, float footprint) {
+  float f1 = bandFade(9.0, footprint);
+  float f2 = bandFade(2.6, footprint);
+  if (f1 + f2 <= 0.004) return wn;
+  float e = 0.35;
+  // Central differences on a 2-octave field; cheap and stable.
+  float hx0 = snoise((wp.xz + vec2(e, 0.0)) * 0.111) * f1
+            + snoise((wp.xz + vec2(e, 0.0)) * 0.385) * 0.45 * f2;
+  float hx1 = snoise((wp.xz - vec2(e, 0.0)) * 0.111) * f1
+            + snoise((wp.xz - vec2(e, 0.0)) * 0.385) * 0.45 * f2;
+  float hz0 = snoise((wp.xz + vec2(0.0, e)) * 0.111) * f1
+            + snoise((wp.xz + vec2(0.0, e)) * 0.385) * 0.45 * f2;
+  float hz1 = snoise((wp.xz - vec2(0.0, e)) * 0.111) * f1
+            + snoise((wp.xz - vec2(0.0, e)) * 0.385) * 0.45 * f2;
+  vec3 grad = vec3((hx0 - hx1) / (2.0 * e), 0.0, (hz0 - hz1) / (2.0 * e));
+  return normalize(wn - (grad - wn * dot(grad, wn)) * amount);
 }
 `;
 
@@ -474,6 +542,10 @@ const TERRAIN_SPLAT_BODY = /* glsl */ `
   float depth = max(0.0, -wp.y);
   float curv = vTCurvSed.x;
   float sed = clamp(vTCurvSed.y, 0.0, 1.0);
+
+  // Metres of world space covered by this pixel. Every procedural band below is
+  // faded against it, which is what lets detail run to the horizon safely.
+  float footprint = max(length(dFdx(wp.xz)), length(dFdy(wp.xz)));
 
   /* ---- macro variation: kills large-scale repetition ------------------ */
   float macroA = fbm(wp.xz * 0.0075, 3);          // ~130 m blotches
@@ -522,8 +594,8 @@ const TERRAIN_SPLAT_BODY = /* glsl */ `
   float splatRough = mix(s0.rough, s1.rough, hb);
   float splatAO = mix(s0.ao, s1.ao, hb);
 
-  /* ---- detail: fades in under ~3 m so 30 cm still holds up ----------- */
-  float near = 1.0 - smoothstep(1.1, 3.4, vTViewDist);
+  /* ---- micro grain: texture-driven, only while it is above the mip floor */
+  float near = bandFade(0.34, footprint);
   if (near > 0.002) {
     vec3 dtw = tw;
     vec2 duv = wp.xz * 2.9;
@@ -538,14 +610,20 @@ const TERRAIN_SPLAT_BODY = /* glsl */ `
     splatAlbedo *= 1.0 + 0.06 * near * (dn.z - 0.5);
   }
 
-  /* ---- current-aligned sand ripples on sediment ----------------------- */
+  /* ---- current-aligned relief, present at every distance --------------- */
   float sandiness = clamp((1.0 - slope * 2.2) * sed, 0.0, 1.0);
-  float rippleFade = 1.0 - smoothstep(6.0, 26.0, vTViewDist);
-  splatNormal = rippleNormal(wp, splatNormal, uRippleAmt * sandiness * (0.35 + 0.65 * rippleFade));
+  float crest = 0.0;
+  splatNormal = floorRelief(wp, splatNormal, uRippleAmt * sandiness, footprint, crest);
+  // Hard ground gets an isotropic bump instead of directional ripples.
+  splatNormal = rockRelief(wp, splatNormal, uRockReliefAmt * (1.0 - sandiness), footprint);
 
   /* ---- albedo grading ------------------------------------------------- */
   vec3 rockish = mix(uRockTint, vec3(1.0), sed);
   splatAlbedo *= macro * rockish;
+  // Ripple crests are winnowed clean and read pale; troughs collect dark silt.
+  // This is the one albedo cue that survives to distance, because it is analytic
+  // and therefore never averaged away by a mip level.
+  splatAlbedo *= 1.0 + clamp(crest * 1.7, -1.0, 1.0) * 0.26 * sandiness;
   // Concavities silt up: darker, smoother, slightly greener.
   float silted = clamp(-curv, 0.0, 1.0) * (0.4 + 0.6 * sed);
   splatAlbedo = mix(splatAlbedo, splatAlbedo * vec3(0.72, 0.78, 0.7), silted * 0.55);
@@ -554,7 +632,15 @@ const TERRAIN_SPLAT_BODY = /* glsl */ `
   float wet = uWetness * (0.35 + 0.65 * silted) * smoothstep(0.5, 0.05, slope);
   splatRough = clamp(splatRough * (0.85 + 0.3 * macroB) - wet * 0.28, 0.06, 1.0);
 
-  float splatAOFinal = clamp(splatAO * (1.0 - 0.42 * clamp(-curv, 0.0, 1.0)), 0.0, 1.0);
+  // Ambient occlusion from concavity, plus a little from the analytic troughs so
+  // dune fields still self-shade once the light is flat.
+  float splatAOFinal = clamp(
+    splatAO * (1.0 - 0.42 * clamp(-curv, 0.0, 1.0))
+            * (1.0 - 0.22 * sandiness * clamp(-crest * 1.4, 0.0, 1.0)),
+    0.0, 1.0);
+
+  vec3 dbgLayer = vec3(float(i0) / float(${TERRAIN_LAYERS} - 1));
+  vec3 dbgWeights = vec3(w[0], w[1], w[2]) / max(w[0] + w[1] + w[2] + w[3] + w[4], 1e-4);
 `;
 
 /* ------------------------------------------------------------------ *
@@ -604,18 +690,24 @@ export function createTerrainMaterial(opts: TerrainMaterialOptions): TerrainMate
     uMacroAmt: { value: 0.34 },
     uDetailAmt: { value: 0.85 },
     uRippleAmt: { value: 0.85 },
+    uRockReliefAmt: { value: 0.5 },
     uCausticAmt: { value: 0.9 },
     uCausticTile: { value: 48 },
     uCausticFall: { value: 0.02 },
     uWetness: { value: 0.5 },
     uTerrainTime: { value: 0 },
     uRockTint: { value: opts.rockTint.clone() },
+    uDebugView: { value: 0 },
   };
   // Sensible standalone defaults for the frozen underwater block, so the terrain
   // renders correctly even if the ocean system is absent (verification harness,
   // or a boot where `world.water` failed to init).
+  // Matches `world/water/WaterProfiles.ts` Jerlov IA at BEAM_RATIO 1.35, i.e. the
+  // shallows profile the ocean actually publishes. Keeping these in step matters:
+  // if the fallback is murkier than the real water, the terrain is tuned against
+  // a wash that the shipped game never shows.
   const waterDefaults: Record<string, THREE.IUniform> = {
-    uwExtinction: { value: new THREE.Vector3(0.42, 0.09, 0.045) },
+    uwExtinction: { value: new THREE.Vector3(0.4725, 0.081, 0.0297) },
     uwInscatter: { value: new THREE.Color(0.06, 0.3, 0.38) },
     uwSurfaceY: { value: 0 },
     uwDensity: { value: 1 },
@@ -719,8 +811,20 @@ export function createTerrainMaterial(opts: TerrainMaterialOptions): TerrainMate
       .replace(
         '#include <tonemapping_fragment>',
         /* glsl */ `
-        gl_FragColor.rgb = applyUnderwater(
-          gl_FragColor.rgb, vTViewDist, vTWorld.y, normalize(vTWorld - cameraPosition));
+        if (uDebugView < 0.5) {
+          gl_FragColor.rgb = applyUnderwater(
+            gl_FragColor.rgb, vTViewDist, vTWorld.y, normalize(vTWorld - cameraPosition));
+        } else if (uDebugView < 1.5) {
+          // raw lit PBR, no water column
+        } else if (uDebugView < 2.5) {
+          gl_FragColor.rgb = splatAlbedo;
+        } else if (uDebugView < 3.5) {
+          gl_FragColor.rgb = splatNormal * 0.5 + 0.5;
+        } else if (uDebugView < 4.5) {
+          gl_FragColor.rgb = dbgLayer;
+        } else {
+          gl_FragColor.rgb = dbgWeights;
+        }
         #include <tonemapping_fragment>
         `,
       );

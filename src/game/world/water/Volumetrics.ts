@@ -158,11 +158,18 @@ void main() {
       float lit = sunShadow(p);
       vec3 down = waterDownwelling(depth);
       vec3 dap = dappleAt(p.xz + upShift * depth);
-      // Shafts are the surface's caustic pattern extruded along the sun; without
-      // this term a raymarch through participating media is just a smooth glow.
-      vec3 dapple = max(vec3(0.0), 1.0 + dap * uDapple);
+      // Shafts only — the *structure*, not the whole single-scattering term.
+      //
+      // applyUnderwater() already integrates smooth single scatter toward the sun
+      // for every pixel in the frame, so accumulating (1 + dapple) here would add
+      // that base a second time: the water came out milky and desaturated, with
+      // red lifted to roughly twice its correct value. What this pass uniquely
+      // knows is where the light is *bunched* — the surface's caustic pattern
+      // extruded along the sun direction, and where geometry blocks it — so it
+      // contributes only the positive excursions of that pattern.
+      vec3 shaft = max(vec3(0.0), dap * uDapple);
       vec3 T = waterTransmittance(t);
-      acc += sunRad * lit * down * dapple * phase * T * scatterCoef * dt;
+      acc += sunRad * lit * down * shaft * phase * T * scatterCoef * dt;
     }
     t += dt;
   }

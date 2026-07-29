@@ -44,18 +44,20 @@ interface TierProfile {
   envInterval: number;
   rainCount: number;
   starBrightness: number;
+  /** Height of the lat-long panorama published to the water system. */
+  panoH: number;
 }
 
 function profileFor(tier: QualityTier): TierProfile {
   switch (tier) {
     case 'low':
-      return { skyViewW: 96, skyViewH: 48, skyViewSteps: 14, cloudSteps: 0, cloudLightSteps: 0, envCube: 32, envInterval: 1.6, rainCount: 0, starBrightness: 0.85 };
+      return { skyViewW: 96, skyViewH: 48, skyViewSteps: 14, cloudSteps: 0, cloudLightSteps: 0, envCube: 32, envInterval: 1.6, rainCount: 0, starBrightness: 0.85, panoH: 48 };
     case 'medium':
-      return { skyViewW: 128, skyViewH: 64, skyViewSteps: 20, cloudSteps: 12, cloudLightSteps: 3, envCube: 48, envInterval: 0.9, rainCount: 2600, starBrightness: 0.95 };
+      return { skyViewW: 128, skyViewH: 64, skyViewSteps: 20, cloudSteps: 12, cloudLightSteps: 3, envCube: 48, envInterval: 0.9, rainCount: 2600, starBrightness: 0.95, panoH: 64 };
     case 'high':
-      return { skyViewW: 176, skyViewH: 88, skyViewSteps: 28, cloudSteps: 20, cloudLightSteps: 4, envCube: 64, envInterval: 0.4, rainCount: 5200, starBrightness: 1.0 };
+      return { skyViewW: 176, skyViewH: 88, skyViewSteps: 28, cloudSteps: 20, cloudLightSteps: 4, envCube: 64, envInterval: 0.4, rainCount: 5200, starBrightness: 1.0, panoH: 96 };
     default:
-      return { skyViewW: 224, skyViewH: 112, skyViewSteps: 36, cloudSteps: 28, cloudLightSteps: 5, envCube: 64, envInterval: 0.28, rainCount: 9000, starBrightness: 1.05 };
+      return { skyViewW: 224, skyViewH: 112, skyViewSteps: 36, cloudSteps: 28, cloudLightSteps: 5, envCube: 64, envInterval: 0.28, rainCount: 9000, starBrightness: 1.05, panoH: 128 };
   }
 }
 
@@ -130,6 +132,15 @@ export class SkySystem implements GameSystem {
   get transmittanceTexture(): THREE.Texture {
     return this.luts.transmittance.texture;
   }
+  /**
+   * The finished sky in a plain equirectangular layout
+   * (`u = atan2(z,x)/2pi + 0.5`, `v = acos(y)/pi`, so v=0 is the zenith),
+   * including clouds, the sun disc, the moon and the stars. This is the sky
+   * anything outside this system should reflect or refract.
+   */
+  get panoramaTexture(): THREE.Texture | null {
+    return this.panoRt?.texture ?? null;
+  }
 
   /* ---- internals ---- */
   private luts!: AtmosphereLuts;
@@ -145,6 +156,8 @@ export class SkySystem implements GameSystem {
   private cubeCamera: THREE.CubeCamera | null = null;
   private pmrem: THREE.PMREMGenerator | null = null;
   private envTarget: THREE.WebGLRenderTarget | null = null;
+  private panoRt: THREE.WebGLRenderTarget | null = null;
+  private panoPublished = false;
   private envTimer = 1e9;
   private lastEnvSunY = -99;
 
@@ -175,6 +188,7 @@ export class SkySystem implements GameSystem {
       cloudSteps: this.profile.cloudSteps,
       cloudLightSteps: this.profile.cloudLightSteps,
       envCubeSize: this.profile.envCube,
+      panoHeight: this.profile.panoH,
     });
     const u = this.dome.uniforms;
     u.uTransLut.value = this.luts.transmittance.texture;
@@ -233,6 +247,21 @@ export class SkySystem implements GameSystem {
     this.cubeCamera = new THREE.CubeCamera(1, 400, this.cubeRt);
     this.pmrem = new THREE.PMREMGenerator(ctx.renderer);
     this.pmrem.compileCubemapShader();
+
+    // --- lat-long panorama for anything outside this system that needs to
+    //     reflect or refract the sky (the ocean surface, Snell's window).
+    this.panoRt = new THREE.WebGLRenderTarget(this.profile.panoH * 2, this.profile.panoH, {
+      type: THREE.HalfFloatType,
+      format: THREE.RGBAFormat,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: false,
+      stencilBuffer: false,
+      generateMipmaps: false,
+      colorSpace: THREE.LinearSRGBColorSpace,
+    });
+    this.panoRt.texture.wrapS = THREE.RepeatWrapping;
+    this.panoRt.texture.wrapT = THREE.ClampToEdgeWrapping;
 
     // Prime everything so frame 0 is already correct.
     this.advance(0, ctx);
@@ -585,15 +614,50 @@ export class SkySystem implements GameSystem {
     if (!this.cubeCamera || !this.cubeRt || !this.pmrem) return;
     this.envTimer = 0;
     this.lastEnvSunY = this.sunDirection.y;
-    this.dome.setEnvPass(true);
     const prevUnder = this.dome.uniforms.uUnderwater.value;
+
+    this.dome.setEnvPass(true);
     this.dome.uniforms.uUnderwater.value = 0;
     this.cubeCamera.update(ctx.renderer, this.dome.envScene);
-    this.dome.uniforms.uUnderwater.value = prevUnder;
     this.dome.setEnvPass(false);
+
+    this.refreshPanorama(ctx);
+
+    this.dome.uniforms.uUnderwater.value = prevUnder;
     this.envTarget = this.pmrem.fromCubemap(this.cubeRt.texture, this.envTarget);
     this.environment = this.envTarget.texture;
     if (ctx.scene.environment !== this.environment) ctx.scene.environment = this.environment;
+  }
+
+  /**
+   * Renders the dome shader once into an equirectangular target and hands it to
+   * the water system, which uses it for surface reflections and for the
+   * refraction disc inside Snell's window. Doing it with the *same* material
+   * means the sea reflects the sky the player can actually see — same clouds,
+   * same sunset band, same sun position — instead of an analytic stand-in.
+   */
+  private refreshPanorama(ctx: GameContext): void {
+    const rt = this.panoRt;
+    if (!rt) return;
+    const renderer = ctx.renderer;
+    const prevTarget = renderer.getRenderTarget();
+    const prevFace = renderer.getActiveCubeFace();
+    const prevMip = renderer.getActiveMipmapLevel();
+    this.dome.setPanoPass(true, rt.width, rt.height);
+    this.dome.uniforms.uUnderwater.value = 0;
+    renderer.setRenderTarget(rt);
+    renderer.render(this.dome.panoScene, this.dome.panoCamera);
+    renderer.setRenderTarget(prevTarget, prevFace, prevMip);
+    this.dome.setPanoPass(false);
+
+    if (this.panoPublished) return;
+    const water = ctx.tryGet<GameSystem & {
+      setSkyTexture?: (tex: THREE.Texture | null, amount?: number) => void;
+    }>('world.water');
+    if (water && typeof water.setSkyTexture === 'function') {
+      water.setSkyTexture(rt.texture, 1);
+      this.panoPublished = true;
+    }
   }
 
   private reconfigure(ctx: GameContext): void {
@@ -637,6 +701,7 @@ export class SkySystem implements GameSystem {
     this.hemiLight?.dispose();
     this.cubeRt?.dispose();
     this.envTarget?.dispose();
+    this.panoRt?.dispose();
     this.pmrem?.dispose();
   }
 }

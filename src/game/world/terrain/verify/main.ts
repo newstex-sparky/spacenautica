@@ -22,6 +22,7 @@ declare global {
     __TVIEW__?: (x: number, y: number, z: number, yaw: number, pitch: number) => void;
     __TPROBE__?: () => string;
     __TTEX__?: () => string;
+    __TDBG__?: (mode: number) => void;
   }
 }
 
@@ -77,6 +78,8 @@ async function boot(): Promise<void> {
       lod0: terrain.debugProbeTextures(0),
       lod3: terrain.debugProbeTextures(3),
     });
+
+  window.__TDBG__ = (mode: number) => terrain.debugSetView(mode);
 
   window.__TPROBE__ = () => {
     const p = engine.camera.position;

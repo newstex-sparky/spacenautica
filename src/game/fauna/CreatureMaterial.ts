@@ -16,7 +16,7 @@
  */
 import * as THREE from 'three';
 import { FAUNA_NOISE_GLSL } from './FaunaNoise';
-import { UNDERWATER_GLSL } from '../world/water/UnderwaterFog';
+import { UNDERWATER_FULL_GLSL } from '../world/water/UnderwaterFog';
 import type { PbrMaps } from '../assets/TextureLibrary';
 import type { SpeciesDef } from './Species';
 
@@ -129,6 +129,7 @@ varying vec3  vTint;
 varying vec2  vExtra;
 varying vec2  vFUv;
 varying vec3  vFWorld;
+varying vec3  vFWNrm;
 varying float vFDist;
 varying vec3  vFView;
 `;
@@ -148,10 +149,6 @@ uniform vec3  uGlowCol;
 uniform vec4  uPat;    // patternScale, patternFreq, contrast, iridescence
 uniform vec4  uSurf;   // roughness, roughnessVar, translucency, glow
 uniform vec3  uGlowP;  // glowScale, glowRate, causticAmount
-#ifdef FAUNA_CAUSTICS
-uniform sampler2D uCaustics;
-uniform float uCausticScale;   // 1 / world tile size, matched to the water system
-#endif
 
 varying vec4  vBody;
 varying vec2  vLimb;
@@ -159,6 +156,7 @@ varying vec3  vTint;
 varying vec2  vExtra;
 varying vec2  vFUv;
 varying vec3  vFWorld;
+varying vec3  vFWNrm;
 varying float vFDist;
 varying vec3  vFView;
 
@@ -286,18 +284,18 @@ const FRAG_EMISSIVE = /* glsl */ `
 
   // --- caustic dapple from the surface above ---
   #ifdef FAUNA_CAUSTICS
-  {
-    // Same two-layer rotated sampling the water system uses on the sea floor, at
-    // the same world tile size, so a fish swimming over sand is lit by the same
-    // filaments. (1 - fShade) stands in for "this surface faces up".
-    vec2 p0 = vFWorld.xz * uCausticScale;
-    vec2 p1 = vec2(p0.x * 0.7986 - p0.y * 0.6018, p0.x * 0.6018 + p0.y * 0.7986) * 1.73;
-    float c1 = texture2D(uCaustics, p0 + vec2(uwTime * 0.008, -uwTime * 0.006)).r;
-    float c2 = texture2D(uCaustics, p1 - vec2(uwTime * 0.011, uwTime * 0.004)).r;
-    float caus = max(c1 * c2 - 0.82, 0.0) * 1.45;
-    float dep = exp(-max(0.0, uwSurfaceY - vFWorld.y) * 0.022);
-    totalEmissiveRadiance += uwSunColor * caus * uGlowP.z * dep
-                             * (0.25 + 0.75 * (1.0 - fShade));
+  // waterCaustics() is the water system's own helper, reading its own
+  // uwCausticsParams: strength, world tile size and depth falloff all arrive
+  // live from WaterSystem, so a fish swimming over sand is dappled by exactly
+  // the same filaments at exactly the same scale, and a tier change that
+  // regenerates the caustics texture needs no work here.
+  // uwCausticsParams.w is the engine's "materials light themselves" flag: it is
+  // 0 when a depth buffer is exposed and the screen-space pass covers us, and
+  // applying caustics in both places would double the highlights.
+  if (uwCausticsParams.w > 0.5 && vFWorld.y < uwSurfaceY) {
+    vec3 caus = waterCaustics(vFWorld, normalize(vFWNrm));
+    totalEmissiveRadiance += caus * uwSunColor * uGlowP.z
+                             * waterDownwelling(uwSurfaceY - vFWorld.y);
   }
   #endif
 `;
@@ -328,8 +326,6 @@ export interface CreatureUniforms {
   uPat: THREE.IUniform<THREE.Vector4>;
   uSurf: THREE.IUniform<THREE.Vector4>;
   uGlowP: THREE.IUniform<THREE.Vector3>;
-  uCaustics: THREE.IUniform<THREE.Texture | null>;
-  uCausticScale: THREE.IUniform<number>;
 }
 
 export interface CreatureMaterialSet {
@@ -344,9 +340,14 @@ export interface CreatureMaterialOptions {
   maps: PbrMaps;
   /** WaterSystem.sharedUniforms — the same IUniform objects, not copies. */
   shared: Record<string, THREE.IUniform>;
+  /**
+   * Presence signal only: when the water system has a caustics texture we
+   * enable the caustics path, which then samples `uwCausticsMap` and
+   * `uwCausticsParams` straight out of `shared`. Nothing about the texture or
+   * its tile size is snapshotted here, so a quality change that rebuilds the
+   * caustics renderer is picked up without touching this material.
+   */
   caustics: THREE.Texture | null;
-  /** World size in metres of one caustics tile, from `uwCausticsParams.y`. */
-  causticTile: number;
   halfWidth: number;
   /** Build an animated depth material for shadow casting. */
   shadows: boolean;
@@ -360,6 +361,10 @@ function ribCount(s: SpeciesDef): number {
 
 export function createCreatureMaterial(opts: CreatureMaterialOptions): CreatureMaterialSet {
   const s = opts.species;
+  // Only take the caustics path if the water system actually shares the map and
+  // its parameters; against a stub water system the sampler would never be bound.
+  const useCaustics =
+    !!opts.caustics && !!opts.shared.uwCausticsMap && !!opts.shared.uwCausticsParams;
   const uniforms: CreatureUniforms = {
     uTime: { value: 0 },
     uSwim: { value: new THREE.Vector4(s.waves, s.headSway, s.finFlap, s.wingWaves) },
@@ -372,9 +377,7 @@ export function createCreatureMaterial(opts: CreatureMaterialOptions): CreatureM
     uGlowCol: { value: s.glowColor.clone() },
     uPat: { value: new THREE.Vector4(s.patternScale, s.patternFreq, s.patternContrast, s.iridescence) },
     uSurf: { value: new THREE.Vector4(s.roughness, s.roughnessVar, s.translucency, s.glow) },
-    uGlowP: { value: new THREE.Vector3(s.glowScale, s.glowRate, opts.caustics ? 0.85 : 0) },
-    uCaustics: { value: opts.caustics },
-    uCausticScale: { value: 1 / Math.max(1, opts.causticTile) },
+    uGlowP: { value: new THREE.Vector3(s.glowScale, s.glowRate, useCaustics ? 0.85 : 0) },
   };
 
   const defines: Record<string, unknown> = {
@@ -382,7 +385,7 @@ export function createCreatureMaterial(opts: CreatureMaterialOptions): CreatureM
     FAUNA_RIBS: ribCount(s),
   };
   if (s.wing) defines.FAUNA_WING = 1;
-  if (opts.caustics) defines.FAUNA_CAUSTICS = 1;
+  if (useCaustics) defines.FAUNA_CAUSTICS = 1;
 
   const material = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -434,10 +437,15 @@ export function createCreatureMaterial(opts: CreatureMaterialOptions): CreatureM
         `#include <project_vertex>
         {
           vec4 fnWp = vec4(transformed, 1.0);
+          vec3 fnWn = objectNormal;
           #ifdef USE_INSTANCING
             fnWp = instanceMatrix * fnWp;
+            fnWn = mat3(instanceMatrix) * fnWn;
           #endif
           fnWp = modelMatrix * fnWp;
+          // Good enough for the caustics facing term; per-instance girth/stretch
+          // is only mildly non-uniform so skipping the inverse-transpose is fine.
+          vFWNrm  = normalize(mat3(modelMatrix) * fnWn);
           vBody   = aBody;
           vLimb   = aLimb;
           vTint   = iTint;
@@ -456,14 +464,14 @@ export function createCreatureMaterial(opts: CreatureMaterialOptions): CreatureM
     Object.assign(shader.uniforms, uniforms, opts.shared);
     shader.vertexShader = patchVertex(shader.vertexShader, true);
 
-    let f = TAU_DEF + FAUNA_NOISE_GLSL + UNDERWATER_GLSL + FRAG_PARS + shader.fragmentShader;
+    let f = TAU_DEF + FAUNA_NOISE_GLSL + UNDERWATER_FULL_GLSL + FRAG_PARS + shader.fragmentShader;
     f = f.replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\n${FRAG_SURFACE}`);
     f = f.replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRAG_NORMAL}`);
     f = f.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${FRAG_EMISSIVE}`);
     f = f.replace('#include <opaque_fragment>', `#include <opaque_fragment>\n${FRAG_OUT}`);
     shader.fragmentShader = f;
   };
-  material.customProgramCacheKey = () => `fauna|${s.id}|${opts.caustics ? 1 : 0}`;
+  material.customProgramCacheKey = () => `fauna|${s.id}|${useCaustics ? 1 : 0}`;
 
   let depthMaterial: THREE.MeshDepthMaterial | null = null;
   if (opts.shadows) {

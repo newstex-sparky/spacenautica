@@ -111,7 +111,10 @@ export class FloraSystem implements GameSystem {
   private buckets: Bucket[] = [];
   private ownedTextures: THREE.Texture[] = [];
   private field: FloraField | null = null;
+  /** Cells inside the streaming disc that actually hold plants — what `fill` walks. */
   private liveCells: FloraCell[] = [];
+  /** Every generated cell inside the disc, barren ones included. Keeps them alive. */
+  private discCells: FloraCell[] = [];
   private cellOffsets: Int32Array = new Int32Array(0);
   /** Index (in `cellOffsets` units) one past the last core-ring cell. */
   private coreEnd = 0;
@@ -508,6 +511,11 @@ export class FloraSystem implements GameSystem {
     // Always make progress even if the clock says the budget is already gone.
     const minCells = jumped ? 12 : 1;
 
+    // Only a burst bypasses the clock for the core ring. Ordinary cell crossings
+    // stay strictly clock-bounded so swimming never spikes the frame; the core
+    // cells are first in `cellOffsets` anyway, so they are still served first.
+    const coreEnd = jumped ? this.coreEnd : 0;
+
     const t0 = nowMs();
     let generated = 0;
     const offsets = this.cellOffsets;
@@ -515,7 +523,7 @@ export class FloraSystem implements GameSystem {
       const cx = ccx + offsets[i];
       const cz = ccz + offsets[i + 1];
       if (field.has(cx, cz)) continue;
-      if (i >= this.coreEnd && generated >= minCells && nowMs() - t0 > budgetMs) break;
+      if (i >= coreEnd && generated >= minCells && nowMs() - t0 > budgetMs) break;
       field.ensure(cx, cz);
       generated++;
     }
@@ -525,13 +533,18 @@ export class FloraSystem implements GameSystem {
       this.lastStreamCell.x = ccx;
       this.lastStreamCell.z = ccz;
       this.liveCells.length = 0;
+      this.discCells.length = 0;
       for (let i = 0; i < offsets.length; i += 2) {
         const cell = field.get(ccx + offsets[i], ccz + offsets[i + 1]);
-        if (cell && cell.count > 0) this.liveCells.push(cell);
+        if (!cell) continue;
+        // Barren cells (bare rock, out-of-band depth) must still be *kept alive*
+        // or the cap sweep below would evict and regenerate them every frame.
+        this.discCells.push(cell);
+        if (cell.count > 0) this.liveCells.push(cell);
       }
       this.lastFillTime = -1e9;
     }
-    for (const cell of this.liveCells) cell.touched = ctx.frame;
+    for (const cell of this.discCells) cell.touched = ctx.frame;
     // A teleport leaves a whole disc of cells behind it. `cellOffsets` holds two
     // ints per cell, so its length is exactly 2x the live disc — use it as a
     // "twice the working set" cap and drop everything stale the moment we exceed
@@ -715,6 +728,7 @@ export class FloraSystem implements GameSystem {
     this.field?.clear();
     this.field = null;
     this.liveCells.length = 0;
+    this.discCells.length = 0;
     this.group.removeFromParent();
   }
 }

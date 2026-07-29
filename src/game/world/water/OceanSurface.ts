@@ -5,6 +5,7 @@ import { ANALYTIC_SKY_GLSL } from './AnalyticSky';
 import {
   UNDERWATER_CAUSTICS_GLSL,
   UNDERWATER_CAUSTICS_UNIFORMS_GLSL,
+  UNDERWATER_FARFIELD_GLSL,
   UNDERWATER_FUNCS_GLSL,
   UNDERWATER_UNIFORMS_GLSL,
 } from './UnderwaterFog';
@@ -112,6 +113,7 @@ ${UNDERWATER_UNIFORMS_GLSL}
 ${UNDERWATER_CAUSTICS_UNIFORMS_GLSL}
 ${WATER_NOISE_GLSL}
 ${UNDERWATER_FUNCS_GLSL}
+${UNDERWATER_FARFIELD_GLSL}
 ${UNDERWATER_CAUSTICS_GLSL}
 ${RIPPLE_GLSL}
 ${ANALYTIC_SKY_GLSL}
@@ -124,18 +126,27 @@ bool refractDir(vec3 i, vec3 n, float eta, out vec3 outDir) {
   return true;
 }
 
+/**
+ * GGX specular, hard-limited.
+ *
+ * A near-mirror water facet has roughness in the thousandths, and the GGX NDF
+ * peaks at 1/(pi*a^2) — of order 1e7 at a = 1e-4. Multiplied by sun intensity
+ * that overflows a half-float render target to +Inf, and the tone mapper turns
+ * +Inf into NaN. So the peak is clamped: no sun glitter needs more than a couple
+ * of hundred, and past that it is only aliasing anyway.
+ */
 float ggx(vec3 N, vec3 V, vec3 L, float rough) {
   vec3 H = normalize(L + V);
   float NoH = max(dot(N, H), 0.0);
   float NoV = max(dot(N, V), 1e-4);
   float NoL = max(dot(N, L), 0.0);
-  float a = max(rough * rough, 1e-5);
+  float a = max(rough * rough, 1e-3);
   float a2 = a * a;
   float d = NoH * NoH * (a2 - 1.0) + 1.0;
-  float D = a2 / (3.14159265 * d * d);
+  float D = a2 / (3.14159265 * max(d * d, 1e-8));
   float k = a * 0.5;
   float G = (NoV / (NoV * (1.0 - k) + k)) * (NoL / (NoL * (1.0 - k) + k));
-  return D * G / (4.0 * NoV) ;
+  return min(D * G / (4.0 * NoV), 220.0);
 }
 
 void main() {
@@ -169,7 +180,10 @@ void main() {
   // --- roughness: slope variance plus the screen-space derivative of the
   //     normal (a Toksvig-style widening) so distant glitter stops crawling.
   float rough = uBaseRough + 0.22 * length(slope) + 1.9 * length(fwidth(N));
-  rough = clamp(mix(rough, 0.48, foam), 0.008, 0.6);
+  // The floor is a specular-antialiasing floor, not an art choice: below about
+  // 0.03 a single pixel can land on the NDF peak while its neighbours do not,
+  // which is exactly the crawling-highlight failure mode.
+  rough = clamp(mix(rough, 0.48, foam), 0.032, 0.6);
 
   vec3 L = normalize(uwSunDir);
   float daylight = smoothstep(-0.05, 0.12, uwSunDir.y);
@@ -208,7 +222,10 @@ void main() {
     // Atmospheric perspective + a soft fade into the sky at the mesh edge.
     float haze = smoothstep(uFade.x * 0.55, uFade.y * 1.15, dist);
     col = mix(col, waterSkyColor(normalize(vec3(V.x, max(V.y, -0.02), V.z))), haze * 0.9);
-    alpha = 1.0 - smoothstep(uFade.y * 0.95, uFade.y * 1.35, dist) * 0.85;
+    // The far band has already been mixed to this shader's own sky colour, so it
+    // stays mostly opaque: the ocean-from-above then reads correctly whatever the
+    // sky dome behind it is doing, instead of dissolving into it.
+    alpha = 1.0 - smoothstep(uFade.y * 0.95, uFade.y * 1.35, dist) * 0.45;
   } else {
     /* ---------------- seen from below: the money shot ---------------- */
     // Angle of incidence from inside the water, measured against the normal.
@@ -230,14 +247,28 @@ void main() {
     // shows, most strongly at its rim where the compression is greatest.
     window *= 1.35 + 0.9 * (1.0 - clamp((cosI - COS_CRIT) / (1.0 - COS_CRIT), 0.0, 1.0));
 
-    // Total internal reflection: mirror the underwater scene. The grab is
-    // flipped about the screen centre and pushed around by the wave normal,
-    // which at grazing angles reads exactly like liquid metal.
-    vec2 muv = vec2(suv.x, 1.0 - suv.y) + N.xz * (0.055 + 0.16 * (1.0 - cosI));
-    vec3 mirrored = texture2D(uGrab, clamp(muv, vec2(0.003), vec2(0.997))).rgb;
-    vec3 deepFallback = uwInscatter * waterDownwelling(uwCameraDepth + 6.0);
-    mirrored = mix(deepFallback, mirrored, uUseGrab * 0.85);
-    mirrored = mix(mirrored, deepFallback, 0.28);
+    // Total internal reflection.
+    //
+    // The ray bounces off the underside back down into the water, so what it
+    // carries is the open-water radiance along the *reflected* direction — the
+    // same integral the far-field backdrop uses. That makes the ceiling agree
+    // with the water below it by construction, and because the reflected
+    // direction swings with the wave normal, the result ripples and darkens like
+    // liquid metal as the angle goes grazing.
+    //
+    // The obvious cheap alternative — flipping the screen grab about its centre —
+    // is geometrically wrong in a way that shows: at 4 m it mirrors Snell's
+    // window itself back down across the frame and lays a pale horizontal band
+    // exactly where the window's edge reflects to.
+    vec3 refl = reflect(V, N);
+    refl.y = min(refl.y, -0.008);
+    vec3 mirrored = waterFarField(refl, 900.0);
+    // Grazing reflections are dimmer and murkier than the near-vertical ones.
+    float graze = 1.0 - cosI;
+    mirrored *= 0.72 + 0.28 * cosI;
+    // Bright wave-lensed sunlight caught in the ceiling at moderate angles.
+    mirrored += uwSunColor * uSunIntensity * ggx(N, V, L, max(rough * 2.6, 0.06))
+              * 0.05 * daylight * (1.0 - graze * 0.6);
 
     // Fresnel transmittance across the interface, hard-edged at the critical
     // angle but not aliased.
@@ -268,7 +299,12 @@ void main() {
     col = applyUnderwater(col, dist, vWorld.y, V);
   }
 
-  gl_FragColor = vec4(max(col, vec3(0.0)), alpha);
+  // Final guard. This shader feeds a half-float target that is later tone
+  // mapped; one +Inf or NaN leaving here becomes a black or garbage pixel that
+  // survives every downstream pass. notEqual(x, x) is the portable NaN test.
+  bvec3 bad = notEqual(col, col);
+  col = mix(col, uwInscatter, vec3(bad));
+  gl_FragColor = vec4(min(max(col, vec3(0.0)), vec3(96.0)), alpha);
 }
 `;
 

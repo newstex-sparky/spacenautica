@@ -63,9 +63,14 @@ void main() {
   // Very low-frequency drifting murk. Open water is never perfectly uniform;
   // a few percent of large-scale variation is the difference between "distance"
   // and "flat fill", and it also breaks up gradient banding.
+  //
+  // Faded out at the horizontal, where the far ocean surface's own silhouette
+  // meets the backdrop. Solid geometry carries no murk, so leaving it switched
+  // on across that boundary would reintroduce a (soft, but still horizontal and
+  // still frame-wide) seam — the exact artifact this file exists to remove.
   vec2 mp = vec2(atan(rd.z, rd.x) * 1.4, rd.y * 2.6) + vec2(uwTime * 0.011, uwTime * -0.006);
   float m = wnFbm(mp, 3);
-  col *= 1.0 + m * uMurk;
+  col *= 1.0 + m * uMurk * smoothstep(0.0, 0.24, abs(rd.y));
 
   // Ordered dither at roughly one 8-bit step: the gradient spans a very small
   // luminance range over hundreds of pixels, which bands badly otherwise.
@@ -73,7 +78,9 @@ void main() {
   float dith = fract(dot(px, vec2(0.7548776662, 0.5698402909))) - 0.5;
   col += dith * 0.0016;
 
-  gl_FragColor = vec4(max(col, vec3(0.0)), 1.0);
+  bvec3 bad = notEqual(col, col);
+  col = mix(col, uwInscatter, vec3(bad));
+  gl_FragColor = vec4(min(max(col, vec3(0.0)), vec3(96.0)), 1.0);
 }
 `;
 
@@ -118,11 +125,12 @@ export class WaterBackdrop {
   }
 
   /**
-   * @param cameraDepth metres below the surface; the backdrop hands the last
-   *   quarter-metre back to the sky so breaking the surface does not flash.
+   * @param cameraDepth metres below the surface, 0 when the eye is in air. The
+   *   last few centimetres are handed back to the sky, which is both cheaper and
+   *   correct while the eye is straddling the interface.
    */
   update(camera: THREE.PerspectiveCamera, cameraDepth: number, turbidity: number): void {
-    this.mesh.visible = cameraDepth > 0.25;
+    this.mesh.visible = cameraDepth > 0.04;
     if (!this.mesh.visible) return;
     const u = this.mat.uniforms;
     camera.updateMatrixWorld();

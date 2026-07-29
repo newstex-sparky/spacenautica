@@ -39,13 +39,28 @@ const LAYER_IDS: TextureId[] = ['sand_rippled', 'gravel', 'rock_basalt', 'mud_si
  * Per-layer tiling size, roughness and a *relative* albedo modifier. These are
  * modifiers rather than absolute colours: the biome vertex tint carries the hue,
  * so a biome transition re-grades every layer coherently.
+ *
+ * The tints run well above 1 on purpose. Two reasons, both about being *under*
+ * water rather than about taste:
+ *
+ *  - The baked source maps sit at 0.05-0.11 linear reflectance for gravel,
+ *    basalt and silt. That is defensible for dry rock in air, but a surface that
+ *    dark underwater contributes nothing to the frame: the view ray's
+ *    transmittance is already down to a few percent, so albedo * T disappears
+ *    under the additive inscatter and the floor reads as a flat wash. Submerged
+ *    rock is also never that dark in reality — it carries a film of sediment and
+ *    pale coralline crust.
+ *  - Extinction is wavelength-dependent, so only the BLUE channel survives past
+ *    ~15 m (red is gone by 5 m). Warm-tinted ground therefore loses all of its
+ *    texture at distance. Every tint here is biased cool so the surviving channel
+ *    is the one carrying the contrast.
  */
 const LAYER_CFG: LayerConfig[] = [
-  { metres: 1.9, roughness: 1.0, tint: new THREE.Color(1.12, 1.05, 0.9) },   // sand
-  { metres: 2.7, roughness: 0.95, tint: new THREE.Color(0.95, 0.93, 0.88) }, // gravel
-  { metres: 4.8, roughness: 0.86, tint: new THREE.Color(0.6, 0.65, 0.72) },  // basalt
-  { metres: 3.2, roughness: 1.0, tint: new THREE.Color(0.86, 0.86, 0.75) },  // silt
-  { metres: 3.7, roughness: 0.8, tint: new THREE.Color(1.08, 0.92, 0.78) },  // coral rock
+  { metres: 1.9, roughness: 1.0, tint: new THREE.Color(1.3, 1.36, 1.52) },   // sand
+  { metres: 2.7, roughness: 0.95, tint: new THREE.Color(2.6, 2.7, 2.95) },   // gravel
+  { metres: 4.8, roughness: 0.86, tint: new THREE.Color(3.0, 3.3, 3.9) },    // basalt
+  { metres: 3.2, roughness: 1.0, tint: new THREE.Color(2.1, 2.2, 2.5) },     // silt
+  { metres: 3.7, roughness: 0.8, tint: new THREE.Color(1.7, 1.75, 1.9) },    // coral rock
 ];
 
 /* ------------------------------------------------------------------ *
@@ -125,6 +140,7 @@ export class TerrainSystem implements GameSystem, WorldQuery {
   private csmLinked = false;
   private srcSets: PbrMaps[] = [];
   private renderer: THREE.WebGLRenderer | null = null;
+  private ownsWaterUniforms = false;
 
   constructor() {
     this.field = new TerrainField(this.seed);
@@ -218,6 +234,10 @@ export class TerrainSystem implements GameSystem, WorldQuery {
     const caustics =
       water?.causticsTexture ?? (lib ? lib.get('caustic_tile', 256).map : new THREE.Texture());
     caustics.wrapS = caustics.wrapT = THREE.RepeatWrapping;
+
+    // When the ocean is absent (verification harness, or a boot where it failed)
+    // we own the underwater uniforms and must drive them ourselves.
+    this.ownsWaterUniforms = !water?.sharedUniforms;
 
     this.bundle = createTerrainMaterial({
       packed: this.packed,
@@ -502,6 +522,13 @@ export class TerrainSystem implements GameSystem, WorldQuery {
     if (!u) return;
     u.uTerrainTime.value = ctx.time;
 
+    // Only when nobody else owns them — the ocean's uniform objects are shared by
+    // reference and writing them here would fight the ocean every frame.
+    if (this.ownsWaterUniforms) {
+      u.uwCameraDepth.value = Math.max(0, -ctx.camera.position.y);
+      u.uwTime.value = ctx.time;
+    }
+
     // The ocean generates its caustics during *its* init, which runs after ours,
     // so pick the real texture up as soon as it exists and follow the tile size
     // and strength it publishes. `uwCausticsParams.w` is 0 when the ocean runs a
@@ -719,6 +746,11 @@ export class TerrainSystem implements GameSystem, WorldQuery {
    * harness can prove the packed arrays hold real content. Never called on a
    * normal frame.
    */
+  /** Diagnostic: see `uDebugView` in TerrainMaterial. 0 restores the real look. */
+  debugSetView(mode: number): void {
+    if (this.bundle) this.bundle.uniforms.uDebugView.value = mode;
+  }
+
   debugProbeTextures(lod = 0): Record<string, number[]> | null {
     if (!this.renderer || !this.packed) return null;
     return probeTerrainTextures(this.renderer, this.packed, this.srcSets, lod);

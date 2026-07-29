@@ -120,9 +120,12 @@ void main() {
   surf(p + vec2(eps, 0.0), hx, nx);
   surf(p + vec2(0.0, eps), hz, nz);
 
-  float er = uEta.x - uEta.y;
+  // eta = n_air / n_water. Water's index rises toward the blue end, so blue has
+  // the *smaller* eta and bends most — that is the direction the fringe has to
+  // run for the filament edges to read as real dispersion.
+  float er = uEta.x + uEta.y;
   float eg = uEta.x;
-  float eb = uEta.x + uEta.y;
+  float eb = uEta.x - uEta.y;
 
   vec3 c = vec3(
     channel(p, h0, n0, p + vec2(eps, 0.0), hx, nx, p + vec2(0.0, eps), hz, nz, inDir, er, eps, soft),

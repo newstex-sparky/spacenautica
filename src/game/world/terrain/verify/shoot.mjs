@@ -98,7 +98,14 @@ for (const s of SHOTS) {
   // Let the streamer converge on this vantage point.
   await page.waitForTimeout(2600);
   const probe = await page.evaluate('window.__TPROBE__()');
-  await page.screenshot({ path: join(OUT, `${s.id}.png`), timeout: SHOT_TIMEOUT });
+  const views = args.views ? String(args.views).split(',').map(Number) : [0];
+  for (const v of views) {
+    await page.evaluate((m) => window.__TDBG__(m), v);
+    await page.waitForTimeout(600);
+    const suffix = v === 0 ? '' : `_dbg${v}`;
+    await page.screenshot({ path: join(OUT, `${s.id}${suffix}.png`), timeout: SHOT_TIMEOUT });
+  }
+  await page.evaluate(() => window.__TDBG__(0));
   results.push({ id: s.id, probe: JSON.parse(probe) });
   console.log(s.id, probe);
 }

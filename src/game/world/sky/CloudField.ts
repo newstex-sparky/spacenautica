@@ -212,11 +212,16 @@ float cloudHeightGradient(float hN) {
 
 /** p is planet-centred, km. Returns density 0..1. */
 float cloudDensity(vec3 p, float alt, int detailOctaves) {
-  float hN = (alt - uCloudBase) / max(1e-3, uCloudTop - uCloudBase);
-  if (hN <= 0.0 || hN >= 1.0) return 0.0;
   float cov = cloudCoverage(p.xz);
   float thr = 1.0 - uCloudCoverage;
   float shape = clamp((cov - thr) / max(1e-3, 1.0 - thr), 0.0, 1.0);
+  if (shape <= 0.0) return 0.0;
+  // Cumulus towers grow as tall as they are strong: wispy edges stay pinned to
+  // the base while dense cores punch most of the way up the shell. Without this
+  // the deck is a slab of constant thickness and reads as fog, not cloud.
+  float ceilN = mix(0.26, 1.0, shape * shape);
+  float hN = (alt - uCloudBase) / max(1e-3, (uCloudTop - uCloudBase) * ceilN);
+  if (hN <= 0.0 || hN >= 1.0) return 0.0;
   float d = shape * cloudHeightGradient(hN);
   if (d <= 0.0) return 0.0;
   if (detailOctaves > 0) {
@@ -228,16 +233,24 @@ float cloudDensity(vec3 p, float alt, int detailOctaves) {
   return d * uCloudDensity;
 }
 
+/** Henyey-Greenstein, normalised so isotropic == 1.0 instead of 1/4pi. */
 float cloudHG(float c, float g) {
   float gg = g * g;
-  return (1.0 - gg) / (12.566370614 * pow(max(1e-4, 1.0 + gg - 2.0 * g * c), 1.5));
+  return (1.0 - gg) / pow(max(1e-4, 1.0 + gg - 2.0 * g * c), 1.5);
 }
 
 /**
  * Volumetric march through the cloud shell.
  * Returns rgb = in-scattered radiance, a = transmittance.
+ *
+ * horizSky is the near-horizon sky radiance; the deck fades into it with
+ * distance so the far side of a grazing ray reads as an aerial-perspective band
+ * instead of the grey mush an undersampled march would otherwise produce.
  */
-vec4 cloudsMarch(vec3 ro, vec3 rd, vec3 sunDir, vec3 sunRadiance, vec3 ambTop, vec3 ambBottom, float jitter) {
+vec4 cloudsMarch(
+  vec3 ro, vec3 rd, vec3 sunDir, vec3 sunRadiance,
+  vec3 ambTop, vec3 ambBottom, vec3 horizSky, float jitter
+) {
   if (uCloudSteps <= 0) return vec4(0.0, 0.0, 0.0, 1.0);
 
   float rBase = ATMO_GROUND_R + uCloudBase;
@@ -250,14 +263,26 @@ vec4 cloudsMarch(vec3 ro, vec3 rd, vec3 sunDir, vec3 sunRadiance, vec3 ambTop, v
 
   float t0 = min(tB, tT);
   float t1 = max(tB, tT);
-  if (t0 > 130.0) return vec4(0.0, 0.0, 0.0, 1.0);
-  float horizonFade = smoothstep(130.0, 88.0, t0);
-  float span = min(t1 - t0, 42.0);
+  if (t0 > 165.0) return vec4(0.0, 0.0, 0.0, 1.0);
+
+  /*
+   * Marched span. A grazing ray crosses tens of kilometres of shell, and with a
+   * fixed step budget that means steps far longer than a cumulus is wide, which
+   * point-samples the field into porridge. Cap the span so the step length stays
+   * inside the feature scale, and let aerial perspective take over past it.
+   */
+  float lift = clamp(rd.y * 4.0, 0.0, 1.0);
+  float span = min(t1 - t0, mix(11.0, 40.0, lift));
 
   float cosT = dot(rd, sunDir);
   vec3 scat = vec3(0.0);
   float trans = 1.0;
   float fs = float(uCloudSteps);
+
+  // Forward lobe + a weak back lobe, capped so a thin sunward edge reads as a
+  // silver lining rather than blowing the whole deck to white when the sun is
+  // low and most of the sky sits inside the forward peak.
+  float phase = min(mix(cloudHG(cosT, 0.78), cloudHG(cosT, -0.32), 0.30), 5.5);
 
   for (int i = 0; i < 48; i++) {
     if (i >= uCloudSteps) break;
@@ -269,7 +294,10 @@ vec4 cloudsMarch(vec3 ro, vec3 rd, vec3 sunDir, vec3 sunRadiance, vec3 ambTop, v
     float dt = (a1 - a0) * span;
     vec3 p = ro + rd * (t0 + a0 * span);
     float alt = length(p) - ATMO_GROUND_R;
-    float d = cloudDensity(p, alt, 3);
+    // Detail LOD matched to the step length: a 2 km step cannot resolve a 200 m
+    // cauliflower, and asking for it only aliases.
+    int oct = dt < 0.34 ? 3 : (dt < 0.95 ? 2 : (dt < 2.2 ? 1 : 0));
+    float d = cloudDensity(p, alt, oct);
     if (d <= 0.002) continue;
 
     // --- light march toward the sun, geometric step growth
@@ -286,17 +314,17 @@ vec4 cloudsMarch(vec3 ro, vec3 rd, vec3 sunDir, vec3 sunRadiance, vec3 ambTop, v
     }
 
     // --- energy-conserving multi-scatter approximation (3 octaves)
-    vec3 sunE = vec3(0.0);
-    float att = 1.0, contrib = 1.0, pg = 1.0;
+    float sunE = 0.0;
+    float att = 1.0, contrib = 1.0, ph = phase;
     for (int o = 0; o < 3; o++) {
       float od = lightOd * uCloudSigmaE * att;
       float beer = exp(-od);
       float powder = 1.0 - exp(-od * 2.4);
-      float ph = mix(cloudHG(cosT, 0.80 * pg), cloudHG(cosT, -0.28 * pg), 0.26);
       sunE += contrib * beer * mix(1.0, powder, uCloudPowder) * ph;
       att *= 0.34;
       contrib *= 0.52;
-      pg *= 0.66;
+      // Deeper scattering orders wash the lobe out toward isotropic.
+      ph = mix(ph, 1.0, 0.55);
     }
 
     float hN = clamp((alt - uCloudBase) / max(1e-3, uCloudTop - uCloudBase), 0.0, 1.0);
@@ -309,8 +337,16 @@ vec4 cloudsMarch(vec3 ro, vec3 rd, vec3 sunDir, vec3 sunRadiance, vec3 ambTop, v
     if (trans < 0.012) break;
   }
 
-  scat *= horizonFade;
-  trans = mix(1.0, trans, horizonFade);
+  /*
+   * Aerial perspective. Everything the march saw sits at least t0 kilometres
+   * away, so the intervening air both attenuates it and adds its own glow. One
+   * exponential in the horizon sky is a good enough stand-in here and it is what
+   * turns the distant deck into a soft textured band instead of a hard smear
+   * that stops dead where the span cap bites.
+   */
+  float aer = 1.0 - exp(-t0 / 62.0);
+  scat = mix(scat, horizSky, aer);
+  trans = mix(trans, 1.0, aer);
   return vec4(scat, trans);
 }
 `;

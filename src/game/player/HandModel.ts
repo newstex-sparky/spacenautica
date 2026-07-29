@@ -80,39 +80,40 @@ export function buildHand(side: 1 | -1, mats: HandMaterials): HandRig {
   const FOREARM_LEN = 0.075;
   /** Local Z of the cut end of the forearm. */
   const FOREARM_END = FOREARM_LEN / 2 + 0.055 + 0.083;
+  const ARM_R = 0.055;
+  /** Half-length of the capsule's cylindrical section. */
+  const ARM_HALF = FOREARM_LEN / 2;
+  /** Local Z of the capsule's centre. */
+  const ARM_MID = 0.083;
+  /** Lower/upper local Z of the cylindrical section, i.e. off the end caps. */
+  const ARM_Z0 = ARM_MID - ARM_HALF;
+  const ARM_Z1 = ARM_MID + ARM_HALF;
+  /** Erosion amplitude, so surface dressing can clear the displaced skin. */
+  const ARM_SKIN = 0.0022;
+
   /**
-   * Half-extents of the tapered, eroded forearm in a thin Z slice, measured off
-   * the built geometry.
+   * X/Y half-extents of the forearm's surface at a local Z.
    *
-   * Anything that has to sit *on* the arm — ribs, accent bands — needs the real
-   * radius, not an analytic guess: the taper is normalised over the capsule's
-   * own bounds so it also squeezes the hemispherical end caps, and the erosion
-   * pass moves every vertex again. Guessing put one accent band 5 mm inside the
-   * neoprene (invisible) and left the other standing 9 mm off it (a flange).
+   * Anything that must sit *on* the arm — ribs, accent bands — needs this rather
+   * than a hand-guessed radius. Two traps: `taper` normalises over the capsule's
+   * whole bounding box, so it squeezes the hemispherical end caps too, and the
+   * capsule carries no vertex rings between the two ends of its cylindrical
+   * section, so the profile cannot be recovered by sampling the built geometry
+   * either. Only valid between ARM_Z0 and ARM_Z1, where the underlying radius is
+   * a constant ARM_R and the taper is the whole story.
    */
-  let armRadius: (z: number) => [number, number] = () => [0.055, 0.055];
+  const armXY = (z: number): [number, number] => {
+    const t = (z - ARM_MID + ARM_HALF + ARM_R) / (FOREARM_LEN + 2 * ARM_R);
+    return [ARM_R * (0.94 + t * 0.24), ARM_R * (1.02 + t * 0.2)];
+  };
   {
     const b = new PartBuilder(rnd);
     // Neoprene forearm: tapers out toward the elbow, slightly oval, eroded so
     // the silhouette is not a lathe.
-    const arm = prim.capsule(0.055, FOREARM_LEN, 6, 16);
+    const arm = prim.capsule(ARM_R, FOREARM_LEN, 6, 16);
     taper(arm, (t) => [0.94 + t * 0.24, 1.02 + t * 0.2]);
-    transform(arm, { rot: [Math.PI / 2, 0, 0], pos: [0, 0, 0.083] });
+    transform(arm, { rot: [Math.PI / 2, 0, 0], pos: [0, 0, ARM_MID] });
     erode(arm, 0.0016, 26, 3);
-
-    const armPos = arm.attributes.position as THREE.BufferAttribute;
-    armRadius = (z: number): [number, number] => {
-      let mx = 0;
-      let my = 0;
-      for (let i = 0; i < armPos.count; i++) {
-        if (Math.abs(armPos.getZ(i) - z) > 0.007) continue;
-        mx = Math.max(mx, Math.abs(armPos.getX(i)));
-        my = Math.max(my, Math.abs(armPos.getY(i)));
-      }
-      // Fall back to the nominal radius if the slice caught no vertices.
-      return [mx > 1e-4 ? mx : 0.055, my > 1e-4 ? my : 0.055];
-    };
-
     b.add(arm, { occ: 0.2, edge: 0.7, id: 0.31 });
 
     // Sealed wrist cuff: a thick rubber collar with a raised lip.
@@ -125,16 +126,17 @@ export function buildHand(side: 1 | -1, mats: HandMaterials): HandRig {
     transform(lip, { pos: [0, 0, 0.0155] });
     b.add(lip, { occ: 0.26, edge: 1.4, id: 0.7 });
 
-    // Ribbed reinforcement panel along the top of the forearm. Placed a hair
-    // outside the tapered surface so the ribs actually catch a highlight
-    // instead of hiding inside the neoprene.
+    // Ribbed reinforcement panel along the top of the forearm. Seated *on* the
+    // real tapered surface, half-sunk, so each rib stands about its own half
+    // height proud and actually catches a highlight. The old placement used a
+    // flat 0.044 m and sat entirely inside the neoprene.
     for (let i = 0; i < 4; i++) {
-      const z = 0.052 + i * 0.021;
-      const surfaceY = armRadius(z)[1];
+      const z = ARM_Z0 + 0.006 + i * 0.02;
+      const surfaceY = armXY(z)[1] + ARM_SKIN;
       const rib = prim.box(0.05 - i * 0.003, 0.009, 0.013, 1);
       roundBox(rib, [0.025, 0.0045, 0.0065], 3, 0.6);
       transform(rib, {
-        pos: [0.004 * side, surfaceY - 0.0022, z],
+        pos: [0.004 * side, surfaceY, z],
         rot: [0.05 * i, 0, 0.04 * side],
       });
       b.add(rib, { occ: 0.3, edge: 1.3, id: 0.2 + i * 0.13 });
@@ -173,21 +175,22 @@ export function buildHand(side: 1 | -1, mats: HandMaterials): HandRig {
   {
     const b = new PartBuilder(rnd);
     const band = (z: number, width: number, id: number): void => {
-      const t = (z + 0.01) / (FOREARM_END + 0.01);
-      const rx = 0.055 * (0.94 + t * 0.24);
-      const ry = 0.055 * (1.02 + t * 0.2);
-      // Cross-section is the cylinder's X/Z; the rotation then lays its Y axis
-      // down the arm, so the Z scale becomes the vertical radius.
-      const ring = prim.cyl(1, 1, width, 22, 1);
-      transform(ring, {
-        rot: [Math.PI / 2, 0, 0],
-        scale: [rx + 0.0013, 1, ry + 0.0013],
-      });
+      // Truncated cone, so the band follows the taper along its own length
+      // instead of stepping off it at one end.
+      const [rxA, ryA] = armXY(z + width / 2);
+      const [rxB, ryB] = armXY(z - width / 2);
+      // The cylinder's cross-section is its X/Z; the rotation then lays its Y
+      // axis down the arm, so the Z scale becomes the vertical radius.
+      const ring = prim.cyl(rxA + ARM_SKIN, rxB + ARM_SKIN, width, 22, 1);
+      const ovality = (ryA + ryB + ARM_SKIN * 2) / (rxA + rxB + ARM_SKIN * 2);
+      transform(ring, { rot: [Math.PI / 2, 0, 0], scale: [1, 1, ovality] });
       transform(ring, { pos: [0, 0, z] });
       b.add(ring, { occ: 0.18, edge: 1.35, id });
     };
-    band(0.052, 0.019, 0.15);
-    band(0.152, 0.011, 0.55);
+    // Both bands stay inside the cylindrical section: out on the end caps the arm
+    // is already narrowing and a constant-radius ring reads as a flange.
+    band(ARM_Z0 + 0.014, 0.018, 0.15);
+    band(ARM_Z1 - 0.014, 0.011, 0.55);
     const geo = b.build('hand.accent');
     geometries.push(geo);
     const m = new THREE.Mesh(mirror(geo), mats.accent);
