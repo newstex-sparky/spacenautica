@@ -147,18 +147,32 @@ export interface ScatterOptions {
   max: number;
 }
 
-/** Deterministic world-wide scatter. Identical for a given seed, every run. */
+/**
+ * Deterministic world-wide scatter. Identical for a given seed, every run.
+ *
+ * The budget is applied by *thinning the whole field uniformly*, not by stopping
+ * the scan once it is full. That distinction matters enormously: the raster scan
+ * runs -region..+region in Z, so an early-out cap spent the entire budget on the
+ * first few rows and left ~90% of the world with no props at all. Thinning uses
+ * an independent spatial hash, so lowering the budget lowers density everywhere
+ * instead of shrinking the populated area.
+ *
+ * It is also much cheaper: the terrain is only sampled for candidates that
+ * survive thinning, and `orient` costs five `heightAt` calls each.
+ */
 export function scatterRegion(
   world: WorldQuery, kinds: ScatterKind[], opts: ScatterOptions,
 ): Placement[] {
   const out: Placement[] = [];
-  if (kinds.length === 0) return out;
+  if (kinds.length === 0 || opts.max <= 0) return out;
   const noise = new Noise(opts.seed ^ 0x51de);
   const n = Math.ceil(opts.region / opts.cell);
   const weights = new Float64Array(kinds.length);
 
-  for (let gz = -n; gz <= n && out.length < opts.max; gz++) {
-    for (let gx = -n; gx <= n && out.length < opts.max; gx++) {
+  // --- pass 1: enumerate survivors of the density/clump gate (no terrain) ---
+  const cand: number[] = [];
+  for (let gz = -n; gz <= n; gz++) {
+    for (let gx = -n; gx <= n; gx++) {
       for (let k = 0; k < opts.perCell; k++) {
         const h3 = hash2(gx * 13 + k * 3, gz * 17 + k * 7, opts.seed + 53);
         const x = (gx + hash2(gx * 3 + k, gz * 5 + k, opts.seed + 11)) * opts.cell;
@@ -170,32 +184,62 @@ export function scatterRegion(
           p *= 1 - opts.clump + opts.clump * 2.4 * c * c;
         }
         if (h3 > p) continue;
-
-        const b = world.biomeAt(x, z);
-        let total = 0;
-        for (let i = 0; i < kinds.length; i++) {
-          const kd = kinds[i];
-          const w = (kd.biomes[b.id] ?? kd.biomes['*'] ?? 0) * kd.weight;
-          weights[i] = w;
-          total += w;
-        }
-        if (total <= 0) continue;
-        let pick = hash2(gx * 19 + k, gz * 23 + k, opts.seed + 71) * total;
-        let ki = 0;
-        for (; ki < kinds.length - 1; ki++) {
-          pick -= weights[ki];
-          if (pick <= 0) break;
-        }
-        if (weights[ki] <= 0) continue;
-
-        const kind = kinds[ki];
-        const rot = hash2(gx * 29 + k, gz * 31 + k, opts.seed + 97) * Math.PI * 2;
-        const sJ = hash2(gx * 37 + k, gz * 41 + k, opts.seed + 131);
-        const scale = kind.scale[0] + (kind.scale[1] - kind.scale[0]) * sJ * sJ;
-        const pl: Placement = { kind: ki, matrix: new THREE.Matrix4(), centre: new THREE.Vector3(), radius: 1 };
-        if (orient(world, kind, x, z, rot, scale, pl)) out.push(pl);
+        cand.push(gx, gz, k);
       }
     }
+  }
+
+  const count = cand.length / 3;
+  if (count === 0) return out;
+  // Aim a little over budget: `orient` still rejects on depth and slope, and
+  // under-filling the world is worse than trimming a few at the end.
+  const keep = count <= opts.max ? 1 : Math.min(1, (opts.max * 1.35) / count);
+
+  // --- pass 2: place the survivors ---
+  const ceiling = opts.max * 2;
+  for (let c = 0; c < cand.length && out.length < ceiling; c += 3) {
+    const gx = cand[c];
+    const gz = cand[c + 1];
+    const k = cand[c + 2];
+    if (keep < 1 && hash2(gx * 61 + k * 5, gz * 67 + k * 9, opts.seed + 199) > keep) continue;
+
+    const x = (gx + hash2(gx * 3 + k, gz * 5 + k, opts.seed + 11)) * opts.cell;
+    const z = (gz + hash2(gx * 7 + k, gz * 11 + k, opts.seed + 29)) * opts.cell;
+
+    const b = world.biomeAt(x, z);
+    let total = 0;
+    for (let i = 0; i < kinds.length; i++) {
+      const kd = kinds[i];
+      const w = (kd.biomes[b.id] ?? kd.biomes['*'] ?? 0) * kd.weight;
+      weights[i] = w;
+      total += w;
+    }
+    if (total <= 0) continue;
+    let pick = hash2(gx * 19 + k, gz * 23 + k, opts.seed + 71) * total;
+    let ki = 0;
+    for (; ki < kinds.length - 1; ki++) {
+      pick -= weights[ki];
+      if (pick <= 0) break;
+    }
+    if (weights[ki] <= 0) continue;
+
+    const kind = kinds[ki];
+    const rot = hash2(gx * 29 + k, gz * 31 + k, opts.seed + 97) * Math.PI * 2;
+    const sJ = hash2(gx * 37 + k, gz * 41 + k, opts.seed + 131);
+    const scale = kind.scale[0] + (kind.scale[1] - kind.scale[0]) * sJ * sJ;
+    const pl: Placement = { kind: ki, matrix: new THREE.Matrix4(), centre: new THREE.Vector3(), radius: 1 };
+    if (orient(world, kind, x, z, rot, scale, pl)) out.push(pl);
+  }
+
+  // The 1.35 headroom above covers `orient` rejections; when it overshoots,
+  // trim by stride rather than by truncation. `out` is in raster order, so every
+  // Nth entry is still spread over the whole region — lopping off the tail would
+  // just reintroduce the empty-far-edge bug in a milder form.
+  if (out.length > opts.max) {
+    const stride = out.length / opts.max;
+    const trimmed: Placement[] = [];
+    for (let i = 0; i < opts.max; i++) trimmed.push(out[Math.floor(i * stride)]);
+    return trimmed;
   }
   return out;
 }

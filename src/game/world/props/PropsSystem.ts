@@ -34,6 +34,7 @@ import { makeContainer, makeEscapePod, makeHullSection, makePrecursorStructure }
 import type { WreckBuild } from './WreckGen';
 import { VentField } from './VentField';
 import type { PropEmitter, VentSpec } from './VentField';
+import { NearClutter } from './NearClutter';
 
 /* ------------------------------------------------------------------ *
  * Scratch — nothing in update() allocates
@@ -252,6 +253,7 @@ export class PropsSystem implements GameSystem {
   private mats: PropMaterialLibrary | null = null;
   private batches: PropBatches | null = null;
   private vents: VentField | null = null;
+  private clutter: NearClutter | null = null;
   private lights: LightPool | null = null;
   private highlight: THREE.Mesh | null = null;
   private highlightMat: THREE.ShaderMaterial | null = null;
@@ -291,6 +293,16 @@ export class PropsSystem implements GameSystem {
     this.buildWrecks(ctx);
     this.buildVents(ctx, shared);
     this.buildHighlight();
+
+    // Foreground dressing. The world scatter cannot supply this: at one boulder
+    // per ~900 m^2 the first three metres of any view are empty, which is why
+    // every frame read as a wash with no sense of scale.
+    this.clutter = new NearClutter(this.mats, g.tier, g.foliageDensity, this.seed);
+    this.clutter.build();
+    this.group.add(this.clutter.group);
+    // Fill the ring completely before the first frame; after this it only ever
+    // advances a slice at a time.
+    this.clutter.prime(ctx.world, ctx.camera.position);
   }
 
   /** Snaps every authored POI onto the sea floor. */
@@ -785,6 +797,7 @@ export class PropsSystem implements GameSystem {
 
     const cam = ctx.camera.position;
     this.batches?.updateLod(cam, this.budget.propViewDistance, this.budget.lodSlices);
+    this.clutter?.update(ctx.world, cam);
     this.vents?.update(dt, ctx);
     if (ctx.frame % 12 === 0) this.vents?.applyLod(cam);
     this.lights?.update(this.emitters, cam, ctx.time);
@@ -847,6 +860,7 @@ export class PropsSystem implements GameSystem {
 
   dispose(): void {
     this.batches?.dispose();
+    this.clutter?.dispose();
     this.vents?.dispose();
     this.lights?.dispose();
     this.mats?.dispose();
