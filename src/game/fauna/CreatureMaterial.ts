@@ -255,6 +255,19 @@ const FRAG_NORMAL = /* glsl */ `
 `;
 
 const FRAG_EMISSIVE = /* glsl */ `
+  /*
+   * Downwelling irradiance reaching this creature's depth. Every term below that
+   * stands in for *reflected or transmitted daylight* — fin translucency,
+   * iridescence, caustics — has to be scaled by it.
+   *
+   * Skipping it is not a subtle error: uwInscatter and uwSunColor are surface
+   * quantities, so a fin at 30 m was being lit as if it were floating at y=0
+   * while the body it is attached to correctly went dark. The result was a fish
+   * whose membranes read as a bright white rag with a faint shadow behind it.
+   * Bioluminescence is deliberately *not* scaled — it is the animal's own light.
+   */
+  vec3 fDown = waterDownwelling(uwSurfaceY - vFWorld.y);
+
   // --- bioluminescent markings ---
   if (uSurf.w > 0.001) {
     float gp = smoothstep(0.45, 0.86, fnSnoise3(vec3(fUv * uGlowP.x, fHash * 9.0)));
@@ -267,7 +280,7 @@ const FRAG_EMISSIVE = /* glsl */ `
   if (uPat.w > 0.001) {
     vec3 irid = 0.5 + 0.5 * cos(FAUNA_TAU * (vec3(0.0, 0.33, 0.66)
                  + fFres * 1.9 + fT * 0.7 + fHash * 5.0));
-    totalEmissiveRadiance += irid * uPat.w * fFres * 0.5 * (1.0 - 0.4 * fShade);
+    totalEmissiveRadiance += irid * uPat.w * fFres * 0.5 * (1.0 - 0.4 * fShade) * fDown;
   }
 
   // --- eyes: iris ring + specular catchlight so they read at distance ---

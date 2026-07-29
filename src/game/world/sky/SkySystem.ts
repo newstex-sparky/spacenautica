@@ -417,12 +417,17 @@ export class SkySystem implements GameSystem {
     u.uMoonIllum.value = this.celestial.moonIllum;
 
     // Sun radiance used to light the cloud deck: the sun colour as seen from
-    // cloud altitude (thinner air, so less reddening than at the eye).
+    // cloud altitude. A deck at 1.5 km sees the sun set later than the eye does,
+    // and its base keeps catching reddened light for a while after that, so this
+    // gate has to be softer and reach further below the eye's horizon than the
+    // one the direct sun light uses — otherwise the whole deck snaps to black at
+    // the exact instant of sunset.
+    const deckLit = smoothstep(-0.085, 0.03, this.sunDirection.y);
     this.cpu.transmittance(ATMO.groundR + this.weather.baseKm, this.sunDirection.y, sTrans);
     (u.uSunCloudRad.value as THREE.Vector3)
       .copy(sTrans)
       .multiply(sVecSet(1.0, 0.985, 0.955))
-      .multiplyScalar(3.1 * aboveHorizon);
+      .multiplyScalar(3.1 * deckLit);
     (u.uSunRadiance.value as THREE.Vector3)
       .copy(sTrans)
       .multiply(sVecSet(1.0, 0.985, 0.955))
@@ -551,13 +556,15 @@ export class SkySystem implements GameSystem {
     sColor2.setRGB(grey, grey, grey);
     sAmbient.lerp(sColor2, 0.34 + 0.34 * storm);
 
-    // Moonlight + airglow floor so the night is blue, not black.
+    // Moonlight + airglow floor so the night is blue, not black. The floor is
+    // matched to the dome's uNightFloor times pi (irradiance from a hemisphere of
+    // that radiance) so the fill light and the sky you can see agree.
     const moonUp = Math.max(0, this.moonDirection.y);
     const nightFade = 1 - smoothstep(-0.02, 0.12, this.sunDirection.y);
-    const m = this.celestial.moonIllum * moonUp * nightFade * 0.028;
-    sAmbient.r += m * 0.5 + 0.0022 * nightFade;
-    sAmbient.g += m * 0.66 + 0.0030 * nightFade;
-    sAmbient.b += m * 1.0 + 0.0052 * nightFade;
+    const m = this.celestial.moonIllum * moonUp * nightFade * 0.052;
+    sAmbient.r += m * 0.5 + 0.019 * nightFade;
+    sAmbient.g += m * 0.66 + 0.027 * nightFade;
+    sAmbient.b += m * 1.0 + 0.048 * nightFade;
 
     this.ambientTarget.copy(sAmbient);
   }
