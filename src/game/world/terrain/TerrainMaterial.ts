@@ -409,9 +409,10 @@ struct SplatSample {
 
 /**
  * Triplanar sample of one packed layer, returning world-space normal.
- * `stoch` is passed rather than read from the uniform so the caller can spend
- * the 3-tap anti-tiling budget on the dominant layer only — the second layer is
- * mostly buried by the height blend, so its repetition is not visible anyway.
+ * The stoch argument is passed rather than read from the uniform so the caller
+ * can spend the 3-tap anti-tiling budget on the dominant layer only: the second
+ * layer is mostly buried by the height blend, so its repeat is never visible.
+ * (No backticks in this comment - the chunk is a JS template literal.)
  */
 void sampleLayer(int layer, vec3 wp, vec3 wn, vec3 tw, float stoch, out SplatSample o) {
   float sc = uLayerScale[layer];

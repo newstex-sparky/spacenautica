@@ -87,14 +87,23 @@ void main() {
   float tMax = tTop > 0.0 ? tTop : 0.0;
   if (tGnd > 0.0) tMax = min(tMax, tGnd);
 
-  const int STEPS = 40;
+  // Quadratic step distribution: the optical depth of a grazing ray is set by
+  // the first few kilometres, and a uniform march over a 1000 km chord resolves
+  // that with a single sample. Getting it wrong here makes a low sun far too
+  // bright and not nearly red enough, because this table *is* the sun's colour.
+  const int STEPS = 48;
   vec3 od = vec3(0.0);
+  float prev = 0.0;
   for (int i = 0; i < STEPS; i++) {
-    float t = (float(i) + 0.5) / float(STEPS) * tMax;
+    float f1 = float(i + 1) / float(STEPS);
+    float next = (f1 * f1 * 0.86 + f1 * 0.14) * tMax;
+    float dt = next - prev;
+    float t = prev + dt * 0.5;
+    prev = next;
     float h = length(ro + rd * t) - ATMO_GROUND_R;
     vec3 rayS; float mieS; vec3 ext;
     atmoMedium(h, rayS, mieS, ext);
-    od += ext * (tMax / float(STEPS));
+    od += ext * dt;
   }
   gl_FragColor = vec4(exp(-od), 1.0);
 }

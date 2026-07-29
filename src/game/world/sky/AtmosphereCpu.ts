@@ -78,9 +78,15 @@ export class AtmosphereCpu {
         if (tTop < 0) tTop = 0;
         const tMax = tGnd > 0 ? Math.min(tTop, tGnd) : tTop;
         od[0] = od[1] = od[2] = 0;
-        const dt = tMax / STEPS;
+        // Same quadratic distribution the GPU table uses, so the two cannot
+        // disagree about how red a low sun is.
+        let prev = 0;
         for (let i = 0; i < STEPS; i++) {
-          const t = (i + 0.5) * dt;
+          const f1 = (i + 1) / STEPS;
+          const next = (f1 * f1 * 0.86 + f1 * 0.14) * tMax;
+          const dt = next - prev;
+          const t = prev + dt * 0.5;
+          prev = next;
           const px = dx * t;
           const py = r + dy * t;
           extinctionAt(Math.sqrt(px * px + py * py) - ATMO.groundR, this.ext);
@@ -151,11 +157,15 @@ export class AtmosphereCpu {
     let tr = 1;
     let tg = 1;
     let tb = 1;
-    const dt = tMax / marchSteps;
     const sunT = scratchSunT;
+    let prevT = 0;
 
     for (let i = 0; i < marchSteps; i++) {
-      const t = (i + 0.5) * dt;
+      const f1 = (i + 1) / marchSteps;
+      const next = (f1 * f1 * 0.78 + f1 * 0.22) * tMax;
+      const dt = next - prevT;
+      const t = prevT + dt * 0.5;
+      prevT = next;
       const px = ro.x + dir.x * t;
       const py = ro.y + dir.y * t;
       const pz = ro.z + dir.z * t;

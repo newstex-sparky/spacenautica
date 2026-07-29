@@ -198,7 +198,7 @@ vec3 starField(vec3 worldDir) {
   vec3 mwTint;
   float mw = milkyWay(cd, mwTint);
 
-  vec3 col = mwTint * mw * 0.0022 * uStarBrightness;
+  vec3 col = mwTint * mw * 0.0115 * uStarBrightness;
 
   // Airmass-driven scintillation: strong near the horizon, calm at the zenith.
   float scint = clamp(0.22 / (max(worldDir.y, 0.0) + 0.10), 0.0, 1.7);
@@ -231,7 +231,7 @@ vec3 starField(vec3 worldDir) {
     float core = exp(-ang2 / max(1e-12, sigma * sigma));
 
     vec3 tint = starTint(hash12(cell * 2.11 + face * 5.0 + lseed + 91.0));
-    col += tint * flux * core * twk * 0.0075 * uStarBrightness;
+    col += tint * flux * core * twk * 0.042 * uStarBrightness;
 
     // Diffraction spikes on the showpiece stars only.
     if (layer == 2 && mag > 0.45) {
@@ -242,7 +242,7 @@ vec3 starField(vec3 worldDir) {
       float a1 = abs(dot(cd - sDir, t1));
       float a2 = abs(dot(cd - sDir, t2));
       float spike = exp(-a1 / (uPixelAngle * 0.45)) + exp(-a2 / (uPixelAngle * 0.45));
-      col += tint * flux * spike * exp(-ang / (uPixelAngle * 9.0)) * 0.0012 * uStarBrightness;
+      col += tint * flux * spike * exp(-ang / (uPixelAngle * 9.0)) * 0.0068 * uStarBrightness;
     }
   }
   return col;
@@ -300,10 +300,12 @@ vec3 moonDisc(vec3 rd, vec3 moonDir, vec3 sunDir) {
   float micro = fbm3(n * 22.0, 3) * 0.5 + 0.5;
   alb *= 0.9 + 0.2 * micro;
 
-  vec3 surface = uMoonRadiance * alb * refl * 26.0;
+  // A full moon is a ~0.12-albedo rock in full sunlight; on screen it has to be
+  // a bright near-white disc you can see the maria on, not a grey smudge.
+  vec3 surface = uMoonRadiance * alb * refl * 105.0;
   // Earthshine: cold blue fill on the unlit limb.
   float dark = smoothstep(0.16, 0.0, lam);
-  surface += vec3(0.36, 0.52, 0.86) * alb * dark * 0.055 * (1.0 - uMoonIllum * 0.6)
+  surface += vec3(0.36, 0.52, 0.86) * alb * dark * 0.30 * (1.0 - uMoonIllum * 0.6)
              * length(uMoonRadiance);
   return col + surface * edge;
 }

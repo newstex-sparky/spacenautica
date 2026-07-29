@@ -226,7 +226,10 @@ export class SkyDome {
         uAmbTop: { value: new THREE.Vector3(0.4, 0.5, 0.7) },
         uAmbBottom: { value: new THREE.Vector3(0.1, 0.13, 0.16) },
         uCloudJitter: { value: 0 },
-        uNightFloor: { value: new THREE.Vector3(0.0007, 0.0011, 0.0021) },
+        // Airglow + integrated starlight + zodiacal light: the reason a moonless
+        // night sky is a deep navy you can read silhouettes against rather than
+        // the pure black a single-scattering solar model returns.
+        uNightFloor: { value: new THREE.Vector3(0.0085, 0.0125, 0.0235) },
         uSeaTint: { value: new THREE.Vector3(0.012, 0.045, 0.062) },
         uEnvPass: { value: 0 },
         uUnderwater: { value: 0 },

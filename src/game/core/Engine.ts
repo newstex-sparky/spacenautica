@@ -52,6 +52,19 @@ export class Engine implements GameContext {
   /** Set by the post stack; when present the engine calls it instead of render(). */
   renderOverride: ((dt: number) => void) | null = null;
 
+  /**
+   * Unclamped seconds since the previous frame.
+   *
+   * `dt` handed to systems is clamped so a long stall cannot teleport the player,
+   * which is right for simulation and wrong for anything presenting to a human: a
+   * HUD easing on clamped dt ages at wall-clock speed only while frames are fast.
+   * Under software GL, where a frame can take 1.4 s, interface timers driven by
+   * `dt` ran roughly 21x slow — a depth readout eased 132 m in a single frame and
+   * five-second toasts needed 105 s to expire. Presentation timing should use
+   * this; simulation should not.
+   */
+  rawDt = 1 / 60;
+
   /** Smoothed frame time in ms, used by adaptive resolution + the HUD. */
   frameMs = 16.7;
   /** Current adaptive-resolution scalar, multiplied into renderScale. */
@@ -177,6 +190,7 @@ export class Engine implements GameContext {
     // Clamp so a tab-switch or a long GC pause cannot teleport the player.
     const dt = Math.min(raw, 1 / 15);
 
+    this.rawDt = raw;
     this.inputImpl.beginFrame();
     if (!this.paused) this.time += dt;
     this.frame++;
