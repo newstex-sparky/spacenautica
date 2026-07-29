@@ -444,6 +444,8 @@ interface GameState {
   gameOver: boolean;
   buildMode: boolean;
   buildType: BuildableStructureType;
+  broadcasting: boolean;
+  broadcastComplete: false;
 }
 
 interface StationPower {
@@ -3567,6 +3569,20 @@ interface BroadcastState {
         }
         return;
       }
+      // H key: Toggle shuttle HUD visibility
+      if (e.code === 'KeyH') {
+        setShuttleHUD(prev => ({ ...prev, isVisible: !prev.isVisible }));
+        return;
+      }
+      // P key: Toggle shuttle autopilot (docking)
+      if (e.code === 'KeyP') {
+        setShuttleAutoPilotRef(prev => !prev);
+        setShuttleHUD(prev => ({
+          ...prev,
+          destination: prev.shuttleAutoPilotRef ? 'DOCKING' : 'FREE FLIGHT'
+        }));
+        return;
+      }
       // F key: deposit ore to smelter
       if (e.code === SMELTER_DEPOSIT_KEY) {
         depositOre();
@@ -3721,12 +3737,33 @@ interface BroadcastState {
       if (uiTechTreeOpenRef.current && document.pointerLockElement) {
         techTreeZoomRef.current += e.deltaY * 0.01;
         // Clamp zoom distance
-        techTreeZoomRef.current = Math.max(6, Math.min(20, techTreeZoomRef.current));
-        return;
-      }
-    };
+        const handleMouseWheel = (e: WheelEvent) => {
+          // Optional: Zoom or scroll camera
+          return;
+        };
 
-    const handlePointerLockChange = () => {
+        // ====================== Shuttle flight handlers ======================
+        const handleEnterShuttle = () => {
+          // Launch shuttle from shuttle bay
+          setShuttleMode(true);
+          shuttleInShuttleRef.current = true;
+          setShuttleDocked(false);
+          setShuttleHUD(prev => ({ ...prev, destination: 'FREE FLIGHT' }));
+          setShuttleAutoPilotRef(false);
+          // Hide main HUD when in shuttle
+          setUiShuttleVisible(true);
+        };
+
+        const handleExitShuttle = () => {
+          // Return to station
+          setShuttleMode(false);
+          shuttleInShuttleRef.current = false;
+          setShuttleDocked(true);
+          setShuttleHUD(prev => ({ ...prev, destination: 'DOCKING' }));
+          setUiShuttleVisible(false);
+        };
+
+        const handlePointerLockChange = () => {
       setPointerLocked(!!document.pointerLockElement);
     };
 
@@ -5430,6 +5467,30 @@ interface BroadcastState {
             <span style={{ ...styles.resourceIcon, backgroundColor: '#ff6600' }} />
             <span style={styles.resourceText}>Titanium: {uiTitaniumMetal}</span>
           </div>
+        </div>
+      )}
+
+      {/* Shuttle Launch Button — appears when shuttle bay is built and shuttle docked */}
+      {shuttleDocked && !gameState.gameOver && !shuttleMode && (
+        <div
+          style={{
+            position: 'absolute' as const,
+            top: '80%',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            padding: '15px 30px',
+            borderRadius: 10,
+            border: '2px solid #00ffff',
+            color: '#00ffff',
+            fontSize: 16,
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            zIndex: 50,
+          }}
+          onClick={handleEnterShuttle}
+        >
+          🚀 LAUNCH SHUTTLE [Key9]
         </div>
       )}
 
