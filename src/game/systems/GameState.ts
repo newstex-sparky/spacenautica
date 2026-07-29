@@ -38,6 +38,12 @@
  * Events emitted: inventory:changed, craft:completed, scan:completed,
  * databank:unlocked, tech:unlocked, quest:updated, depth:band, ui:notify,
  * ui:voice, save:written, save:loaded, audio:cue.
+ *
+ * NOTE for the HUD: depth-gate announcements ("now researchable") are rate
+ * limited and collapse into one summary line when several gates fall at once, so
+ * a fast descent cannot wall the toast column. Nothing is announced for the
+ * depth the player *starts* a run at — spawn, load and teleport all re-baseline
+ * silently — so the first frames of a run never carry blueprint toasts.
  */
 
 import * as THREE from 'three';
@@ -100,6 +106,21 @@ const DEPTH_BANDS: Array<{ band: string; from: number }> = [
 
 const _v0 = new THREE.Vector3();
 
+/** Seconds between "now researchable" toasts, so gate crossings never wall the screen. */
+const TECH_ANNOUNCE_GAP = 3;
+/** More than this many pending at once collapses into a single summary line. */
+const TECH_ANNOUNCE_BURST = 2;
+
+/**
+ * Position-jump discriminator. Nothing the player can pilot exceeds ~11 m/s, so
+ * a step beyond this budget is a teleport — a load, a death respawn, or a
+ * scripted camera move — not locomotion. Generous, because a single frame can be
+ * very long on a slow renderer.
+ */
+const TELEPORT_SPEED = 30;
+/** Absolute floor, so a one-frame physics pop is never read as a teleport. */
+const TELEPORT_MARGIN = 5;
+
 export class GameState implements GameSystem {
   readonly name = 'game.state';
   readonly phase = Phase.Gameplay;
@@ -146,6 +167,11 @@ export class GameState implements GameSystem {
   private worldSeed = 0;
   private lastNotedDepth = -1;
   private trackedPosition = false;
+  /** False until the first depth sample of the run has set the baseline. */
+  private depthPrimed = false;
+  /** Names of nodes that just became researchable, released a few seconds apart. */
+  private techAnnounceQueue: string[] = [];
+  private techAnnounceCooldown = 0;
 
   /* ---------------------------------------------------------------- *
    * Lifecycle
@@ -274,12 +300,26 @@ export class GameState implements GameSystem {
 
     const player = ctx.tryGet<PlayerLike>('player');
     if (player) {
-      this.trackDepth(player, ctx);
-      if (this.trackedPosition) this.stats.distance += this.lastPos.distanceTo(player.position);
+      /*
+       * Distance and depth are both differential, so a discontinuity has to be
+       * detected before either is integrated. A teleport must not be credited as
+       * distance swum, and must not be reported as having "descended" past every
+       * depth gate it skipped over.
+       */
+      const moved = this.trackedPosition ? this.lastPos.distanceTo(player.position) : 0;
+      if (moved > TELEPORT_MARGIN + TELEPORT_SPEED * dt) {
+        this.depthPrimed = false;
+        this.techAnnounceQueue.length = 0;
+      } else {
+        this.stats.distance += moved;
+      }
       this.trackedPosition = true;
       this.lastPos.copy(player.position);
+
+      this.trackDepth(player, ctx);
       this.noteBiome(ctx.world.biomeAt(player.position.x, player.position.z).id);
     }
+    this.drainTechAnnouncements(dt, ctx);
 
     /* ---- 1 Hz work: decay, equipment, station discovery ---- */
     this.slowAccum += dt;
@@ -341,24 +381,76 @@ export class GameState implements GameSystem {
 
   private trackDepth(player: PlayerLike, ctx: GameContext): void {
     const depth = player.depth;
+    if (!Number.isFinite(depth)) return;
+
+    if (!this.depthPrimed) {
+      /*
+       * First depth sample of the run — a fresh spawn, a loaded save, or a
+       * camera the capture harness dropped straight onto the sea floor. Seed
+       * the baseline silently: announcing here would fire every depth gate at
+       * or above the spawn point in a single frame with no player action
+       * (three toasts at 217 m, which is exactly what round 1 captured).
+       * Quest depth objectives still evaluate, because "you are at 300 m" is a
+       * real state change rather than a notification about progress.
+       */
+      this.depthPrimed = true;
+      this.tech.primeDepth(depth);
+      this.lastNotedDepth = depth;
+      this.quests.noteDepth(depth);
+      this.emitBand(depth, ctx);
+      return;
+    }
+
     const newly = this.tech.noteDepth(depth);
     if (newly.length) {
       this.lastNotedDepth = depth;
       this.quests.noteDepth(depth);
-      for (const n of newly) {
-        ctx.bus.emit('ui:notify', { text: `New blueprint available: ${n.name}`, kind: 'info', ttl: 5 });
-      }
+      for (const n of newly) this.techAnnounceQueue.push(n.name);
     } else if (depth > this.lastNotedDepth + 0.75) {
       // Only re-evaluate depth triggers when the record actually moves.
       this.lastNotedDepth = depth;
       this.quests.noteDepth(depth);
     }
 
+    this.emitBand(depth, ctx);
+  }
+
+  private emitBand(depth: number, ctx: GameContext): void {
     let band = DEPTH_BANDS[0].band;
     for (const b of DEPTH_BANDS) if (depth >= b.from) band = b.band;
     if (band !== this.lastBand) {
       this.lastBand = band;
       ctx.bus.emit('depth:band', { band, depth });
+    }
+  }
+
+  /**
+   * Releases queued "now researchable" lines one at a time. A fast descent can
+   * cross several gates in a second; dumping one toast each buries the HUD, so
+   * a burst collapses into a single summary instead.
+   */
+  private drainTechAnnouncements(dt: number, ctx: GameContext): void {
+    if (!this.techAnnounceQueue.length) return;
+    this.techAnnounceCooldown -= dt;
+    if (this.techAnnounceCooldown > 0) return;
+    this.techAnnounceCooldown = TECH_ANNOUNCE_GAP;
+
+    if (this.techAnnounceQueue.length > TECH_ANNOUNCE_BURST) {
+      const n = this.techAnnounceQueue.length;
+      this.techAnnounceQueue.length = 0;
+      ctx.bus.emit('ui:notify', {
+        text: `Depth clearance: ${n} new blueprints are researchable. See the PDA.`,
+        kind: 'info', ttl: 6,
+      });
+      return;
+    }
+
+    const name = this.techAnnounceQueue.shift();
+    if (name) {
+      ctx.bus.emit('ui:notify', {
+        text: `Now researchable: ${name} — recover the fragments to acquire it.`,
+        kind: 'info', ttl: 5,
+      });
     }
   }
 
@@ -766,6 +858,18 @@ export class GameState implements GameSystem {
       ctx.bus.emit('ui:notify', { text: `Loaded "${slot}".`, kind: 'success', ttl: 3 });
     }
 
+    /*
+     * The player has just been teleported to the saved position. Re-prime both
+     * trackers so the next frame treats that position as a baseline: otherwise
+     * `deepestDepth` would re-announce every gate above the saved depth, and
+     * `stats.distance` would absorb the whole pre-load-to-post-load jump as
+     * distance swum.
+     */
+    this.depthPrimed = false;
+    this.trackedPosition = false;
+    this.techAnnounceQueue.length = 0;
+    this.techAnnounceCooldown = 0;
+
     this.inventory.stats(this.equipment);
     return true;
   }
@@ -781,6 +885,13 @@ export class GameState implements GameSystem {
     this.crafting.syncFromTech(this.tech);
     this.quests.bootstrap();
     this.playtime = 0;
+    this.depthPrimed = false;
+    this.trackedPosition = false;
+    this.techAnnounceQueue.length = 0;
+    this.techAnnounceCooldown = 0;
+    this.lastNotedDepth = -1;
+    this.lastBand = '';
+    this.lastBiome = '';
     this.stats.crafted = 0;
     this.stats.scans = 0;
     this.stats.placed = 0;

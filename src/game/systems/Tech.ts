@@ -379,10 +379,22 @@ export class TechTree {
    * available because of it, so the PDA can announce them.
    */
   noteDepth(depth: number): TechNode[] {
-    if (depth <= this.deepestDepth) return [];
+    if (!Number.isFinite(depth) || depth <= this.deepestDepth) return [];
     const before = new Set(this.frontier().map((n) => n.id));
     this.deepestDepth = depth;
     return this.frontier().filter((n) => !before.has(n.id));
+  }
+
+  /**
+   * Establishes the depth baseline WITHOUT reporting anything as newly
+   * available. Used for the first depth sample of a run — at spawn, on load,
+   * and after a teleport — because depth you simply started at was never
+   * "descended to". Without this, frame one drags `deepestDepth` from 0 up to
+   * wherever the player actually is and every gate below that fires at once.
+   */
+  primeDepth(depth: number): void {
+    if (!Number.isFinite(depth)) return;
+    this.deepestDepth = Math.max(this.deepestDepth, Math.max(0, depth));
   }
 
   serialise(): { unlocked: string[]; deepestDepth: number } {
