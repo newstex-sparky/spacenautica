@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { createProceduralAsteroid, createStationModule, createTool, createContainer } from '../models/img2threejs';
-import { ShuttlePod } from './ShuttlePod';
+import { ShuttlePod, ShuttleController } from './ShuttlePod';
+import { ShuttleController as ShuttleControllerComponent } from './ShuttleController';
 
 // ====================== Game Constants ======================
 const PLAYER_HEIGHT = 1.6;
@@ -839,6 +840,7 @@ const createTechTree3D = (): THREE.Group => {
   // Shuttle state refs
   const shuttleInShuttleRef = useRef(false); // Are we currently inside the shuttle?
   const shuttleCargoRef = useRef<{ iron: number, ice: number, rawOre: number, ironMetal: number, titanium: number, oxygen: number, h2: number }>({ iron: 0, ice: 0, rawOre: 0, ironMetal: 0, titanium: 0, oxygen: 0, h2: 0 });
+  const hasShuttleBayRef = useRef(false); // Has shuttle bay module been built?
   const currentShuttleRef = useRef<THREE.Group | null>(null); // Reference to the shuttle mesh
   const shuttleFuelRef = useRef(100); // Current shuttle fuel
   const shuttlePositionRef = useRef(new THREE.Vector3(0, 0, 0)); // Shuttle position in world
@@ -847,7 +849,7 @@ const createTechTree3D = (): THREE.Group => {
   const shuttleEngineOnRef = useRef(false); // Engine thruster state
   const shuttleAutoPilotRef = useRef(false); // Auto-docking enabled
 
-  // Input refs
+  // Shuttle flight controls
   const keysRef = useRef<Record<string, boolean>>({});
   const yawRef = useRef(0);    // horizontal look angle (radians) — kept from original
   const pitchRef = useRef(0);  // vertical look angle (radians)   — kept from original
@@ -1069,6 +1071,10 @@ const createTechTree3D = (): THREE.Group => {
           (group as any).smelterLastProcessTime = 0;
         }
         structuresRef.current.push({ group, type: structureType, integrity: structData.integrity ?? 100 });
+        // Track shuttle bay building
+        if (structureType === 'shuttlebay') {
+          hasShuttleBayRef.current = true;
+        }
       }
     }
 
@@ -3064,6 +3070,8 @@ interface BroadcastState {
     // Initialize shuttle bay and spawn shuttle
     if (type === 'shuttlebay') {
       structureType = 'shuttlebay';
+      // Track shuttle bay built
+      hasShuttleBayRef.current = true;
       // Spawn a shuttle at the shuttle bay position
       const shuttle = createShuttleMesh('shuttle-mk1');
       const bayPos = snappedPoint.clone().add(SHUTTLE_BAY_OFFSET);
@@ -3772,23 +3780,37 @@ interface BroadcastState {
 
         // ====================== Shuttle flight handlers ======================
         const handleEnterShuttle = () => {
-          // Launch shuttle from shuttle bay
+          // Launch shuttle from shuttle bay - requires hasShuttleBayRef.current
+          if (!hasShuttleBayRef.current) return;
+          
           setShuttleMode(true);
           shuttleInShuttleRef.current = true;
           setShuttleDocked(false);
           setShuttleHUD(prev => ({ ...prev, destination: 'FREE FLIGHT' }));
           setShuttleAutoPilotRef(false);
-          // Hide main HUD when in shuttle
           setUiShuttleVisible(true);
+          // Clear keyboard refs for shuttle flight
+          keysRef.current = {};
         };
 
         const handleExitShuttle = () => {
           // Return to station
+          if (!hasShuttleBayRef.current) return;
+          
           setShuttleMode(false);
           shuttleInShuttleRef.current = false;
           setShuttleDocked(true);
           setShuttleHUD(prev => ({ ...prev, destination: 'DOCKING' }));
           setUiShuttleVisible(false);
+          
+          // Clear shuttle keyboard refs
+          shuttleWKeyRef.current = false;
+          shuttleSKeyRef.current = false;
+          shuttleAKeyRef.current = false;
+          shuttleDKeyRef.current = false;
+          shuttleQKeyRef.current = false;
+          shuttleEKeyRef.current = false;
+          shuttleSpaceKeyRef.current = false;
         };
 
         const handlePointerLockChange = () => {
@@ -5662,7 +5684,7 @@ interface BroadcastState {
       )}
 
       {/* Shuttle Launch Button — appears when shuttle bay is built and shuttle docked */}
-      {shuttleDocked && !gameState.gameOver && !shuttleMode && (
+      {hasShuttleBayRef.current && shuttleDocked && !gameState.gameOver && !shuttleMode && (
         <div
           style={{
             position: 'absolute' as const,
@@ -5682,6 +5704,23 @@ interface BroadcastState {
           onClick={handleEnterShuttle}
         >
           🚀 LAUNCH SHUTTLE [Key9]
+        </div>
+      )}
+
+      {/* Shuttle HUD - shown when in flight mode */}
+      {shuttleMode && (
+        <div
+          style={{
+            position: 'absolute' as const,
+            top: '0',
+            left: '0',
+            width: '100%',
+            height: '100%',
+            zIndex: 200,
+            pointerEvents: 'none',
+          }}
+        >
+          <ShuttlePod />
         </div>
       )}
 
