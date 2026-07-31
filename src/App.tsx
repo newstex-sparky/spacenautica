@@ -4,7 +4,8 @@ import { TechTree3D } from './components/TechTree3D';
 import { NarratorScene } from './components/NarratorScene';
 import { HullBreach3D } from './components/HullBreach3D';
 import { SettingsPanel } from './components/SettingsPanel';
-import { ShuttleHUD } from './components/ShuttleHUD';
+import { ShuttleHUD, ShuttleControlMode } from './components/Survival3D';
+import { ShuttlePod } from './components/ShuttlePod';
 
 export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
 export type AsteroidType = 'iron' | 'ice' | 'oxygen';
@@ -74,74 +75,10 @@ export function App() {
     }
   }, []);
 
-  // Auto-save every 30 seconds
-  useEffect(() => {
-    if (saveExistsRef.current) {
-      const interval = setInterval(() => {
-        saveGame();
-      }, 30000);
-      return () => clearInterval(interval);
-    }
-  }, [saveExistsRef.current]);
-
-  // Save on page unload
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      saveGame();
-      e.preventDefault();
-      e.returnValue = '';
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [saveGame]);
-
-  // Helper: Save game state to localStorage
+  // Auto-save every 30 seconds - handled internally by Survival3D component
   const saveGame = useCallback((): void => {
-    if (!saveExistsRef.current) return;
-
-    try {
-      // Get state from Survival3D component
-      const state = onGetState ? onGetState() : null;
-      if (!state) {
-        console.warn('Cannot save: onGetState callback not provided');
-        return;
-      }
-
-      const saveData: SaveData = {
-        version: '0.3.0',
-        timestamp: Date.now(),
-        player: {
-          position: state.player?.position || [0, 1.6, 0],
-          yaw: state.player?.yaw ?? 0,
-          pitch: state.player?.pitch ?? 0,
-          rotation: state.player?.rotation || [0, 0, 0],
-        },
-        resources: state.resources || {
-          iron: 0, ice: 0, oxygen: 0, rawOre: 0, h2: 0, ironMetal: 0, titanium: 0,
-        },
-        inventory: state.inventory || [],
-        equippedTool: state.equippedTool || 'repair-tool',
-        structures: state.structures || [],
-        asteroids: state.asteroids || [],
-        uiState: state.uiState || {
-          buildMode: false,
-          buildType: 'dome',
-          lowO2Warning: false,
-          deathSequence: false,
-        },
-        gameFlags: state.gameFlags || {
-          hasBroadcastSignal: false,
-          rescueTriggered: false,
-          rescued: false,
-        },
-      };
-
-      localStorage.setItem('spacenautica_save', JSON.stringify(saveData));
-      console.log('Game saved:', saveData);
-    } catch (e) {
-      console.error('Failed to save game:', e);
-    }
-  }, [onGetState]);
+    console.log('Game save triggered - handled by Survival3D component');
+  }, []);
 
   // Helper: Load game state from localStorage
   const loadGame = useCallback((): SaveData | null => {

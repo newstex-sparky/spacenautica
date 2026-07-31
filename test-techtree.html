@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spacenautica Tech Tree Test</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a1a;
+            color: #fff;
+            padding: 20px;
+        }
+        h1 { color: #00ffff; margin-bottom: 20px; }
+        .tech-tree-link {
+            display: inline-block;
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #00ffff 0%, #0088ff 100%);
+            color: #000;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+            margin: 10px;
+        }
+        .tech-tree-link:hover { transform: scale(1.05); }
+        #canvas-container {
+            width: 100%;
+            height: 500px;
+            background: #001a33;
+            border-radius: 10px;
+            margin: 20px 0;
+            position: relative;
+        }
+        #tech-tree-canvas {
+            width: 100%;
+            height: 100%;
+        }
+        .controls {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(0, 255, 255, 0.1);
+            border-radius: 5px;
+        }
+        .controls h3 { color: #00ffff; margin-bottom: 10px; }
+        .controls p { margin: 5px 0; }
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            background: rgba(0, 255, 136, 0.2);
+            border-radius: 5px;
+        }
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔬 Spacenautica Tech Tree Holographic Interface</h1>
+
+    <a href="/src/components/TechTree3D.tsx" class="tech-tree-link">View TechTree3D Component Source</a>
+    <a href="/src/models/techtree/data.ts" class="tech-tree-link">View Tech Tree Data</a>
+
+    <div id="canvas-container">
+        <canvas id="tech-tree-canvas"></canvas>
+    </div>
+
+    <div class="controls">
+        <h3>🎮 Camera Controls</h3>
+        <p><strong>Mouse Drag:</strong> Rotate view around tech tree</p>
+        <p><strong>WASD / Arrow Keys:</strong> Rotate camera left/right/up/down</p>
+        <p><strong>Mouse Scroll:</strong> Zoom in/out</p>
+        <p><strong>Key R:</strong> Research selected node</p>
+        <p><strong>Key ESC:</strong> Exit to menu</p>
+    </div>
+
+    <div class="status">
+        <h3>📊 Tech Tree Stats</h3>
+        <div class="status-item">
+            <span>Research Progress:</span>
+            <span id="researched-count">0 nodes</span>
+        </div>
+        <div class="status-item">
+            <span>Available Research:</span>
+            <span id="available-count">0 nodes</span>
+        </div>
+        <div class="status-item">
+            <span>Locked Nodes:</span>
+            <span id="locked-count">0 nodes</span>
+        </div>
+        <p style="margin-top: 10px; color: #00ffff;">
+            Tech Tree UI implemented as part of issue #47
+        </p>
+    </div>
+
+    <script type="module">
+        import TechTree3D from '/src/components/TechTree3D.tsx';
+
+        // Tech tree is loaded as a React component
+        console.log('Tech Tree 3D UI: Component loaded successfully');
+        console.log('Tech tree nodes:', window.TECH_TREE_NODES ? window.TECH_TREE_NODES.length : 'Not loaded');
+        console.log('Tech tree categories:', Object.keys(window.TECH_CATEGORIES || {}));
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@17/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@17/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+</body>
+</html>

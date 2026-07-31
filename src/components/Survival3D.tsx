@@ -446,6 +446,9 @@ interface GameState {
   buildType: BuildableStructureType;
   broadcasting: boolean;
   broadcastComplete: false;
+  victory: boolean;             // Game won via rescue
+  inCinematic: boolean;         // Cinematic sequence active
+  victoryComplete: boolean;     // Victory sequence finished, returning to sandbox
 }
 
 interface StationPower {
@@ -461,6 +464,9 @@ const INITIAL_GAME_STATE: GameState = {
   buildType: 'dome',
   broadcasting: false,
   broadcastComplete: false,
+  victory: false,
+  inCinematic: false,
+  victoryComplete: false,
 };
 
 // ====================== Save/Load Callback Props ======================
@@ -2689,6 +2695,21 @@ interface BroadcastState {
   cameraZoomDistance: number;
   audioPlayed: boolean;      // Track if distress signal played
   cameraZoomed: boolean;     // Track if camera zoomed to relay
+  // Cinematic sequence states
+  cinematicPhase: 'none' | 'broadcast' | 'signalReceived' | 'rescueIncoming' | 'welcomeHome' | 'afterVictory';
+  cinematicStartTime: number;
+  signalWaveRings: THREE.Mesh[];  // Array for expanding rings
+  signalWaveTime: number;
+  victoryMusicPlaying: boolean;
+  shipDockLightFlicker: number;   // For docking light animation
+  rescueParticles: { mesh: THREE.Mesh; life: number }[];  // Engine exhaust particles
+}
+  cinematicPhase: 'none' | 'broadcast' | 'signalReceived' | 'rescueIncoming' | 'welcomeHome' | 'afterVictory';
+  cinematicStartTime: number;
+  signalWaveRings: THREE.Mesh[];  // Array for expanding rings
+  signalWaveTime: number;
+  victoryMusicPlaying: boolean;
+  shipDockLightFlicker: number;   // For docking light animation
 }
 
   // ====================== Fabricator Crafting Display ======================
@@ -3029,6 +3050,13 @@ interface BroadcastState {
         audioPlayed: false,
         cameraZoomed: false,
         rescueShip: null,
+        cinematicPhase: 'none' as const,
+        cinematicStartTime: 0,
+        signalWaveRings: [],
+        signalWaveTime: 0,
+        victoryMusicPlaying: false,
+        shipDockLightFlicker: 0,
+        rescueParticles: [],
       };
       (group as any).broadcastState = broadcastState;
       (group as any).needsPower = true; // Requires H2 to operate
@@ -4859,6 +4887,20 @@ interface BroadcastState {
         broadcastState.powered = resourcesRef.current.h2 >= 2;
         broadcastState.broadcasting = broadcastState.powered && gameStateRef.current.broadcasting;
 
+        // H2 consumption during broadcasting (2 H2/sec)
+        if (broadcastState.broadcasting) {
+          const h2Consumption = 2 * dt;
+          resourcesRef.current.h2 = Math.max(0, resourcesRef.current.h2 - h2Consumption);
+          setUiH2(resourcesRef.current.h2);
+
+          // Stop broadcasting if H2 runs out
+          if (resourcesRef.current.h2 <= 0) {
+            broadcastState.broadcasting = false;
+            broadcastState.powered = false;
+            setUiBroadcastText('H2 DEPLETED - NO POWER');
+          }
+        }
+
         // Update status light
         if (group.statusLight) {
           group.statusLight.material.color.setHex(broadcastState.powered ? (broadcastState.broadcasting ? 0x00ff00 : 0xff0000) : 0x666666);
@@ -4938,96 +4980,239 @@ interface BroadcastState {
             setGameState(prev => ({ ...prev, broadcastComplete: true }));
             broadcastState.broadcasting = false;
             
-            // Initialize rescue ship
-            if (!broadcastState.rescueShip) {
-              broadcastState.rescueShip = { 
-                mesh: null, 
-                visible: false, 
-                approaching: false,
-                docked: false 
-              };
+            // Initialize cinematic sequence
+            if (!gameStateRef.current.victory) {
+              setGameState(prev => ({ ...prev, victory: true, inCinematic: true }));
+              broadcastState.cinematicPhase = 'signalReceived';
+              broadcastState.cinematicStartTime = elapsedTime;
+              broadcastState.audioPlayed = false;
+              
+              // Create signal wave rings
+              for (let i = 0; i < 3; i++) {
+                const ringGeo = new THREE.RingGeometry(0.5, 0.6, 32);
+                const ringMat = new THREE.MeshBasicMaterial({ 
+                  color: 0x00ffff, 
+                  transparent: true, 
+                  opacity: 0,
+                  side: THREE.DoubleSide 
+                });
+                const ring = new THREE.Mesh(ringGeo, ringMat);
+                ring.position.copy(relayArray.position);
+                ring.lookAt(camera.position);
+                scene.add(ring);
+                broadcastState.signalWaveRings.push(ring);
+              }
+              broadcastState.signalWaveTime = elapsedTime;
             }
           }
+
         }
 
-        // Rescue ship approach sequence
-        if (gameStateRef.current.broadcastComplete && broadcastState.rescueShip) {
-          // Check if rescue ship exists, create if not
-          if (!broadcastState.rescueShip.mesh && !gameState.uiRescueComplete) {
+        // Cinematic sequence - update signal wave rings
+        if (broadcastState.cinematicPhase === 'signalReceived') {
+          const elapsed = elapsedTime - broadcastState.cinematicStartTime;
+          
+          // Signal wave animation - expanding rings from antenna dish
+          if (elapsed < 8) {
+            // Animate 3 signal wave rings expanding outward
+            broadcastState.signalWaveRings.forEach((ring, i) => {
+              const ringAge = (elapsed - i * 2.5) / 2.5;
+              if (ringAge >= 0 && ringAge <= 1) {
+                ring.scale.setScalar(ringAge * 8);
+                ring.material.opacity = 1 - ringAge;
+              }
+            });
+          } else {
+            // Phase complete
+            broadcastState.cinematicPhase = 'rescueIncoming';
+            broadcastState.cinematicStartTime = elapsedTime;
+          }
+        }
+        }
+
+        // Rescue ship approach sequence (detailed cinematic version)
+        if (gameStateRef.current.broadcastComplete && gameStateRef.current.victory && !gameStateRef.current.victoryComplete) {
+          if (!broadcastState.rescueShip) {
+            broadcastState.rescueShip = { 
+              mesh: null, 
+              visible: false, 
+              approaching: false,
+              docked: false 
+            };
+          }
+          
+          // Create detailed rescue ship with solar panels and docking probe
+          if (!broadcastState.rescueShip.mesh && !gameStateRef.current.victoryComplete) {
             broadcastState.rescueShip.visible = true;
-            // Create rescue ship (small spacecraft)
             const shipGroup = new THREE.Group();
             
-            // Ship body
-            const bodyGeo = new THREE.BoxGeometry(1.5, 0.8, 0.4);
-            const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.9, roughness: 0.1 });
-            const body = new THREE.Mesh(bodyGeo, bodyMat);
-            body.position.set(0, 0, 0);
-            shipGroup.add(body);
-
-            // Engine glow
-            const engineGeo = new THREE.SphereGeometry(0.15, 8, 8);
+            // Main hull (white and blue rescue colors)
+            const hullGeo = new THREE.CapsuleGeometry(0.5, 1.5, 8, 16);
+            const hullMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.9, roughness: 0.1, emissive: 0x001133, emissiveIntensity: 0.2 });
+            const hull = new THREE.Mesh(hullGeo, hullMat);
+            hull.rotation.z = -Math.PI / 2;
+            shipGroup.add(hull);
+            
+            // Cockpit dome (glowing blue)
+            const cockpitGeo = new THREE.SphereGeometry(0.35, 16, 16);
+            const cockpitMat = new THREE.MeshStandardMaterial({ 
+              color: 0x00aaff, 
+              metalness: 1.0, 
+              roughness: 0.1,
+              emissive: 0x0066ff,
+              emissiveIntensity: 0.3 
+            });
+            const cockpit = new THREE.Mesh(cockpitGeo, cockpitMat);
+            cockpit.position.set(-0.8, 0.1, 0);
+            shipGroup.add(cockpit);
+            
+            // Solar panel wings (folded outward)
+            const wingGeo = new THREE.BoxGeometry(0.1, 2, 0.02);
+            const wingMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.9, roughness: 0.2 });
+            
+            const leftWing = new THREE.Mesh(wingGeo, wingMat);
+            leftWing.position.set(0.3, 0, 0.6);
+            leftWing.rotation.x = -0.3;
+            shipGroup.add(leftWing);
+            
+            const rightWing = leftWing.clone();
+            rightWing.position.set(0.3, 0, -0.6);
+            rightWing.rotation.x = 0.3;
+            shipGroup.add(rightWing);
+            
+            // Docking probe (extends from front)
+            const probeGeo = new THREE.CylinderGeometry(0.08, 0.1, 0.4, 8);
+            const probeMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.8, roughness: 0.4 });
+            const probe = new THREE.Mesh(probeGeo, probeMat);
+            probe.rotation.x = Math.PI / 2;
+            probe.position.set(1.0, 0, 0);
+            shipGroup.add(probe);
+            
+            // Engine exhaust with particles
+            const engineGeo = new THREE.CylinderGeometry(0.15, 0.1, 0.3, 8);
             const engineMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
             const engine = new THREE.Mesh(engineGeo, engineMat);
-            engine.position.set(0.75, 0, 0);
+            engine.rotation.x = -Math.PI / 2;
+            engine.position.set(1.25, 0, 0);
             (shipGroup as any).engine = engine;
+            (shipGroup as any).engineParticleTime = 0;
             shipGroup.add(engine);
-
-            // Wings
-            const wingGeo = new THREE.BoxGeometry(0.1, 0.4, 1.2);
-            const wingMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.8, roughness: 0.3 });
-            const wing1 = new THREE.Mesh(wingGeo, wingMat);
-            wing1.position.set(-0.5, 0.2, 0);
-            wing1.rotation.y = 0.3;
-            shipGroup.add(wing1);
-
-            const wing2 = wing1.clone();
-            wing2.position.set(-0.5, -0.2, 0);
-            wing2.rotation.y = -0.3;
-            shipGroup.add(wing2);
-
-            // Position ship far away
-            (group as any).rescueShip.mesh.position.set(-40, 0, 30);
-            (group as any).rescueShip.mesh.rotation.y = Math.PI / 4;
-
-            scene.add((group as any).rescueShip.mesh);
+            
+            // Interior lights (visible from outside)
+            const lightGeo = new THREE.SphereGeometry(0.1, 8, 8);
+            const lightMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+            const interiorLight1 = new THREE.Mesh(lightGeo, lightMat);
+            interiorLight1.position.set(-0.5, 0.1, 0.3);
+            shipGroup.add(interiorLight1);
+            
+            const interiorLight2 = interiorLight1.clone();
+            interiorLight2.position.set(-0.5, 0.1, -0.3);
+            shipGroup.add(interiorLight2);
+            
+            (shipGroup as any).interiorLightFlicker = 0;
+            
+            // Position ship far away in background
+            shipGroup.position.set(-60, 0, 40);
+            shipGroup.rotation.y = 0.5;
+            
+            scene.add(shipGroup);
+            broadcastState.rescueShip.mesh = shipGroup;
           }
-
-          // Approach sequence
-          if (broadcastState.rescueShip.mesh) {
+          
+          // Approach animation sequence
+          if (broadcastState.rescueShip.mesh && !gameStateRef.current.victoryComplete) {
             const ship = broadcastState.rescueShip.mesh;
-            const shipGroup = (ship as any); // Get shipGroup reference
-            const shipSpeed = 3 * dt;
+            const shipGroup = ship as any;
             
-            // Move towards player
-            ship.position.x += shipSpeed;
+            // Move towards station center (not player position)
+            const stationCenter = new THREE.Vector3(0, 0, 0);
+            const currentPos = ship.position.clone();
+            const distanceToStation = currentPos.distanceTo(stationCenter);
             
-            // Rotate to face player
-            ship.rotation.y = Math.atan2(
-              camera.position.x - ship.position.x,
-              camera.position.z - ship.position.z
-            );
-
-            // Add engine glow animation
-            if ((shipGroup as any).engine) {
-              const glowIntensity = 0.5 + Math.random() * 0.5;
-              (shipGroup as any).engine.material.color.setHex(0xffff00 * glowIntensity);
-            }
-
-            // Check if close enough
-            const distToPlayer = ship.position.distanceTo(camera.position);
-            if (distToPlayer < 5 && !broadcastState.rescueShip.docked && !gameState.uiRescueComplete) {
-              // Dock animation
-              broadcastState.rescueShip.docked = true;
-              broadcastState.rescueShip.approaching = false;
+            // Animate approach
+            if (distanceToStation > 10 && broadcastState.cinematicPhase === 'rescueIncoming') {
+              const moveSpeed = 2 * dt;
+              const approachVector = new THREE.Vector3().subVectors(stationCenter, currentPos).normalize();
+              ship.position.add(approachVector.multiplyScalar(moveSpeed));
               
-              // Stop near player
-              ship.position.lerp(camera.position.clone().add(new THREE.Vector3(5, 0, 5)), dt);
+              // Rotate to face station
+              ship.rotation.y = -Math.atan2(approachVector.x, approachVector.z) + Math.PI;
+              
+              // Flicker interior lights
+              shipGroup.interiorLightFlicker = (shipGroup.interiorLightFlicker + dt) % 0.1;
+              if (shipGroup.interiorLightFlicker < 0.05) {
+                ship.children[2].material.color.setHex(0x00aaff);
+              } else {
+                ship.children[2].material.color.setHex(0x00ffff);
+              }
+              
+              // Animate docking lights
+              broadcastState.shipDockLightFlicker = (broadcastState.shipDockLightFlicker + dt) % 0.15;
+              
+              if (distanceToStation < 25 && elapsed < elapsedTime - 15) {
+                broadcastState.cinematicPhase = 'welcomeHome';
+                broadcastState.cinematicStartTime = elapsedTime;
+              }
+            } 
+            // Docking sequence
+            else if (distanceToStation < 5 && broadcastState.cinematicPhase === 'welcomeHome') {
+              const dockSpeed = 1.5 * dt;
+              const dockingVector = new THREE.Vector3().subVectors(stationCenter, currentPos).normalize();
+              ship.position.add(dockingVector.multiplyScalar(dockSpeed));
+              
+              // Align ship with station
+              ship.rotation.y = Math.atan2(dockingVector.x, dockingVector.z);
+              
+              // Add engine exhaust particles
+              const engine = shipGroup.engine;
+              if (engine) {
+                shipGroup.engineParticleTime += dt;
+                if (shipGroup.engineParticleTime > 0.1) {
+                  shipGroup.engineParticleTime = 0;
+                  const particleGeo = new THREE.SphereGeometry(0.05, 8, 8);
+                  const particleMat = new THREE.MeshBasicMaterial({ color: 0xffff00, transparent: true, opacity: 1.0 });
+                  const particle = new THREE.Mesh(particleGeo, particleMat);
+                  particle.position.copy(new THREE.Vector3(1.1, (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.3));
+                  scene.add(particle);
+                  
+                  // Create particle array if doesn't exist
+                  if (!broadcastState.rescueParticles) {
+                    broadcastState.rescueParticles = [];
+                  }
+                  broadcastState.rescueParticles.push({ mesh: particle, life: 1.0 });
+                }
+              }
+              
+              // Flicker docking lights
+              if (broadcastState.shipDockLightFlicker > 0.05 && broadcastState.shipDockLightFlicker < 0.1) {
+                ship.children.forEach(child => {
+                  if ((child as any).userData?.dockingLight) {
+                    child.material.color.setHex(0xff4444);
+                  }
+                });
+              }
+              
+              // Wait 3 seconds at station
+              const dockWaitTime = 3;
+              if (elapsed - broadcastState.cinematicStartTime < dockWaitTime) {
+                // Keep ship hovering near station
+                ship.position.y = 0.5;
+              } else {
+                // Sequence complete
+                broadcastState.cinematicPhase = 'afterVictory';
+                broadcastState.cinematicStartTime = elapsedTime;
+                setGameState(prev => ({ ...prev, victoryComplete: true, inCinematic: false }));
+              }
             }
-
-            // Show YOU SURVIVED screen
-            if (distToPlayer < 8 && !gameState.uiRescueComplete) {
+            
+            // Show rescue complete screen after full sequence
+            if (broadcastState.cinematicPhase === 'afterVictory') {
               setUiRescueComplete(true);
+            }
+            
+            // Auto-close rescue complete screen after 10 seconds (or after victoryComplete)
+            if (uiRescueComplete && elapsed - broadcastState.cinematicStartTime > 10) {
+              setUiRescueComplete(false);
             }
           }
         }
