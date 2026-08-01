@@ -5,6 +5,7 @@ import { NarratorScene } from './components/NarratorScene';
 import { HullBreach3D } from './components/HullBreach3D';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ShuttleHUD, ShuttleControlMode } from './components/Survival3D';
+
 import { ShuttlePod } from './components/ShuttlePod';
 
 export type BuildableStructureType = 'dome' | 'solar' | 'o2generator' | 'smelter' | 'refinery' | 'storage';
@@ -51,7 +52,7 @@ export interface SaveData {
   };
 }
 
-type Screen = 'intro' | 'narrator' | 'hullBreach' | 'newgame' | 'continue' | 'settings' | 'techtree' | null;
+type Screen = 'intro' | 'narrator' | 'hullBreach' | 'newgame' | 'continue' | 'settings' | 'techtree' | 'shuttle' | null;
 
 export function App() {
   const [screen, setScreen] = useState<Screen>('intro');
@@ -228,6 +229,9 @@ export function App() {
             <button className="intro-start" onClick={() => setScreen('techtree')}>
               🔬 Tech Tree
             </button>
+            <button className="intro-start-alt" onClick={() => setScreen('shuttle')}>
+              🚀 Launch Shuttle
+            </button>
           </div>
 
           {/* Footer */}
@@ -246,6 +250,9 @@ export function App() {
 
       {/* Tech Tree 3D Screen */}
       {screen === 'techtree' && <TechTree3D />}
+
+      {/* Shuttle Pod Screen */}
+      {screen === 'shuttle' && <ShuttlePod onDock={handleShuttleLand} />}
 
       {/* Main 3D Survival Mode */}
       {show3D && (
