@@ -1,0 +1,150 @@
+/* Tech Tree Overlay Styles */
+.tech-tree-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  overflow: hidden;
+}
+
+.tech-tree-overlay canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Tech Tree HUD */
+.tech-tree-hud {
+  position: absolute;
+  bottom: 10%;
+  left: 5%;
+  background-color: rgba(0, 100, 150, 0.15);
+  border: 2px solid rgba(0, 255, 255, 0.6);
+  padding: 20px;
+  border-radius: 12px;
+  color: #00ffff;
+  width: 320px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 0 30px rgba(0, 255, 255, 0.2);
+  z-index: 2001;
+}
+
+.tech-tree-hud h3 {
+  margin: 0 0 10px 0;
+  color: #ffffff;
+  font-size: 18px;
+  text-shadow: 0 0 10px rgba(0, 255, 255, 0.8);
+  font-family: 'Courier New', monospace;
+}
+
+.tech-tree-hud p {
+  margin: 8px 0;
+  color: #e0e0e0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.tech-tree-hud .node-category {
+  color: #00ff88;
+  font-weight: bold;
+  font-size: 14px;
+  margin: 5px 0;
+}
+
+.tech-tree-hud .node-name {
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: bold;
+  margin: 10px 0;
+  text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);
+}
+
+.tech-tree-hud .node-description {
+  font-style: italic;
+}
+
+.tech-tree-hud .node-cost {
+  color: #00aaff;
+  font-size: 12px;
+  background-color: rgba(0, 100, 150, 0.3);
+  padding: 8px;
+  border-radius: 4px;
+  margin-top: 10px;
+}
+
+.tech-tree-hud .instructions {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(0, 255, 255, 0.3);
+  font-size: 12px;
+}
+
+.tech-tree-hud .instructions ul {
+  margin: 10px 0 0 0;
+  padding-left: 20px;
+}
+
+.tech-tree-hud .instructions li {
+  margin: 5px 0;
+  color: #b0e0e0;
+}
+
+.tech-tree-close {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  background-color: rgba(0, 255, 100, 0.15);
+  border: 2px solid #00ff66;
+  color: #00ff66;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  text-transform: uppercase;
+  font-family: 'Courier New', monospace;
+  transition: all 0.3s ease;
+  z-index: 2002;
+  box-shadow: 0 0 15px rgba(0, 255, 100, 0.3);
+}
+
+.tech-tree-close:hover {
+  background-color: rgba(0, 255, 100, 0.3);
+  box-shadow: 0 0 25px rgba(0, 255, 100, 0.5);
+  transform: scale(1.05);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .tech-tree-hud {
+    width: 90%;
+    bottom: 5%;
+    left: 5%;
+    right: 5%;
+  }
+
+  .tech-tree-hud h3 {
+    font-size: 16px;
+  }
+
+  .tech-tree-hud .node-name {
+    font-size: 14px;
+  }
+
+  .tech-tree-hud p {
+    font-size: 12px;
+  }
+
+  .tech-tree-close {
+    padding: 10px 18px;
+    font-size: 12px;
+  }
+}

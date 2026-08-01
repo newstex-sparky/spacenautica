@@ -528,135 +528,50 @@ export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DPr
 
   // Tech tree state
   const [uiTechTreeOpen, setUiTechTreeOpen] = useState(false);
-  const [uiResearchProgress, setUiResearchProgress] = useState<Set<string>>(new Set());
+  const [uiResearchProgress, setUiResearchProgress] = useState<Set<string>>(new Set(['mining-basic'])); // Starting tech
   const [uiResearchingNode, setUiResearchingNode] = useState<string>('');
 
-// Tech tree data structure
-interface TechTreeNode {
-  id: string;
-  name: string;
-  category: 'mining' | 'o2' | 'power' | 'advanced';
-  parent?: string;
-  requires?: string; // Parent tech ID
-  cost: { iron: number; h2: number | null; oxygen: number | null };
-  description: string;
-  unlocks?: string; // Module type this tech unlocks
-  costModifier?: number; // Crafting cost modifier (0.5 = 50%, 1 = 100%)
-}
+  // Tech tree node data for 3D display
+  interface TechNode3D {
+    id: string;
+    name: string;
+    category: 'mining' | 'o2' | 'power' | 'advanced';
+    parent?: string;
+    requires?: string;
+    cost: { iron: number; h2: number | null; oxygen: number | null };
+    description: string;
+    unlocks?: string;
+    costModifier?: number;
+    x: number;
+    z: number;
+  }
 
-const TECH_TREE: TechTreeNode[] = [
-  // Mining Tier
-  {
-    id: 'mining-basic',
-    name: 'Basic Mining Research',
-    category: 'mining',
-    cost: { iron: 10, h2: 5, oxygen: 0 },
-    description: 'Unlocks Smelter research and reduces ore processing time.',
-    unlocks: 'smelter',
-    costModifier: 0.8,
-  },
-  {
-    id: 'mining-advanced',
-    name: 'Advanced Mining Tech',
-    category: 'mining',
-    parent: 'mining-basic',
-    requires: 'mining-basic',
-    cost: { iron: 30, h2: 20, oxygen: 0 },
-    description: 'Unlock titanium asteroid drilling and improved ore processing.',
-    unlocks: 'titanium-drill',
-    costModifier: 1.0,
-  },
-  {
-    id: 'mining-quantum',
-    name: 'Quantum Materials',
-    category: 'mining',
-    parent: 'mining-advanced',
-    requires: 'mining-advanced',
-    cost: { iron: 80, h2: 50, oxygen: 20 },
-    description: 'Advanced material synthesis technology.',
-    unlocks: 'quantum-smelter',
-    costModifier: 0.6,
-  },
-  
-  // O2 Tier
-  {
-    id: 'o2-basic',
-    name: 'Basic O2 Systems',
-    category: 'o2',
-    cost: { iron: 15, h2: 10, oxygen: 0 },
-    description: 'Unlocks Electrolysis Refinery research.',
-    unlocks: 'refinery',
-    costModifier: 0.8,
-  },
-  {
-    id: 'o2-efficient',
-    name: 'Efficient Refinery',
-    category: 'o2',
-    parent: 'o2-basic',
-    requires: 'o2-basic',
-    cost: { iron: 40, h2: 30, oxygen: 0 },
-    description: 'Improve water ice processing efficiency (50% faster O2 + H2 generation).',
-    unlocks: 'hydrogen-harvest',
-    costModifier: 0.5,
-  },
-  {
-    id: 'o2-atmospheric',
-    name: 'Atmospheric Recycling',
-    category: 'o2',
-    parent: 'o2-efficient',
-    requires: 'o2-efficient',
-    cost: { iron: 100, h2: 70, oxygen: 40 },
-    description: 'Advanced air recycling systems for long-term survival.',
-    unlocks: 'atmospheric-recycler',
-    costModifier: 0.3,
-  },
-  
-  // Power Tier
-  {
-    id: 'power-basic',
-    name: 'Basic Power Systems',
-    category: 'power',
-    cost: { iron: 20, h2: 15, oxygen: 0 },
-    description: 'Unlock Solar Panel technology.',
-    unlocks: 'solar-panel',
-    costModifier: 1.0,
-  },
-  {
-    id: 'power-solar-grid',
-    name: 'Solar Grid',
-    category: 'power',
-    parent: 'power-basic',
-    requires: 'power-basic',
-    cost: { iron: 60, h2: 40, oxygen: 0 },
-    description: 'Improve solar panel efficiency (25% more H2 generation).',
-    unlocks: 'solar-grid',
-    costModifier: 1.0,
-  },
-  {
-    id: 'power-fusion',
-    name: 'Fusion Reactor',
-    category: 'power',
-    parent: 'power-solar-grid',
-    requires: 'power-solar-grid',
-    cost: { iron: 150, h2: 100, oxygen: 60 },
-    description: 'Infinite power source for advanced station modules.',
-    unlocks: 'fusion-reactor',
-    costModifier: 0.1, // Massive cost reduction
-  },
-];
+  const TECH_TREE_NODES: TechNode3D[] = [
+    // Mining Tier
+    { id: 'mining-basic', name: 'Basic Mining', category: 'mining', cost: { iron: 10, h2: 5, oxygen: 0 }, description: 'Unlocks Smelter technology.', unlocks: 'smelter', costModifier: 0.8, x: 0, z: -5 },
+    { id: 'mining-advanced', name: 'Advanced Mining', category: 'mining', requires: 'mining-basic', cost: { iron: 30, h2: 20, oxygen: 0 }, description: 'Unlock titanium drilling.', unlocks: 'titanium', costModifier: 1.0, x: 4, z: -5 },
+    { id: 'mining-quantum', name: 'Quantum Materials', category: 'mining', requires: 'mining-advanced', cost: { iron: 80, h2: 50, oxygen: 20 }, description: 'Advanced material synthesis.', unlocks: 'quantum', costModifier: 0.6, x: 8, z: -5 },
 
-// ====================== 3D Tech Tree Holographic Interface ======================
-interface TechTreeGroup {
-  group: THREE.Group;
-  nodeMeshes: Map<string, THREE.Mesh>;
-  nodeLabels: Map<string, THREE.Mesh>;
-  links: THREE.Line[];
-  button: THREE.Mesh;
-  isHovered: boolean;
-  isOpen: boolean;
-}
+    // O2 Tier
+    { id: 'o2-basic', name: 'Basic O2 Systems', category: 'o2', cost: { iron: 15, h2: 10, oxygen: 0 }, description: 'Unlocks Electrolysis Refinery.', unlocks: 'refinery', costModifier: 0.8, x: 0, z: 0 },
+    { id: 'o2-efficient', name: 'Efficient Refinery', category: 'o2', requires: 'o2-basic', cost: { iron: 40, h2: 30, oxygen: 0 }, description: '50% faster O2 + H2 generation.', unlocks: 'hydrogen', costModifier: 0.5, x: 4, z: 0 },
+    { id: 'o2-atmospheric', name: 'Atmospheric Recycling', category: 'o2', requires: 'o2-efficient', cost: { iron: 100, h2: 70, oxygen: 40 }, description: 'Long-term survival air recycling.', unlocks: 'atmospheric', costModifier: 0.3, x: 8, z: 0 },
 
-let techTreeGroupRef = useRef<TechTreeGroup | null>(null);
+    // Power Tier
+    { id: 'power-basic', name: 'Basic Power', category: 'power', cost: { iron: 20, h2: 15, oxygen: 0 }, description: 'Unlock Solar Panel technology.', unlocks: 'solar', costModifier: 1.0, x: 0, z: 5 },
+    { id: 'power-solar-grid', name: 'Solar Grid', category: 'power', requires: 'power-basic', cost: { iron: 60, h2: 40, oxygen: 0 }, description: '25% more H2 generation.', unlocks: 'solar-grid', costModifier: 1.0, x: 4, z: 5 },
+    { id: 'power-fusion', name: 'Fusion Reactor', category: 'power', requires: 'power-solar-grid', cost: { iron: 150, h2: 100, oxygen: 60 }, description: 'Infinite power source.', unlocks: 'fusion', costModifier: 0.1, x: 8, z: 5 },
+
+    // Advanced - Signal Relay
+    { id: 'signal-relay', name: 'Signal Relay Array', category: 'advanced', requires: 'power-fusion', cost: { iron: 20, h2: 10, oxygen: 0 }, description: 'Win condition - broadcast distress.', unlocks: 'broadcast', costModifier: 1.0, x: 4, z: 0 },
+  ];
+
+// Tech tree 3D state
+const [uiSelectedNode, setUiSelectedNode] = useState<string | null>(null);
+const [uiTechTreePosition, setUiTechTreePosition] = useState<{ x: number; z: number }>({ x: 0, z: 0 });
+const [uiTechTreeHoveredNode, setUiTechTreeHoveredNode] = useState<string | null>(null);
+
+// ====================== Tech Tree Data ======================
 const TECH_TREE_NODE_RADIUS = 0.6;
 const TECH_TREE_NODE_SPACING = 2.5;
 

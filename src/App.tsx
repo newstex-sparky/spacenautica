@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Survival3D } from './components/Survival3D';
-import { TechTree3D } from './components/TechTree3D';
+import { TechTreeHolographic } from './components/TechTreeHolographic';
+import TechTree3D from './components/TechTree3D';
 import { NarratorScene } from './components/NarratorScene';
 import { HullBreach3D } from './components/HullBreach3D';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -58,9 +59,13 @@ export function App() {
   const [screen, setScreen] = useState<Screen>('intro');
   const [show3D, setShow3D] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTechTreeHolographic, setShowTechTreeHolographic] = useState(false);
   const [pulse, setPulse] = useState(0);
   const rafRef = useRef<number>(0);
   const saveExistsRef = useRef(false);
+
+  // Tech tree research progress (in the main game)
+  const [researchProgress, setResearchProgress] = useState<Set<string>>(new Set(['mining-basic']));
 
   // Load save data on mount
   useEffect(() => {
@@ -229,7 +234,10 @@ export function App() {
             <button className="intro-start" onClick={() => setScreen('techtree')}>
               🔬 Tech Tree
             </button>
-            <button className="intro-start-alt" onClick={() => setScreen('shuttle')}>
+            <button className="intro-start-alt" onClick={() => setShowTechTreeHolographic(true)}>
+              💡 Holographic Tech Tree
+            </button>
+            <button className="intro-start" onClick={() => setScreen('shuttle')}>
               🚀 Launch Shuttle
             </button>
           </div>
@@ -247,6 +255,18 @@ export function App() {
 
       {/* Hull Breach 3D Screen */}
       {screen === 'hullBreach' && <HullBreach3D onExit={() => setScreen('intro')} />}
+
+      {/* Holographic Tech Tree Screen */}
+      {showTechTreeHolographic && (
+        <TechTreeHolographic
+          isOpen={showTechTreeHolographic}
+          onClose={() => setShowTechTreeHolographic(false)}
+          onResearch={(nodeId) => {
+            setResearchProgress(prev => new Set([...prev, nodeId]));
+          }}
+          researchProgress={researchProgress}
+        />
+      )}
 
       {/* Tech Tree 3D Screen */}
       {screen === 'techtree' && <TechTree3D />}
