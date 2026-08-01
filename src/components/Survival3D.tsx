@@ -2537,6 +2537,10 @@ const createH2StorageTankMesh = (): THREE.Group => {
     (group as any).cameraZoomed = false;
     (group as any).cameraZoomTarget = new THREE.Vector3(0, 0, 0);
     (group as any).cameraZoomDistance = 0;
+    (group as any).rescueShip = { mesh: null, visible: false, approaching: false, docked: false };
+
+    // Add raycast target for click detection
+    (group as any).userData.signalRelay = true;
 
     return group;
   };
@@ -3320,9 +3324,17 @@ interface BroadcastState {
           }
         }
       } else {
-        // When inventory not open, check for crafting UI clicks
+        // When inventory not open, check for crafting UI clicks and signal relay
         const craftingUIItems: THREE.Mesh[] = [];
+        const signalRelayGroups: THREE.Group[] = [];
+
         for (const structure of structuresRef.current) {
+          // Check for signal relay broadcast button
+          if (structure.type === 'signalrelay' && structure.group.userData.signalRelay) {
+            signalRelayGroups.push(structure.group);
+          }
+
+          // Check for fabricator crafting UI
           if (structure.type === 'fabricator' && structure.craftingUIGroup) {
             const group = structure.craftingUIGroup;
 
@@ -3335,7 +3347,25 @@ interface BroadcastState {
           }
         }
 
+        // Raycast against signal relay broadcast button first
+        let signalRelayHit = null;
+        for (const group of signalRelayGroups) {
+          const buttonGroup = (group as any).buttonMesh;
+          if (buttonGroup && (group as any).rescueShip?.docked) {
+            const intersects = raycaster.intersectObjects(buttonGroup.children);
+            if (intersects.length > 0 && (buttonGroup as any).buttonClickEnabled) {
+              signalRelayHit = buttonGroup;
+              break;
+            }
+          }
+        }
+
         // Raycast against crafting items
+        if (signalRelayHit) {
+          handleSignalRelayClick(signalRelayHit);
+          return;
+        }
+
         if (craftingUIItems.length > 0) {
           const intersects = raycaster.intersectObjects(craftingUIItems);
           if (intersects.length > 0) {

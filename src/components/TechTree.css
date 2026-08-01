@@ -1,99 +1,328 @@
+// ====================== Tech Tree Styles ======================
 .tech-tree-container {
-  position: relative;
-  width: 100%;
-  height: 100vh;
-  overflow: hidden;
-  background: radial-gradient(circle at center, #001a33 0%, #000510 100%);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
 }
 
-.tech-tree-overlay {
+.tech-tree-container.active {
+  opacity: 1;
+  visibility: visible;
+}
+
+.tech-tree-title {
   position: absolute;
-  bottom: 20px;
-  left: 20px;
-  right: 20px;
-  background: rgba(0, 20, 40, 0.85);
-  border: 1px solid #00ffff;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Courier New', monospace;
+  font-size: 2rem;
+  font-weight: bold;
+  color: #00ffcc;
+  text-transform: uppercase;
+  letter-spacing: 4px;
+  text-shadow: 0 0 10px #00ffcc, 0 0 20px #00ffcc;
+  text-align: center;
+}
+
+.tech-tree-subtitle {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Courier New', monospace;
+  font-size: 1rem;
+  color: #88cccc;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  text-align: center;
+}
+
+// Tech tree nodes
+.tech-tree-nodes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 40px;
+  padding: 20px;
+}
+
+.tech-tree-node {
+  background: rgba(0, 255, 200, 0.1);
+  border: 1px solid #00ffcc;
   border-radius: 10px;
   padding: 20px;
-  color: white;
+  width: 300px;
   backdrop-filter: blur(10px);
-  max-height: 300px;
-  overflow-y: auto;
-  box-shadow: 0 0 20px rgba(0, 255, 255, 0.3), inset 0 0 20px rgba(0, 255, 255, 0.1);
+  transition: all 0.3s ease;
+  box-shadow: 0 0 10px rgba(0, 255, 200, 0.2);
 }
 
-.tech-tree-overlay h2 {
-  color: #00ffff;
-  margin: 0 0 15px 0;
-  font-size: 24px;
-  text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff;
+.tech-tree-node:hover {
+  background: rgba(0, 255, 200, 0.15);
+  box-shadow: 0 0 20px rgba(0, 255, 200, 0.4);
+  transform: translateY(-5px);
 }
 
-.tech-info {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.tech-tree-node.available {
+  border-color: #00ff88;
+  box-shadow: 0 0 15px rgba(0, 255, 136, 0.3);
 }
 
-.tech-stat {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 14px;
-  padding: 8px;
-  background: rgba(0, 255, 255, 0.1);
-  border-radius: 5px;
-  border-left: 3px solid #00ffff;
+.tech-tree-node.locked {
+  border-color: #ff6600;
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
-.tech-stat .tech-label {
+.tech-tree-node.completed {
+  border-color: #00ffcc;
+  background: rgba(0, 255, 200, 0.2);
+  opacity: 1;
+}
+
+.tech-tree-node-name {
+  font-family: 'Courier New', monospace;
+  font-size: 1.2rem;
   font-weight: bold;
-  color: #00ffff;
-  text-transform: uppercase;
-  font-size: 12px;
-  letter-spacing: 1px;
+  color: #ffffff;
+  margin-bottom: 10px;
 }
 
-.tech-controls {
+.tech-tree-node-category {
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+  color: #00ffcc;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 15px;
+}
+
+.tech-tree-node-description {
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+  color: #cccccc;
+  line-height: 1.5;
+  margin-bottom: 15px;
+}
+
+.tech-tree-node-cost {
+  font-family: 'Courier New', monospace;
+  font-size: 1rem;
+  color: #ffaa00;
+  margin-bottom: 10px;
+}
+
+.tech-tree-progress {
+  width: 100%;
+  height: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 15px;
+}
+
+.tech-tree-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #00ffcc, #00ff88);
+  transition: width 0.3s ease;
+}
+
+.tech-tree-research-btn {
+  width: 100%;
+  padding: 10px;
+  font-family: 'Courier New', monospace;
+  font-size: 1rem;
+  font-weight: bold;
+  color: #ffffff;
+  background: rgba(0, 255, 200, 0.3);
+  border: 2px solid #00ffcc;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  text-align: center;
+}
+
+.tech-tree-research-btn:hover {
+  background: rgba(0, 255, 200, 0.5);
+  border-color: #00ff88;
+  transform: scale(1.05);
+}
+
+.tech-tree-research-btn.available {
+  background: rgba(0, 255, 200, 0.5);
+}
+
+.tech-tree-research-btn.available:hover {
+  background: rgba(0, 255, 200, 0.7);
+  box-shadow: 0 0 20px rgba(0, 255, 200, 0.5);
+}
+
+.tech-tree-research-btn:disabled {
+  background: rgba(128, 128, 128, 0.2);
+  border-color: #888888;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.tech-tree-node-unlocks {
   margin-top: 15px;
   padding-top: 15px;
-  border-top: 1px solid rgba(0, 255, 255, 0.3);
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.8);
+  border-top: 1px solid rgba(0, 255, 200, 0.2);
 }
 
-.tech-controls div {
-  margin: 4px 0;
+.tech-tree-node-unlocks h3 {
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  color: #00ffcc;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+.tech-tree-unlock-list {
   display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
 }
 
-.tech-controls strong {
-  color: #00ffff;
-  margin-right: 10px;
+.tech-tree-unlock-list li {
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+  color: #88cc88;
+  padding: 3px 8px;
+  background: rgba(0, 255, 136, 0.2);
+  border-radius: 3px;
 }
 
-/* Scrollbar styling */
-.tech-tree-overlay::-webkit-scrollbar {
-  width: 8px;
+.tech-tree-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: transparent;
+  border: 2px solid #ff6666;
+  color: #ff6666;
+  padding: 10px 20px;
+  font-family: 'Courier New', monospace;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 2px;
 }
 
-.tech-tree-overlay::-webkit-scrollbar-track {
-  background: rgba(0, 20, 40, 0.5);
-  border-radius: 4px;
+.tech-tree-close:hover {
+  background: #ff6666;
+  color: #ffffff;
 }
 
-.tech-tree-overlay::-webkit-scrollbar-thumb {
-  background: #00ffff;
-  border-radius: 4px;
+.tech-tree-resource-panel {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid #00ffcc;
+  border-radius: 10px;
+  padding: 20px;
+  font-family: 'Courier New', monospace;
+  backdrop-filter: blur(10px);
+  z-index: 1001;
 }
 
-.tech-tree-overlay::-webkit-scrollbar-thumb:hover {
-  background: #00bfff;
+.tech-tree-resource-title {
+  font-size: 1.2rem;
+  color: #00ffcc;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
 }
 
-/* Glow effects for nodes in UI */
-.tech-stat:hover {
-  background: rgba(0, 255, 255, 0.2);
-  transform: translateX(5px);
-  transition: all 0.2s ease;
+.tech-tree-research-points {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #ffaa00;
+}
+
+.tech-tree-category-tabs {
+  position: absolute;
+  top: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  z-index: 1001;
+}
+
+.tech-tree-tab {
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid #444444;
+  color: #888888;
+  padding: 10px 20px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+.tech-tree-tab:hover {
+  border-color: #00ffcc;
+  color: #00ffcc;
+}
+
+.tech-tree-tab.active {
+  background: rgba(0, 255, 200, 0.2);
+  border-color: #00ffcc;
+  color: #00ffcc;
+}
+
+.tech-tree-node-section {
+  display: none;
+}
+
+.tech-tree-node-section.active {
+  display: grid;
+}
+
+.tech-tree-message {
+  position: absolute;
+  bottom: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.9);
+  border: 2px solid #ffaa00;
+  border-radius: 10px;
+  padding: 20px 40px;
+  font-family: 'Courier New', monospace;
+  font-size: 1.2rem;
+  color: #ffaa00;
+  text-align: center;
+  z-index: 1001;
+  animation: fadeInOut 3s ease-in-out;
+}
+
+@keyframes fadeInOut {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
 }
