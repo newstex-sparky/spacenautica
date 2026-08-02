@@ -798,6 +798,9 @@ const createTechTree3D = (): THREE.Group => {
   const wasResearchingRef = useRef(false); // Track R key for research
   // Gamepad look sensitivity (configurable)
   const lookSensitivityRef = useRef(1.0);
+  // Tech tree hover state
+  const [uiTechTreeHoveredNode, setUiTechTreeHoveredNode] = useState<string | null>(null);
+  const [uiTechTreeNodeDetails, setUiTechTreeNodeDetails] = useState<{ name: string; description: string; cost: { iron: number; h2: number; oxygen: number }; requires?: string } | null>(null);
 
   // ====================== Save/Load Helpers ======================
   const buildSaveData = useCallback((): any => {
@@ -3639,13 +3642,53 @@ interface BroadcastState {
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      // Tech tree rotation when open
+      // Tech tree hover detection when tech tree is open
       if (uiTechTreeOpenRef.current && document.pointerLockElement) {
         // Rotate tech tree view
         techTreeYawRef.current -= e.movementX * 0.005;
         techTreePitchRef.current -= e.movementY * 0.005;
         // Clamp pitch to avoid flipping
         techTreePitchRef.current = Math.max(0.1, Math.min(Math.PI / 2.5, techTreePitchRef.current));
+
+        // Raycast to detect hover over tech tree nodes
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(new THREE.Vector2(0, 0), cameraRef.current!);
+
+        // Collect all visible tech tree nodes
+        const hoverNodes: THREE.Mesh[] = [];
+        techTreeNodesRef.current.forEach(nodeGroup => {
+          if (nodeGroup.visible && nodeGroup.children.length > 0) {
+            const mesh = nodeGroup.children[0] as THREE.Mesh;
+            if (mesh.userData.nodeId) {
+              hoverNodes.push(mesh);
+            }
+          }
+        });
+
+        const intersects = raycaster.intersectObjects(hoverNodes);
+
+        if (intersects.length > 0) {
+          const hoveredMesh = intersects[0].object as THREE.Mesh;
+          const nodeId = hoveredMesh.userData.nodeId as string;
+          const techNode = TECH_TREE_NODES.find(n => n.id === nodeId);
+
+          if (techNode) {
+            // Show node details if not yet unlocked
+            if (!uiResearchProgress.has(nodeId)) {
+              setUiTechTreeHoveredNode(nodeId);
+              setUiTechTreeNodeDetails({
+                name: techNode.name,
+                description: techNode.description,
+                cost: techNode.cost,
+                requires: findParentNode(nodeId)
+              });
+            }
+          }
+        } else {
+          setUiTechTreeHoveredNode(null);
+          setUiTechTreeNodeDetails(null);
+        }
+
         return;
       }
       // FPS mouse look — uses movementX/movementY (works with pointer lock)
@@ -5809,6 +5852,46 @@ interface BroadcastState {
         </div>
       )}
 
+      {/* Tech tree node details overlay — shows when hovering over a locked node */}
+      {uiTechTreeNodeDetails && !gameState.gameOver && !uiTechTreeOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '20%',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: 'rgba(0, 20, 40, 0.9)',
+            padding: '20px 30px',
+            borderRadius: 15,
+            border: '2px solid #00ffff',
+            color: '#00ffff',
+            fontFamily: 'monospace',
+            fontSize: 18,
+            fontWeight: 'bold',
+            textShadow: '0 0 10px #00ffff',
+            zIndex: 100,
+            pointerEvents: 'none',
+            textAlign: 'center',
+            boxShadow: '0 0 30px rgba(0, 255, 255, 0.3)',
+            maxWidth: '80%',
+          }}
+        >
+          <div style={{ fontSize: 22, marginBottom: 10 }}>{uiTechTreeNodeDetails.name}</div>
+          <div style={{ fontSize: 16, opacity: 0.9, marginBottom: 15, lineHeight: 1.4 }}>
+            {uiTechTreeNodeDetails.description}
+          </div>
+          <div style={{ fontSize: 14, opacity: 0.8 }}>
+            Cost: <span style={{ color: '#ffaa00' }}>Iron: {uiTechTreeNodeDetails.cost.iron}</span> |{' '}
+            H₂: <span style={{ color: '#00aaff' }}>{uiTechTreeNodeDetails.cost.h2}</span>
+          </div>
+          {uiTechTreeNodeDetails.requires && (
+            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>
+              Requires: {uiTechTreeNodeDetails.requires}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* YOU SURVIVED screen — rescue complete */}
       {uiRescueComplete && (
         <div
@@ -6415,16 +6498,17 @@ const TECH_TREE_NODES: TechNode[] = [
   { id: 'mining-basic', name: 'Basic Mining', tier: 1, description: 'Mining drill Mk1', cost: { iron: 0, h2: 0 }, unlocked: true, visible: true },
   { id: 'building-basic', name: 'Basic Building', tier: 1, description: 'Habitat dome, Solar panel', cost: { iron: 0, h2: 0 }, unlocked: true, visible: true },
   { id: 'refining-basic', name: 'Basic Refining', tier: 1, description: 'Smelter, Electrolysis refinery', cost: { iron: 10, h2: 0 }, unlocked: false, visible: true },
-  
+
   // Tier 2 (requires Tier 1)
   { id: 'mining-advanced', name: 'Advanced Mining', tier: 2, description: 'Mining drill Mk2, Scanner', cost: { iron: 20, h2: 0 }, unlocked: false, visible: false },
   { id: 'pressurization', name: 'Pressurization', tier: 2, description: 'Airlock, O2 generator', cost: { iron: 15, h2: 0 }, unlocked: false, visible: false },
   { id: 'power-grid', name: 'Power Grid', tier: 2, description: 'H2 storage tank, Power distribution', cost: { iron: 20, h2: 0 }, unlocked: false, visible: false },
-  
+
   // Tier 3 (requires Tier 2)
   { id: 'jetpack', name: 'Jetpack', tier: 3, description: 'Jetpack Mk1/Mk2', cost: { iron: 30, h2: 10 }, unlocked: false, visible: false },
   { id: 'fabricator', name: 'Fabricator', tier: 3, description: 'Crafting station, Advanced tools', cost: { iron: 25, h2: 0 }, unlocked: false, visible: false },
   { id: 'signal-tech', name: 'Signal Tech', tier: 3, description: 'Signal Relay Array (win condition)', cost: { iron: 40, h2: 20 }, unlocked: false, visible: false },
+];
 ];
 
 // Connection relationships (parent -> children)
@@ -6437,6 +6521,16 @@ const TECH_TREE_CONNECTIONS: Map<string, string[]> = new Map([
   ['power-grid', ['signal-tech']],
   ['fabricator', ['signal-tech']],
 ]);
+
+// Find parent node for a given node ID
+const findParentNode = (nodeId: string): string | undefined => {
+  for (const [parent, children] of TECH_TREE_CONNECTIONS.entries()) {
+    if (children.includes(nodeId)) {
+      return parent;
+    }
+  }
+  return undefined;
+};
 
 // ====================== Tech Tree 3D Functions ======================
 
