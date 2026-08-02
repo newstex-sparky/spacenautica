@@ -1,0 +1,21 @@
+{
+  "non_combat_issues": [
+    {
+      "number": 46,
+      "title": "Multi-sector warp travel",
+      "body": "Warp between multiple asteroid sectors. DEFERRED — one sector for now, design for expansion (from ISSUES.md)"
+    },
+    {
+      "number": 47,
+      "title": "Tech tree 3D holographic UI",
+      "body": "Interactive holographic interface for researching and unlocking tech upgrades. M4 — Deep Systems (from ISSUES.md, ROADMAP.md)"
+    },
+    {
+      "number": 48,
+      "title": "Shuttle pod vehicle",
+      "body": "Player can launch from their station in a small shuttle pod, fly in the asteroid field, and return to dock. M4 — Deep Systems, optional story element (from ISSUES.md, ROADMAP.md)"
+    }
+  ],
+  "issue_count": 3,
+  "source": "Local tracking files (ISSUES.md, ROADMAP.md)"
+}

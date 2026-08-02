@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+"""Implement Signal Relay Array win condition functionality"""
+
+# This script documents what needs to be added to Survival3D.tsx
+
+IMPLEMENTATION_NOTES = """
+
+# Signal Relay Array Win Condition Implementation Plan
+
+## Currently Exists:
+1. ✅ Signal Relay Mesh structure (createSignalRelayMesh function)
+2. ✅ Tech tree integration (SIGNAL_RELAY tech node)
+3. ✅ Broadcast button in UI (3D clickable)
+4. ✅ Basic power state flags
+
+## Needs to Implement:
+
+### 1. Power System Logic
+Add to updateGame function (where O2 depletion is handled):
+
+```typescript
+// Update signal relay power
+for (const structure of structuresRef.current) {
+  if (structure.type === 'signalrelay') {
+    const relay = structure.group as any;
+    
+    // Power logic: relay uses H2, regenerates if solar power available
+    if (relay.signalRelayPowered) {
+      resourcesRef.current.h2 -= 0.5 * dt; // Consume H2
+      setUiH2(Math.max(0, resourcesRef.current.h2));
+      
+      // Update status light
+      if (relay.statusLight) {
+        relay.statusLight.material.color.setHex(
+          resourcesRef.current.h2 > 10 ? 0x00ff00 : (resourcesRef.current.h2 > 0 ? 0xffff00 : 0xff0000)
+        );
+      }
+    }
+    
+    // Update beam opacity
+    if (relay.signalBeam) {
+      const targetOpacity = resourcesRef.current.h2 > 10 ? 0.6 : 0;
+      relay.signalBeam.material.opacity += (targetOpacity - relay.signalBeam.material.opacity) * dt * 2;
+    }
+    
+    // Update antenna rotation if powered
+    if (relay.antennaRotation !== undefined) {
+      relay.antennaRotation += dt * 0.5;
+      if (relay.antennaDish) relay.antennaDish.rotation.y = relay.antennaRotation;
+    }
+  }
+}
+```
+
+### 2. Broadcast Key Handler
+Add after line 3551 (after build mode handler):
+
+```typescript
+// B key: Broadcast distress signal
+if (e.code === 'KeyB' && !buildModeRef.current && !gameOverRef.current) {
+  const camera = cameraRef.current;
+  if (camera) {
+    // Check for signal relay nearby
+    let relayGroup = null;
+    for (const structure of structuresRef.current) {
+      if (structure.type === 'signalrelay') {
+        const dist = camera.position.distanceTo(structure.group.position);
+        if (dist < BUILD_RANGE) {
+          relayGroup = structure.group;
+          break;
+        }
+      }
+    }
+    
+    if (relayGroup) {
+      const relay = relayGroup as any;
+      
+      // Check if researched and powered
+      if (!relay.signalRelayResearched) {
+        setUiBroadcastText('Research Signal Relay Array first');
+        return;
+      }
+      
+      if (!relay.signalRelayPowered || resourcesRef.current.h2 <= 0) {
+        setUiBroadcastText('Relay requires power (H2 > 10)');
+        return;
+      }
+      
+      // Start broadcast
+      if (!relay.signalRelayBroadcasting) {
+        relay.signalRelayBroadcasting = true;
+        setUiBroadcastText('Broadcasting distress signal...');
+        playBroadcastAudio();
+        setTimeout(() => spawnRescueShip(relayGroup), 5000);
+      }
+    }
+  }
+}
+```
+
+### 3. Rescue Ship Spawning
+Add new function in updateGame:
+
+```typescript
+const spawnRescueShip = (relayGroup: THREE.Group) => {
+  const scene = sceneRef.current;
+  const camera = cameraRef.current;
+  
+  // Create rescue ship
+  const rescueShip = createShuttleMesh('shuttle-rescue');
+  const relayPos = relayGroup.position.clone();
+  rescueShip.position.set(relayPos.x - 8, relayPos.y, relayPos.z + 4);
+  rescueShip.visible = false;
+  rescueShip.userData.rescueShip = true;
+  
+  const rescueState = {
+    mesh: rescueShip,
+    visible: false,
+    approaching: false,
+    docked: false,
+    targetPosition: relayPos.clone()
+  };
+  relayGroup.userData.rescueShip = rescueState;
+  
+  scene!.add(rescueShip);
+  
+  // Start approaching after delay
+  setTimeout(() => {
+    rescueState.visible = true;
+    rescueState.approaching = true;
+    playRescueArrivalAudio();
+  }, 1000);
+};
+
+// Update rescue ship movement
+const updateRescueShip = (dt: number) => {
+  for (const structure of structuresRef.current) {
+    if (structure.type === 'signalrelay') {
+      const relay = structure.group as any;
+      const rescueState = relay.userData.rescueShip;
+      
+      if (rescueState && rescueState.mesh) {
+        const ship = rescueState.mesh;
+        
+        if (rescueState.approaching) {
+          // Move towards relay
+          const dist = ship.position.distanceTo(rescueState.targetPosition);
+          if (dist > 2) {
+            const direction = new THREE.Vector3()
+              .subVectors(rescueState.targetPosition, ship.position)
+              .normalize();
+            ship.position.add(direction.multiplyScalar(5 * dt));
+            ship.lookAt(rescueState.targetPosition);
+          } else {
+            // Arrived
+            rescueState.approaching = false;
+            rescueState.docked = true;
+            playDockedAudio();
+            setTimeout(() => startVictoryCinematic(relay), 2000);
+          }
+        } else if (rescueState.docked) {
+          // Hover animation
+          ship.position.y = rescueState.targetPosition.y + 0.5 + Math.sin(Date.now() * 0.002) * 0.1;
+        }
+      }
+    }
+  }
+};
+```
+
+### 4. Victory Cinematic
+Add function:
+
+```typescript
+const startVictoryCinematic = (relayGroup: THREE.Group) => {
+  const camera = cameraRef.current;
+  const relayPos = relayGroup.position;
+  
+  // Trigger victory state
+  setGameState(prev => ({ ...prev, victory: true, inCinematic: true }));
+  
+  // Camera fly-around
+  const startTime = Date.now();
+  const duration = 10000; // 10 seconds
+  
+  const animateVictory = () => {
+    const elapsed = Date.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    
+    if (progress < 1) {
+      // Orbit around relay
+      const angle = progress * Math.PI * 2;
+      const radius = 8 + progress * 4;
+      camera!.position.set(
+        relayPos.x + Math.cos(angle) * radius,
+        relayPos.y + 3 + progress * 2,
+        relayPos.z + Math.sin(angle) * radius
+      );
+      camera!.lookAt(relayPos);
+      requestAnimationFrame(animateVictory);
+    } else {
+      // Show victory screen
+      const victoryDiv = document.createElement('div');
+      victoryDiv.style.cssText = `
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: linear-gradient(135deg, #0a0a2e 0%, #1a1a4e 50%, #0a0a2e 100%);
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+        z-index: 1000; color: white; font-family: Arial, sans-serif;
+      `;
+      victoryDiv.innerHTML = `
+        <h1 style="font-size: 4rem; text-shadow: 0 0 20px #00ffff;">MISSION COMPLETE</h1>
+        <p style="font-size: 1.5rem; margin-top: 20px;">Rescue confirmed.</p>
+        <p style="font-size: 1.2rem;">Extraction imminent.</p>
+        <button onclick="location.reload()" style="
+          margin-top: 40px; padding: 15px 40px; font-size: 1.2rem;
+          background: #00ffff; border: none; border-radius: 5px;
+          cursor: pointer; font-weight: bold;
+        ">RETURN TO BASE</button>
+      `;
+      document.body.appendChild(victoryDiv);
+      
+      setGameState(prev => ({ ...prev, victoryComplete: true, inCinematic: false }));
+    }
+  };
+  
+  animateVictory();
+};
+```
+
+### 5. Audio System
+Add audio helper functions:
+
+```typescript
+// Audio context for signal relay
+let audioContext: AudioContext | null = null;
+
+// Play low-frequency drone for powered relay
+const playDrone = () => {
+  if (audioContext === null) return;
+  
+  const oscillator = audioContext.createOscillator();
+  const gainNode = audioContext.createGain();
+  
+  oscillator.type = 'sawtooth';
+  oscillator.frequency.setValueAtTime(50, audioContext.currentTime); // 50Hz low drone
+  oscillator.frequency.exponentialRampToValueAtTime(40, audioContext.currentTime + 2);
+  
+  gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+  gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 2);
+  
+  oscillator.connect(gainNode);
+  gainNode.connect(audioContext.destination);
+  
+  oscillator.start(audioContext.currentTime);
+  oscillator.stop(audioContext.currentTime + 2);
+};
+
+// Play broadcast audio
+const playBroadcastAudio = () => {
+  if (audioContext === null) return;
+  
+  // Pulsed signal sequence
+  const baseTime = audioContext.currentTime;
+  
+  for (let i = 0; i < 5; i++) {
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(800, baseTime + i * 0.8);
+    osc.frequency.exponentialRampToValueAtTime(600, baseTime + i * 0.8 + 0.2);
+    
+    gain.gain.setValueAtTime(0.1, baseTime + i * 0.8);
+    gain.gain.exponentialRampToValueAtTime(0.01, baseTime + i * 0.8 + 0.2);
+    
+    osc.connect(gain);
+    gain.connect(audioContext.destination);
+    osc.start(baseTime + i * 0.8);
+    osc.stop(baseTime + i * 0.8 + 0.3);
+  }
+};
+
+// Play rescue arrival audio
+const playRescueArrivalAudio = () => {
+  if (audioContext === null) return;
+  
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(300, audioContext.currentTime);
+  osc.frequency.linearRampToValueAtTime(600, audioContext.currentTime + 0.5);
+  osc.frequency.linearRampToValueAtTime(900, audioContext.currentTime + 1.0);
+  
+  gain.gain.setValueAtTime(0, audioContext.currentTime);
+  gain.gain.linearRampToValueAtTime(0.15, audioContext.currentTime + 0.2);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1.5);
+  
+  osc.connect(gain);
+  gain.connect(audioContext.destination);
+  
+  osc.start(audioContext.currentTime);
+  osc.stop(audioContext.currentTime + 1.5);
+};
+
+// Play docked audio
+const playDockedAudio = () => {
+  if (audioContext === null) return;
+  
+  const osc1 = audioContext.createOscillator();
+  const osc2 = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  
+  osc1.type = 'sine';
+  osc1.frequency.setValueAtTime(440, audioContext.currentTime); // A4
+  
+  osc2.type = 'sine';
+  osc2.frequency.setValueAtTime(554, audioContext.currentTime); // C#5
+  osc2.frequency.setValueAtTime(659, audioContext.currentTime + 0.3); // E5
+  
+  gain.gain.setValueAtTime(0.1, audioContext.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1.0);
+  
+  osc1.connect(gain);
+  osc2.connect(gain);
+  gain.connect(audioContext.destination);
+  
+  osc1.start(audioContext.currentTime);
+  osc2.start(audioContext.currentTime);
+  osc1.stop(audioContext.currentTime + 1.0);
+  osc2.stop(audioContext.currentTime + 1.0);
+};
+```
+
+## Integration Points:
+
+1. **Power System**: Call in updateGame function (after O2 depletion)
+2. **Broadcast Button**: Add key handler after line 3551
+3. **Rescue Ship**: Call from broadcast handler (already has timer)
+4. **Victory**: Call from rescue ship docked state
+5. **Audio**: Call from broadcast handler and ship events
+
+## State Flags to Add to Signal Relay Mesh (already done):
+
+```typescript
+signalRelayPowered: false;
+signalRelayResearched: false;
+signalRelayBroadcasting: false;
+broadcastStartTime: number;
+audioPlayed: boolean;
+signalBeamOpacity: number;
+antennaRotation: number;
+broadcastText: string;
+rescueMessageDisplayed: false;
+cameraZoomed: false;
+cameraZoomTarget: THREE.Vector3;
+cameraZoomDistance: number;
+rescueShip: { 
+  mesh: THREE.Group | null; 
+  visible: boolean; 
+  approaching: boolean; 
+  docked: boolean 
+};
+```
+
+## Tech Tree Integration:
+
+The signal relay tech node is already defined in TECH_TREE_NODES at line 566:
+
+```typescript
+{ 
+  id: 'signal-relay', 
+  name: 'Signal Relay Array', 
+  category: 'advanced', 
+  requires: 'power-fusion', 
+  cost: { iron: 20, h2: 10, oxygen: 0 }, 
+  description: 'Win condition - broadcast distress.', 
+  unlocks: 'broadcast', 
+  costModifier: 1.0, 
+  x: 4, z: 0 
+};
+```
+
+This needs to be researched first using the existing tech tree UI.
+"""
