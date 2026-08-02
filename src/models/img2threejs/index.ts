@@ -3,8 +3,10 @@
 // Asteroid models (#42)
 export { createOreAsteroid, createIceAsteroid } from './generated';
 
-// Station module models (#43)
-export { createSmelterModule, createRefineryModule, createHabitatModule, createRelayModule } from './generated';
+// Station module models are implemented in Factory.ts (dome, solar, smelter, refinery, o2generator)
+
+// Signal Relay Module - win condition structure (implemented in RelayModule.ts)
+export { createRelayModule } from './RelayModule';
 
 // Tool and item models (#44)
 export { createRepairTool, createMiningDrillMk2, createMiningDrill, createScanner } from './generated';
