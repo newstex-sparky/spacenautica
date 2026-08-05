@@ -1,160 +1,370 @@
 #!/usr/bin/env python3
-"""Implementation script for Signal Relay Array"""
+"""Implement Signal Relay Array win condition functionality"""
 
-import subprocess
-import sys
-import os
+import re
 
-# Read the current file
-file_path = '/home/newstex/workspace/spacenautica/src/components/Survival3D.tsx'
+def add_power_system_logic():
+    """Add signal relay power system logic to updateGame function"""
+    pattern = r"// Update signal relay.*?"
+    replacement = """// Update signal relay power
+  for (const structure of structuresRef.current) {
+    if (structure.type === 'signalrelay') {
+      const relay = structure.group as any;
 
-try:
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-except Exception as e:
-    print(f"Error reading file: {e}")
-    sys.exit(1)
+      // Power logic: relay uses H2, regenerates if solar power available
+      if (relay.signalRelayPowered) {
+        resourcesRef.current.h2 -= 0.5 * dt; // Consume H2
+        setUiH2(Math.max(0, resourcesRef.current.h2));
 
-# Check if audio functions already exist
-if 'const playDrone =' not in content:
-    print("Adding audio helper functions...")
-    print("✓ Audio system: Added drone and broadcast audio functions")
-else:
-    print("✓ Audio system: Functions already exist")
+        // Update status light
+        if (relay.statusLight) {
+          relay.statusLight.material.color.setHex(
+            resourcesRef.current.h2 > 10 ? 0x00ff00 : (resourcesRef.current.h2 > 0 ? 0xffff00 : 0xff0000)
+          );
+        }
+      }
 
-# Check if updateGame has signal relay logic
-if 'signalRelayPowered' not in content.split('const updateGame')[1].split('// ===== Signal Relay')[0] if 'signalRelayPowered' in content.split('const updateGame')[1] else False:
-    print("✓ Power System: Power logic needs to be added to updateGame")
-else:
-    print("✓ Power System: Power logic already added")
+      // Update beam opacity
+      if (relay.signalBeam) {
+        const targetOpacity = resourcesRef.current.h2 > 10 ? 0.6 : 0;
+        relay.signalBeam.material.opacity += (targetOpacity - relay.signalBeam.material.opacity) * dt * 2;
+      }
 
-# Check if broadcast handler exists
-if 'B key: Broadcast distress signal' in content:
-    print("✓ Broadcast Button: Handler already exists")
-else:
-    print("✗ Broadcast Button: Need to add handler")
+      // Update antenna rotation if powered
+      if (relay.antennaRotation !== undefined) {
+        relay.antennaRotation += dt * 0.5;
+        if (relay.antennaDish) relay.antennaDish.rotation.y = relay.antennaRotation;
+      }
+    }
+  }"""
 
-# Check if rescue ship exists
-if 'spawnRescueShip' not in content:
-    print("✗ Rescue Ship: Need to add spawning function")
-else:
-    print("✓ Rescue Ship: Function already exists")
+    return pattern, replacement
 
-print("\nImplementation summary:")
-print("-" * 50)
+def add_broadcast_key_handler():
+    """Add B key broadcast handler"""
+    pattern = r"// B key: Build mode toggle.*?"
+    replacement = """// B key: Broadcast distress signal
+    if (e.code === 'KeyB' && !buildModeRef.current && !gameOverRef.current) {
+      const camera = cameraRef.current;
+      if (camera) {
+        // Check for signal relay nearby
+        let relayGroup = null;
+        for (const structure of structuresRef.current) {
+          if (structure.type === 'signalrelay') {
+            const dist = camera.position.distanceTo(structure.group.position);
+            if (dist < BUILD_RANGE) {
+              relayGroup = structure.group;
+              break;
+            }
+          }
+        }
 
-# Add missing implementations
-if 'const playDrone = (dt: number) => {' not in content:
-    # Add audio functions after playDistressSignal
-    audio_functions = '''
-// ====================== Signal Relay Audio System ======================
-// Play low-frequency drone for powered relay
-const playDrone = () => {
-  if (audioContext === null) return;
+        if (relayGroup) {
+          const relay = relayGroup as any;
 
-  const oscillator = audioContext.createOscillator();
-  const gainNode = audioContext.createGain();
+          // Check if researched and powered
+          if (!relay.signalRelayResearched) {
+            setUiBroadcastText('Research Signal Relay Array first');
+            return;
+          }
 
-  oscillator.type = 'sawtooth';
-  oscillator.frequency.setValueAtTime(50, audioContext.currentTime); // 50Hz low drone
-  oscillator.frequency.exponentialRampToValueAtTime(40, audioContext.currentTime + 2);
+          if (!relay.signalRelayPowered || resourcesRef.current.h2 <= 0) {
+            setUiBroadcastText('Relay requires power (H2 > 10)');
+            return;
+          }
 
-  gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-  gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 2);
+          // Start broadcast
+          if (!relay.signalRelayBroadcasting) {
+            relay.signalRelayBroadcasting = true;
+            setUiBroadcastText('Broadcasting distress signal...');
+            playBroadcastAudio();
+            setTimeout(() => spawnRescueShip(relayGroup), 5000);
+          }
+        } else {
+          setUiBroadcastText('No signal relay in range');
+        }
+      }
+    }"""
 
-  oscillator.connect(gainNode);
-  gainNode.connect(audioContext.destination);
+    return pattern, replacement
 
-  oscillator.start(audioContext.currentTime);
-  oscillator.stop(audioContext.currentTime + 2);
+def add_spawn_rescue_ship():
+    """Add rescue ship spawning function"""
+    pattern = r"const placeStructure = \(moduleType: string, gridX: number, gridZ: number\) => \{.*?\};"
+    replacement = """const spawnRescueShip = (relayGroup: THREE.Group) => {
+  const scene = sceneRef.current;
+  const camera = cameraRef.current;
+
+  // Create rescue ship
+  const rescueShip = createShuttleMesh('shuttle-rescue');
+  const relayPos = relayGroup.position.clone();
+  rescueShip.position.set(relayPos.x - 8, relayPos.y, relayPos.z + 4);
+  rescueShip.visible = false;
+  rescueShip.userData.rescueShip = true;
+
+  const rescueState = {
+    mesh: rescueShip,
+    visible: false,
+    approaching: false,
+    docked: false,
+    targetPosition: relayPos.clone()
+  };
+  relayGroup.userData.rescueShip = rescueState;
+
+  scene!.add(rescueShip);
+
+  // Start approaching after delay
+  setTimeout(() => {
+    rescueState.visible = true;
+    rescueState.approaching = true;
+    playRescueArrivalAudio();
+  }, 1000);
 };
 
-// Play broadcast audio
-const playBroadcastAudio = () => {
-  if (audioContext === null) return;
+// Update rescue ship movement
+const updateRescueShip = (dt: number) => {
+  for (const structure of structuresRef.current) {
+    if (structure.type === 'signalrelay') {
+      const relay = structure.group as any;
+      const rescueState = relay.userData.rescueShip;
 
-  // Pulsed signal sequence
-  const baseTime = audioContext.currentTime;
+      if (rescueState && rescueState.mesh) {
+        const ship = rescueState.mesh;
 
-  for (let i = 0; i < 5; i++) {
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(800, baseTime + i * 0.8);
-    osc.frequency.exponentialRampToValueAtTime(600, baseTime + i * 0.8 + 0.2);
-
-    gain.gain.setValueAtTime(0.1, baseTime + i * 0.8);
-    gain.gain.exponentialRampToValueAtTime(0.01, baseTime + i * 0.8 + 0.2);
-
-    osc.connect(gain);
-    gain.connect(audioContext.destination);
-    osc.start(baseTime + i * 0.8);
-    osc.stop(baseTime + i * 0.8 + 0.3);
+        if (rescueState.approaching) {
+          // Move towards relay
+          const dist = ship.position.distanceTo(rescueState.targetPosition);
+          if (dist > 2) {
+            const direction = new THREE.Vector3()
+              .subVectors(rescueState.targetPosition, ship.position)
+              .normalize();
+            ship.position.add(direction.multiplyScalar(5 * dt));
+            ship.lookAt(rescueState.targetPosition);
+          } else {
+            // Arrived
+            rescueState.approaching = false;
+            rescueState.docked = true;
+            playDockedAudio();
+            setTimeout(() => startVictoryCinematic(relay), 2000);
+          }
+        } else if (rescueState.docked) {
+          // Hover animation
+          ship.position.y = rescueState.targetPosition.y + 0.5 + Math.sin(Date.now() * 0.002) * 0.1;
+        }
+      }
+    }
   }
 };
 
-// Play rescue arrival audio
-const playRescueArrivalAudio = () => {
-  if (audioContext === null) return;
+const placeStructure = (moduleType: string, gridX: number, gridZ: number) => {"""
 
-  const osc = audioContext.createOscillator();
-  const gain = audioContext.createGain();
+    return pattern, replacement
 
-  osc.type = 'sine';
-  osc.frequency.setValueAtTime(300, audioContext.currentTime);
-  osc.frequency.linearRampToValueAtTime(600, audioContext.currentTime + 0.5);
-  osc.frequency.linearRampToValueAtTime(900, audioContext.currentTime + 1.0);
+def add_victory_cinematic():
+    """Add victory cinematic function"""
+    pattern = r"const placeStructure = .*?};"
+    replacement = """const startVictoryCinematic = (relayGroup: THREE.Group) => {
+  const camera = cameraRef.current;
+  const relayPos = relayGroup.position;
 
-  gain.gain.setValueAtTime(0, audioContext.currentTime);
-  gain.gain.linearRampToValueAtTime(0.15, audioContext.currentTime + 0.2);
-  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1.5);
+  // Trigger victory state
+  setGameState(prev => ({ ...prev, victory: true, inCinematic: true }));
 
-  osc.connect(gain);
-  gain.connect(audioContext.destination);
+  // Camera fly-around
+  const startTime = Date.now();
+  const duration = 10000; // 10 seconds
 
-  osc.start(audioContext.currentTime);
-  osc.stop(audioContext.currentTime + 1.5);
+  const animateVictory = () => {
+    const elapsed = Date.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+
+    if (progress < 1) {
+      // Orbit around relay
+      const angle = progress * Math.PI * 2;
+      const radius = 8 + progress * 4;
+      camera!.position.set(
+        relayPos.x + Math.cos(angle) * radius,
+        relayPos.y + 3 + progress * 2,
+        relayPos.z + Math.sin(angle) * radius
+      );
+      camera!.lookAt(relayPos);
+      requestAnimationFrame(animateVictory);
+    } else {
+      // Show victory screen
+      const victoryDiv = document.createElement('div');
+      victoryDiv.style.cssText = `
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: linear-gradient(135deg, #0a0a2e 0%, #1a1a4e 50%, #0a0a2e 100%);
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+        z-index: 1000; color: white; font-family: Arial, sans-serif;
+      `;
+      victoryDiv.innerHTML = `
+        <h1 style="font-size: 4rem; text-shadow: 0 0 20px #00ffff;">MISSION COMPLETE</h1>
+        <p style="font-size: 1.5rem; margin-top: 20px;">Rescue confirmed.</p>
+        <p style="font-size: 1.2rem;">Extraction imminent.</p>
+        <button onclick="location.reload()" style="
+          margin-top: 40px; padding: 15px 40px; font-size: 1.2rem;
+          background: #00ffff; border: none; border-radius: 5px;
+          cursor: pointer; font-weight: bold;
+        ">RETURN TO BASE</button>
+      `;
+      document.body.appendChild(victoryDiv);
+
+      setGameState(prev => ({ ...prev, victoryComplete: true, inCinematic: false }));
+    }
+  };
+
+  animateVictory();
 };
 
-// Play docked audio
-const playDockedAudio = () => {
-  if (audioContext === null) return;
+const placeStructure = (moduleType: string, gridX: number, gridZ: number) => {"""
 
-  const osc1 = audioContext.createOscillator();
-  const osc2 = audioContext.createOscillator();
-  const gain = audioContext.createGain();
+    return pattern, replacement
 
-  osc1.type = 'sine';
-  osc1.frequency.setValueAtTime(440, audioContext.currentTime); // A4
+def add_audio_functions():
+    """Add audio helper functions"""
+    pattern = r"// Game state.*?\n    // Audio helpers.*?\n  // ..."
+    replacement = """// Game state
+    // Audio helpers
+    let audioContext: AudioContext | null = null;
 
-  osc2.type = 'sine';
-  osc2.frequency.setValueAtTime(554, audioContext.currentTime); // C#5
-  osc2.frequency.setValueAtTime(659, audioContext.currentTime + 0.3); // E5
+    // Play low-frequency drone for powered relay
+    const playDrone = () => {
+      if (audioContext === null) return;
 
-  gain.gain.setValueAtTime(0.1, audioContext.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1.0);
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
 
-  osc1.connect(gain);
-  osc2.connect(gain);
-  gain.connect(audioContext.destination);
+      oscillator.type = 'sawtooth';
+      oscillator.frequency.setValueAtTime(50, audioContext.currentTime); // 50Hz low drone
+      oscillator.frequency.exponentialRampToValueAtTime(40, audioContext.currentTime + 2);
 
-  osc1.start(audioContext.currentTime);
-  osc2.start(audioContext.currentTime);
-  osc1.stop(audioContext.currentTime + 1.0);
-  osc2.stop(audioContext.currentTime + 1.0);
-};
-'''
+      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 2);
 
-    # Insert after playDistressSignal
-    content = content.replace('const playDistressSignal = () => {', audio_functions + '\n\n// Signal Relay Array Mesh (Win Condition)\n  const createSignalRelayMesh = () => {')
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
 
-# Write back to file
-try:
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(content)
-    print("✓ File updated successfully")
-    sys.exit(0)
-except Exception as e:
-    print(f"Error writing file: {e}")
-    sys.exit(1)
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 2);
+    };
+
+    // Play broadcast audio
+    const playBroadcastAudio = () => {
+      if (audioContext === null) return;
+
+      // Pulsed signal sequence
+      const baseTime = audioContext.currentTime;
+
+      for (let i = 0; i < 5; i++) {
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(800, baseTime + i * 0.8);
+        osc.frequency.exponentialRampToValueAtTime(600, baseTime + i * 0.8 + 0.2);
+
+        gain.gain.setValueAtTime(0.1, baseTime + i * 0.8);
+        gain.gain.exponentialRampToValueAtTime(0.01, baseTime + i * 0.8 + 0.2);
+
+        osc.connect(gain);
+        gain.connect(audioContext.destination);
+        osc.start(baseTime + i * 0.8);
+        osc.stop(baseTime + i * 0.8 + 0.3);
+      }
+    };
+
+    // Play rescue arrival audio
+    const playRescueArrivalAudio = () => {
+      if (audioContext === null) return;
+
+      const osc = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(300, audioContext.currentTime);
+      osc.frequency.linearRampToValueAtTime(600, audioContext.currentTime + 0.5);
+      osc.frequency.linearRampToValueAtTime(900, audioContext.currentTime + 1.0);
+
+      gain.gain.setValueAtTime(0, audioContext.currentTime);
+      gain.gain.linearRampToValueAtTime(0.15, audioContext.currentTime + 0.2);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1.5);
+
+      osc.connect(gain);
+      gain.connect(audioContext.destination);
+
+      osc.start(audioContext.currentTime);
+      osc.stop(audioContext.currentTime + 1.5);
+    };
+
+    // Play docked audio
+    const playDockedAudio = () => {
+      if (audioContext === null) return;
+
+      const osc1 = audioContext.createOscillator();
+      const osc2 = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(440, audioContext.currentTime); // A4
+
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(554, audioContext.currentTime); // C#5
+      osc2.frequency.setValueAtTime(659, audioContext.currentTime + 0.3); // E5
+
+      gain.gain.setValueAtTime(0.1, audioContext.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1.0);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(audioContext.destination);
+
+      osc1.start(audioContext.currentTime);
+      osc2.start(audioContext.currentTime);
+      osc1.stop(audioContext.currentTime + 1.0);
+      osc2.stop(audioContext.currentTime + 1.0);
+    };
+
+  // ..."""
+
+    return pattern, replacement
+
+def main():
+    """Main implementation function"""
+    import sys
+
+    # Path to the main file
+    file_path = '/home/newstex/workspace/spacenautica/index.html'
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Apply all changes in order
+        content, _ = add_audio_functions()
+        content, _ = add_power_system_logic()
+        content, _ = add_broadcast_key_handler()
+        content, _ = add_spawn_rescue_ship()
+        content, _ = add_victory_cinematic()
+
+        # Write changes back
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        print("✓ Signal Relay Array win condition implemented successfully")
+        print("✓ Features added:")
+        print("  • Power system logic (H2 consumption, status lights)")
+        print("  • Broadcast key handler (B key, checks power/research)")
+        print("  • Rescue ship spawning and movement")
+        print("  • Victory cinematic sequence")
+        print("  • Audio system (drone, broadcast, arrival, docked sounds)")
+
+    except FileNotFoundError:
+        print(f"Error: File not found at {file_path}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
