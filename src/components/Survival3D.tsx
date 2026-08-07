@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { createProceduralAsteroid, createStationModule, createTool, createContainer } from '../models/img2threejs';
 import { ShuttlePod, ShuttleController } from './ShuttlePod';
 import { ShuttleController as ShuttleControllerComponent } from './ShuttleController';
+import { createAutosaveTimer, AUTOSAVE_GAME_SECONDS } from '../systems/saveSystem';
 
 // ====================== Game Constants ======================
 const PLAYER_HEIGHT = 1.6;
@@ -475,9 +476,16 @@ export interface Survival3DProps {
   onGetState?: () => any;
   onRestoreState?: (state: any) => void;
   newGame?: () => void;
+  /**
+   * Fired each time AUTOSAVE_GAME_SECONDS (60) of simulated game time elapses.
+   * The parent is expected to serialize + persist the current game state.
+   */
+  onAutosave?: () => void;
+  /** Restored save data to store into the scene once the game initializes. */
+  restoreData?: any;
 }
 
-export function Survival3D({ onGetState, onRestoreState, newGame }: Survival3DProps = {}) {
+export function Survival3D({ onGetState, onRestoreState, newGame, onAutosave, restoreData }: Survival3DProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // UI state
@@ -790,6 +798,8 @@ const createTechTree3D = (): THREE.Group => {
   const techTreeNodesRef = useRef<THREE.Group[]>([]); // Array of node group refs
   const techTreeBeamsRef = useRef<THREE.Line[]>([]); // Array of connection beams
   const lastTimeRef = useRef<number>(0);
+  // Accumulates simulated game-seconds and fires onAutosave every 60.
+  const autosaveTimerRef = useRef(createAutosaveTimer(AUTOSAVE_GAME_SECONDS));
   const gameStateRef = useRef({ broadcasting: false, broadcastComplete: false });
   // Tech tree rotation control
   const techTreeYawRef = useRef(0); // Horizontal rotation angle
@@ -3892,6 +3902,11 @@ interface BroadcastState {
       // Simpler: check a module-level paused flag.
       if (pausedRef.current) return;
 
+      // ===== Autosave hook (every 60 game-seconds of simulated play) =====
+      if (autosaveTimerRef.current.tick(dt)) {
+        onAutosaveRef.current?.();
+      }
+
       // ===== Inventory panel visibility =====
       if (inventoryPanelRef.current) {
         const panel = inventoryPanelRef.current;
@@ -5374,11 +5389,27 @@ interface BroadcastState {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Store restored save data into the scene once the game has initialized.
+  // Runs once the restoreData prop is provided (loaded from D1 -> decompress).
+  useEffect(() => {
+    if (!restoreData) return;
+    if (!sceneRef.current || !playerRef.current) return;
+    restoreSaveData(restoreData);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreData]);
+
   // Mirror paused state into a ref the loop can read without stale closure
   const pausedRef = useRef(false);
   useEffect(() => {
     pausedRef.current = gameState.isPaused;
   }, [gameState.isPaused]);
+
+  // Keep the latest onAutosave callback in a ref so the loop never closes over
+  // a stale prop identity (the loop effect runs once on mount).
+  const onAutosaveRef = useRef(onAutosave);
+  useEffect(() => {
+    onAutosaveRef.current = onAutosave;
+  }, [onAutosave]);
 
   // Sync resources when they change
   useEffect(() => {
